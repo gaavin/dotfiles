@@ -86,6 +86,11 @@ in
     extraGroups = [ "wheel" ];
   };
 
+  # GNOME/AccountsService avatar (stock face from gnome-control-center)
+  systemd.tmpfiles.rules = [
+    "L+ /var/lib/AccountsService/icons/max - - - - ${pkgs.gnome-control-center}/share/pixmaps/faces/cat.jpg"
+  ];
+
   networking = {
     hostName = "mina";
     networkmanager = {
@@ -123,19 +128,17 @@ in
           "default.clock.max-quantum" = 64;
         };
       };
+      # Do not redeclare context.modules here — conf.d merges append the
+      # protocol-pulse module a second time, which crashes pipewire-pulse
+      # ("can't create server source: File exists").
       extraConfig.pipewire-pulse."92-low-latency" = {
-        "context.modules" = [
-          {
-            name = "libpipewire-module-protocol-pulse";
-            args = {
-              "pulse.min.req" = "64/48000";
-              "pulse.default.req" = "64/48000";
-              "pulse.max.req" = "64/48000";
-              "pulse.min.quantum" = "64/48000";
-              "pulse.max.quantum" = "64/48000";
-            };
-          }
-        ];
+        "pulse.properties" = {
+          "pulse.min.req" = "64/48000";
+          "pulse.default.req" = "64/48000";
+          "pulse.max.req" = "64/48000";
+          "pulse.min.quantum" = "64/48000";
+          "pulse.max.quantum" = "64/48000";
+        };
         "stream.properties" = {
           "node.latency" = "64/48000";
           "resample.quality" = 1;
@@ -216,6 +219,11 @@ in
                   enabled-extensions = [ "appindicatorsupport@rgcjonas.gmail.com" ];
                 };
               };
+              locks = [
+                "/org/gnome/desktop/session/idle-delay"
+                "/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-type"
+                "/org/gnome/settings-daemon/plugins/power/sleep-inactive-battery-type"
+              ];
             }
           ];
         };
