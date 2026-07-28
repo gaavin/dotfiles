@@ -167,7 +167,6 @@ in
                 "urlbar-container"
                 "customizableui-special-spring2"
                 "downloads-button"
-                "fxa-toolbar-menu-button"
                 "reset-pbm-toolbar-button"
                 "_d634138d-c276-4fc8-924b-40a0ea21d284_-browser-action"
                 "unified-extensions-button"

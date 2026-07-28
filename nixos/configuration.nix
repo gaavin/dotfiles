@@ -162,6 +162,11 @@ in
   # services.printing.enable = true;
 
   security.rtkit.enable = true;
+  
+  security.pam.loginLimits = [
+    { domain = "@audio"; type = "-"; item = "rtprio"; value = "95"; }
+    { domain = "@audio"; type = "-"; item = "memlock"; value = "unlimited"; }
+  ];
 
   services.pipewire = {
     enable = true;
