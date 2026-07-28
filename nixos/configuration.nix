@@ -12,6 +12,7 @@ in
   imports = [
     ./hardware-configuration.nix
     inputs.steam-config-nix.nixosModules.default
+    inputs.nix-gaming-edge.nixosModules.mesa-git
   ];
 
   drivers.mesa-git.enable = true;
