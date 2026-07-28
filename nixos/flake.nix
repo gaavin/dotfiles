@@ -20,7 +20,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     steam-config-nix = {
-      url = "path:./steam-config-nix";
+      url = "github:gaavin/steam-config-nix/feat/display-rates-as-bits";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     home-manager = {

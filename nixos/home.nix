@@ -1,4 +1,10 @@
-{ config, lib, pkgs, firefox-addons, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  firefox-addons,
+  ...
+}:
 
 let
   onePasswordPath = "${config.home.homeDirectory}/.1password/agent.sock";
@@ -55,7 +61,7 @@ in
   programs.bash = {
     enable = true;
     shellAliases = {
-      rebuild = "cd ~/dotfiles/nixos && nix flake update && sudo nixos-rebuild switch --flake .#mina";
+      rebuild = "nix flake update --flake ~/dotfiles/nixos && sudo nixos-rebuild switch --flake ~/dotfiles/nixos#mina";
     };
   };
 
@@ -96,7 +102,9 @@ in
       DisablePocket = true;
       SearchBar = "unified";
       DisablePasswordCapture = true;
-      EncryptedMediaExtensions = { Enabled = true; };
+      EncryptedMediaExtensions = {
+        Enabled = true;
+      };
       AutofillAddressEnabled = false;
       AutofillCreditCardEnabled = false;
       # Disables selectable-profiles UI (toolbar avatar, app menu, menubar).
@@ -128,7 +136,9 @@ in
           ublock-origin
           plasma-integration
           (onepassword-password-manager.overrideAttrs (oldAttrs: {
-            meta = oldAttrs.meta // { license = lib.licenses.mit; };
+            meta = oldAttrs.meta // {
+              license = lib.licenses.mit;
+            };
           }))
         ];
         settings = {
