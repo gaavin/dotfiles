@@ -204,6 +204,9 @@ in
                 "org/gnome/desktop/screensaver" = {
                   picture-uri = "file://${wallpaper}";
                 };
+                "org/gnome/shell" = {
+                  enabled-extensions = [ "appindicatorsupport@rgcjonas.gmail.com" ];
+                };
               };
             }
           ];
