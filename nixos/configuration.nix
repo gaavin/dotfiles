@@ -19,6 +19,7 @@ in
 
   hardware = {
     opentabletdriver.enable = true;
+    steam-hardware.enable = true;
     uinput.enable = true;
   };
 
