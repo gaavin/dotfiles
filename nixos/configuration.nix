@@ -14,6 +14,8 @@ in
     inputs.steam-config-nix.nixosModules.default
   ];
 
+  drivers.mesa-git.enable = true;
+
   hardware = {
     opentabletdriver.enable = true;
     uinput.enable = true;
@@ -32,6 +34,12 @@ in
       "preempt=full"
     ];
     kernelModules = [ "uinput" ];
+    kernel.sysctl = {
+      "vm.swappiness" = 180;
+      "vm.watermark_boost_factor" = 0;
+      "vm.watermark_scale_factor" = 125;
+      "vm.page-cluster" = 0;
+    };
     plymouth = {
       enable = true;
       theme = "spinner";
@@ -88,6 +96,11 @@ in
   };
 
   services = {
+    udev.extraRules = ''
+      # ADIOS I/O scheduler for NVMe and SSDs; BFQ for rotational HDDs
+      ACTION=="add|change", KERNEL=="nvme[0-9]*|sd[a-z]*|mmcblk[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="adios"
+      ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
+    '';
     resolved = {
       enable = true;
       settings.Resolve = {
