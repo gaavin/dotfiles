@@ -1,6 +1,7 @@
 {
   pkgs,
   inputs,
+  lib,
   ...
 }:
 
@@ -203,6 +204,13 @@ in
                 };
                 "org/gnome/desktop/screensaver" = {
                   picture-uri = "file://${wallpaper}";
+                };
+                "org/gnome/desktop/session" = {
+                  idle-delay = lib.gvariant.mkUint32 1800;
+                };
+                "org/gnome/settings-daemon/plugins/power" = {
+                  sleep-inactive-ac-type = "nothing";
+                  sleep-inactive-battery-type = "nothing";
                 };
                 "org/gnome/shell" = {
                   enabled-extensions = [ "appindicatorsupport@rgcjonas.gmail.com" ];
