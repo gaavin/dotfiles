@@ -1,0 +1,213 @@
+{ config, lib, pkgs, firefox-addons, ... }:
+
+let
+  onePasswordPath = "${config.home.homeDirectory}/.1password/agent.sock";
+in
+
+{
+  home.username = "max";
+  home.homeDirectory = "/home/max";
+  home.stateVersion = "26.05";
+
+  home.sessionVariables = {
+    MOZ_ENABLE_WAYLAND = "1";
+    SDL_VIDEO_DRIVER = "wayland";
+    PROTON_ENABLE_WAYLAND = "1";
+    SSH_AUTH_SOCK = onePasswordPath;
+    EDITOR = "vim";
+  };
+
+  programs.cursor = {
+    enable = true;
+    # Keep ~/.cursor/extensions writable so marketplace extensions (e.g. remote-ssh) still work.
+    mutableExtensionsDir = true;
+    profiles.default = {
+      extensions = with pkgs.vscode-extensions; [
+        jnoortheen.nix-ide
+      ];
+      userSettings = {
+        "editor.fontFamily" = "'JetBrainsMono Nerd Font', 'Courier New', monospace";
+        "terminal.integrated.fontFamily" = "'JetBrainsMono Nerd Font'";
+        "editor.fontLigatures" = true;
+        "editor.formatOnSave" = true;
+        "editor.formatOnPaste" = true;
+        "nix.enableLanguageServer" = true;
+        "nix.serverPath" = "${pkgs.nil}/bin/nil";
+        "nix.serverSettings" = {
+          nil.formatting.command = [ "${pkgs.nixfmt}/bin/nixfmt" ];
+        };
+        "[nix]" = {
+          "editor.defaultFormatter" = "jnoortheen.nix-ide";
+        };
+      };
+    };
+  };
+
+  home.packages = with pkgs; [
+    nil
+    nixfmt
+    nodejs
+    pnpm
+    spotify
+    fastfetch
+  ];
+
+  programs.bash = {
+    enable = true;
+    shellAliases = {
+      rebuild = "cd ~/dotfiles/nixos && nix flake update && sudo nixos-rebuild switch --flake .#mina";
+    };
+  };
+
+  programs.git = {
+    enable = true;
+    settings = {
+      user.name = "Max Power";
+      user.email = "me@gavinpower.dev";
+      user.signingkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOU6IBq+aSTA/ZLBA4ePyXwJrm9LB0CcoxTAXlY+vexv";
+      gpg.format = "ssh";
+      gpg.ssh.program = "${pkgs._1password-gui}/share/1password/op-ssh-sign";
+      commit.gpgsign = true;
+    };
+  };
+
+  programs.ssh = {
+    enable = true;
+    enableDefaultConfig = false;
+    settings."*" = {
+      ForwardAgent = false;
+      ServerAliveInterval = 0;
+      ServerAliveCountMax = 3;
+      UserKnownHostsFile = "~/.ssh/known_hosts";
+      IdentityAgent = onePasswordPath;
+    };
+  };
+
+  programs.firefox = {
+    enable = true;
+    configPath = "${config.xdg.configHome}/mozilla/firefox";
+    nativeMessagingHosts = [
+      pkgs.kdePackages.plasma-browser-integration
+      pkgs._1password-gui
+    ];
+    policies = {
+      DisableTelemetry = true;
+      DisableFirefoxStudies = true;
+      DisablePocket = true;
+      SearchBar = "unified";
+      DisablePasswordCapture = true;
+      EncryptedMediaExtensions = { Enabled = true; };
+      AutofillAddressEnabled = false;
+      AutofillCreditCardEnabled = false;
+      # Disables selectable-profiles UI (toolbar avatar, app menu, menubar).
+      # browser.profiles.enabled alone is ignored once toolkit.profiles.storeID exists.
+      BlockAboutProfiles = true;
+      Preferences = {
+        "browser.profiles.enabled" = {
+          Value = false;
+          Status = "locked";
+        };
+      };
+      SearchEngines = {
+        Default = "Google";
+      };
+      ExtensionSettings = {
+        "uBlock0@raymondhill.net" = {
+          installation_mode = "allowed";
+          default_area = "menupanel";
+        };
+        "{d634138d-c276-4fc8-924b-40a0ea21d284}" = {
+          installation_mode = "allowed";
+          default_area = "navbar";
+        };
+      };
+    };
+    profiles = {
+      default = {
+        extensions.packages = with firefox-addons.packages.${pkgs.stdenv.hostPlatform.system}; [
+          ublock-origin
+          plasma-integration
+          (onepassword-password-manager.overrideAttrs (oldAttrs: {
+            meta = oldAttrs.meta // { license = lib.licenses.mit; };
+          }))
+        ];
+        settings = {
+          "extensions.autoDisableScopes" = 0;
+          "browser.newtabpage.activity-stream.feeds.section.topstories" = false;
+          "browser.aboutwelcome.enabled" = false;
+          "browser.messaging-system.whatsNewPanel.enabled" = false;
+          "browser.urlbar.trending.featureGate" = false;
+          "browser.urlbar.suggest.searches" = false;
+          "signon.management.page.breachAlertUrl" = "";
+          "extensions.fxmonitor.enabled" = false;
+          "browser.urlbar.suggest.link" = false;
+          "browser.uiCustomization.state" = builtins.toJSON {
+            placements = {
+              widget-overflow-fixed-list = [ ];
+              unified-extensions-area = [
+                "plasma-browser-integration_kde_org-browser-action"
+                "ublock0_raymondhill_net-browser-action"
+              ];
+              nav-bar = [
+                "back-button"
+                "forward-button"
+                "stop-reload-button"
+                "customizableui-special-spring1"
+                "vertical-spacer"
+                "urlbar-container"
+                "customizableui-special-spring2"
+                "downloads-button"
+                "fxa-toolbar-menu-button"
+                "reset-pbm-toolbar-button"
+                "_d634138d-c276-4fc8-924b-40a0ea21d284_-browser-action"
+                "unified-extensions-button"
+              ];
+              toolbar-menubar = [ "menubar-items" ];
+              TabsToolbar = [
+                "tabbrowser-tabs"
+                "new-tab-button"
+                "alltabs-button"
+              ];
+              vertical-tabs = [ ];
+              PersonalToolbar = [
+                "import-button"
+                "personal-bookmarks"
+              ];
+            };
+            seen = [
+              "reset-pbm-toolbar-button"
+              "plasma-browser-integration_kde_org-browser-action"
+              "_d634138d-c276-4fc8-924b-40a0ea21d284_-browser-action"
+              "ublock0_raymondhill_net-browser-action"
+              "developer-button"
+              "screenshot-button"
+            ];
+            dirtyAreaCache = [
+              "unified-extensions-area"
+              "nav-bar"
+              "vertical-tabs"
+              "PersonalToolbar"
+              "toolbar-menubar"
+              "TabsToolbar"
+            ];
+            currentVersion = 24;
+            newElementCount = 2;
+          };
+        };
+      };
+    };
+  };
+
+  programs.vesktop = {
+    enable = true;
+    vencord.settings = {
+      autoUpdate = true;
+      autoUpdateNotification = true;
+      notifyAboutUpdates = true;
+      plugins = {
+        ClearURLs.enabled = true;
+        FixYoutubeEmbeds.enabled = true;
+      };
+    };
+  };
+}

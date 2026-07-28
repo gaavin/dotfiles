@@ -1,0 +1,4 @@
+[submodule "nixos/steam-config-nix"]
+	path = nixos/steam-config-nix
+	url = https://github.com/gaavin/steam-config-nix.git
+	branch = feat/display-rates-as-bits
