@@ -14,14 +14,14 @@ in
     inputs.steam-config-nix.nixosModules.default
   ];
 
-  hardware.opentabletdriver.enable = true;
-  hardware.uinput.enable = true;
+  hardware = {
+    opentabletdriver.enable = true;
+    uinput.enable = true;
+  };
 
   boot = {
     initrd = {
-      systemd = {
-        enable = true;
-      };
+      systemd.enable = true;
       kernelModules = [ "amdgpu" ];
     };
     kernelParams = [
@@ -66,6 +66,15 @@ in
     memoryPercent = 100;
   };
 
+  i18n.defaultLocale = "en_CA.UTF-8";
+  time.timeZone = "America/St_Johns";
+
+  users.users.max = {
+    isNormalUser = true;
+    description = "Max Power";
+    extraGroups = [ "wheel" ];
+  };
+
   networking = {
     hostName = "mina";
     networkmanager = {
@@ -78,159 +87,160 @@ in
     ];
   };
 
-  services.resolved = {
-    enable = true;
-    settings.Resolve = {
-      DNSOverTLS = "true";
-      DNSSEC = "true";
-      Domains = [ "~." ];
-    };
-  };
-
-  i18n.defaultLocale = "en_CA.UTF-8";
-  time.timeZone = "America/St_Johns";
-
-  users.users.max = {
-    isNormalUser = true;
-    description = "Max Power";
-    extraGroups = [ "wheel" ];
-  };
-
-  services.displayManager.gdm.enable = true;
-  services.desktopManager.gnome.enable = true;
-
-  environment.gnome.excludePackages = with pkgs; [
-    epiphany
-    gnome-maps
-    gnome-music
-    gnome-calendar
-  ];
-
-  programs.dconf = {
-    enable = true;
-    profiles = {
-      user = {
-        databases = [
-          {
-            settings = {
-              "org/gnome/desktop/interface" = {
-                clock-format = "12h";
-                color-scheme = "prefer-dark";
-                monospace-font-name = "JetBrainsMono Nerd Font 11";
-              };
-              "org/gnome/desktop/peripherals/mouse" = {
-                accel-profile = "flat";
-              };
-              "org/gnome/desktop/background" = {
-                picture-uri = "file://${wallpaper}";
-                picture-uri-dark = "file://${wallpaper}";
-              };
-              "org/gnome/desktop/screensaver" = {
-                picture-uri = "file://${wallpaper}";
-              };
-            };
-          }
-        ];
-      };
-      gdm = {
-        databases = [
-          {
-            settings = {
-              "org/gnome/desktop/interface" = {
-                clock-format = "12h";
-                color-scheme = "prefer-dark";
-                monospace-font-name = "JetBrainsMono Nerd Font 11";
-              };
-              "org/gnome/desktop/peripherals/mouse" = {
-                accel-profile = "flat";
-              };
-              "org/gnome/desktop/background" = {
-                picture-uri = "file://${wallpaper}";
-                picture-uri-dark = "file://${wallpaper}";
-              };
-              "org/gnome/desktop/screensaver" = {
-                picture-uri = "file://${wallpaper}";
-              };
-            };
-          }
-        ];
-      };
-    };
-  };
-
-  # Enable CUPS to print documents.
-  # services.printing.enable = true;
-
-  security.rtkit.enable = true;
-  
-  security.pam.loginLimits = [
-    { domain = "@audio"; type = "-"; item = "rtprio"; value = "95"; }
-    { domain = "@audio"; type = "-"; item = "memlock"; value = "unlimited"; }
-  ];
-
-  services.pipewire = {
-    enable = true;
-    pulse.enable = true;
-    extraConfig.pipewire."92-low-latency" = {
-      "context.properties" = {
-        "default.clock.rate" = 48000;
-        "default.clock.quantum" = 64;
-        "default.clock.min-quantum" = 64;
-        "default.clock.max-quantum" = 64;
-      };
-    };
-    extraConfig.pipewire-pulse."92-low-latency" = {
-      "context.modules" = [
-        {
-          name = "libpipewire-module-protocol-pulse";
-          args = {
-            "pulse.min.req" = "64/48000";
-            "pulse.default.req" = "64/48000";
-            "pulse.max.req" = "64/48000";
-            "pulse.min.quantum" = "64/48000";
-            "pulse.max.quantum" = "64/48000";
-          };
-        }
-      ];
-      "stream.properties" = {
-        "node.latency" = "64/48000";
-        "resample.quality" = 1;
-      };
-    };
-  };
-
-  programs.steam = {
-    enable = true;
-    remotePlay.openFirewall = true;
-    dedicatedServer.openFirewall = true;
-    extraCompatPackages = with pkgs; [
-      proton-cachyos-x86_64-v3
-    ];
-    config = {
+  services = {
+    resolved = {
       enable = true;
-      onSteamRunning = "close";
-      defaultCompatTool = pkgs.proton-cachyos-x86_64-v3;
-      displayRatesAsBits = false;
+      settings.Resolve = {
+        DNSOverTLS = "true";
+        DNSSEC = "true";
+        Domains = [ "~." ];
+      };
+    };
+    pipewire = {
+      enable = true;
+      pulse.enable = true;
+      extraConfig.pipewire."92-low-latency" = {
+        "context.properties" = {
+          "default.clock.rate" = 48000;
+          "default.clock.quantum" = 64;
+          "default.clock.min-quantum" = 64;
+          "default.clock.max-quantum" = 64;
+        };
+      };
+      extraConfig.pipewire-pulse."92-low-latency" = {
+        "context.modules" = [
+          {
+            name = "libpipewire-module-protocol-pulse";
+            args = {
+              "pulse.min.req" = "64/48000";
+              "pulse.default.req" = "64/48000";
+              "pulse.max.req" = "64/48000";
+              "pulse.min.quantum" = "64/48000";
+              "pulse.max.quantum" = "64/48000";
+            };
+          }
+        ];
+        "stream.properties" = {
+          "node.latency" = "64/48000";
+          "resample.quality" = 1;
+        };
+      };
+    };
+    displayManager.gdm.enable = true;
+    desktopManager.gnome.enable = true;
+  };
+
+  security = {
+    rtkit.enable = true;
+    pam.loginLimits = [
+      {
+        domain = "@audio";
+        type = "-";
+        item = "rtprio";
+        value = "95";
+      }
+      {
+        domain = "@audio";
+        type = "-";
+        item = "memlock";
+        value = "unlimited";
+      }
+    ];
+  };
+
+  programs = {
+    steam = {
+      enable = true;
+      remotePlay.openFirewall = true;
+      dedicatedServer.openFirewall = true;
+      extraCompatPackages = with pkgs; [
+        proton-cachyos-x86_64-v3
+      ];
+      config = {
+        enable = true;
+        onSteamRunning = "close";
+        defaultCompatTool = pkgs.proton-cachyos-x86_64-v3;
+        displayRatesAsBits = false;
+      };
+    };
+    _1password-gui = {
+      enable = true;
+      polkitPolicyOwners = [ "max" ];
+    };
+    dconf = {
+      enable = true;
+      profiles = {
+        user = {
+          databases = [
+            {
+              settings = {
+                "org/gnome/desktop/interface" = {
+                  clock-format = "12h";
+                  color-scheme = "prefer-dark";
+                  monospace-font-name = "JetBrainsMono Nerd Font 11";
+                };
+                "org/gnome/desktop/peripherals/mouse" = {
+                  accel-profile = "flat";
+                };
+                "org/gnome/desktop/background" = {
+                  picture-uri = "file://${wallpaper}";
+                  picture-uri-dark = "file://${wallpaper}";
+                };
+                "org/gnome/desktop/screensaver" = {
+                  picture-uri = "file://${wallpaper}";
+                };
+              };
+            }
+          ];
+        };
+        gdm = {
+          databases = [
+            {
+              settings = {
+                "org/gnome/desktop/interface" = {
+                  clock-format = "12h";
+                  color-scheme = "prefer-dark";
+                  monospace-font-name = "JetBrainsMono Nerd Font 11";
+                };
+                "org/gnome/desktop/peripherals/mouse" = {
+                  accel-profile = "flat";
+                };
+                "org/gnome/desktop/background" = {
+                  picture-uri = "file://${wallpaper}";
+                  picture-uri-dark = "file://${wallpaper}";
+                };
+                "org/gnome/desktop/screensaver" = {
+                  picture-uri = "file://${wallpaper}";
+                };
+              };
+            }
+          ];
+        };
+      };
     };
   };
 
-  programs._1password-gui = {
-    enable = true;
-    polkitPolicyOwners = [ "max" ];
+  fonts = {
+    packages = with pkgs; [
+      nerd-fonts.jetbrains-mono
+    ];
+    fontconfig.defaultFonts = {
+      monospace = [ "JetBrainsMono Nerd Font" ];
+    };
   };
 
-  fonts.packages = with pkgs; [
-    nerd-fonts.jetbrains-mono
-  ];
-
-  fonts.fontconfig.defaultFonts = {
-    monospace = [ "JetBrainsMono Nerd Font" ];
+  environment = {
+    systemPackages = with pkgs; [
+      vim
+      wget
+    ];
+    gnome.excludePackages = with pkgs; [
+      epiphany
+      gnome-maps
+      gnome-music
+      gnome-calendar
+    ];
   };
-
-  environment.systemPackages = with pkgs; [
-    vim
-    wget
-  ];
 
   # Open ports in the firewall.
   # networking.firewall.allowedTCPPorts = [ ... ];
