@@ -236,14 +236,19 @@
         "systems": "systems"
       },
       "locked": {
-        "path": "./steam-config-nix",
-        "type": "path"
+        "lastModified": 1785272382,
+        "narHash": "sha256-iHjVBzZ5umjEnGL0KwzXkVRqfeZ/MWYdsitTzrPXPqw=",
+        "owner": "gaavin",
+        "repo": "steam-config-nix",
+        "rev": "699888315cd7ada89e4093d92e7a39388e97ff53",
+        "type": "github"
       },
       "original": {
-        "path": "./steam-config-nix",
-        "type": "path"
-      },
-      "parent": []
+        "owner": "gaavin",
+        "ref": "feat/display-rates-as-bits",
+        "repo": "steam-config-nix",
+        "type": "github"
+      }
     },
     "systems": {
       "locked": {
