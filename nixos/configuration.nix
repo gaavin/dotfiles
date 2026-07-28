@@ -86,8 +86,8 @@ in
     extraGroups = [ "wheel" ];
   };
 
-  # GNOME/AccountsService avatar (stock face from gnome-control-center)
   systemd.tmpfiles.rules = [
+    "f+ /var/lib/AccountsService/users/max 0600 root root - [User]\\nIcon=/var/lib/AccountsService/icons/max\\n"
     "L+ /var/lib/AccountsService/icons/max - - - - ${pkgs.gnome-control-center}/share/pixmaps/faces/cat.jpg"
   ];
 
@@ -128,9 +128,6 @@ in
           "default.clock.max-quantum" = 64;
         };
       };
-      # Do not redeclare context.modules here — conf.d merges append the
-      # protocol-pulse module a second time, which crashes pipewire-pulse
-      # ("can't create server source: File exists").
       extraConfig.pipewire-pulse."92-low-latency" = {
         "pulse.properties" = {
           "pulse.min.req" = "64/48000";
