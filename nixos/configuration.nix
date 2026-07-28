@@ -246,6 +246,7 @@ in
 
   environment = {
     systemPackages = with pkgs; [
+      gnomeExtensions.appindicator
       vim
       wget
     ];
