@@ -145,11 +145,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1785355206,
-        "narHash": "sha256-3fa+EmTxcb+lDDKW1KJWVwGESNU0bz1qnLwY3Q+wM98=",
+        "lastModified": 1785355579,
+        "narHash": "sha256-NfiCideAQu2lSJaVv2JlT4SoeQuyA7guzJ3eKuflexk=",
         "owner": "gaavin",
         "repo": "nix-osu-stable",
-        "rev": "5f7e30a5b3d354f780848d8e48b7e2082f1504e1",
+        "rev": "b3d52864cf2e4bdb7426f55e3f30cc7b93a7ab7b",
         "type": "github"
       },
       "original": {
