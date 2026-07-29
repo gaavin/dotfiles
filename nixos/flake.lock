@@ -138,6 +138,26 @@
         "type": "github"
       }
     },
+    "nix-osu-stable": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1785354494,
+        "narHash": "sha256-JSIPWsX0H209S9EEK9eheiJ52PbMJmL5WaLD1qgdKrA=",
+        "owner": "gaavin",
+        "repo": "nix-osu-stable",
+        "rev": "2c0123f834f3f30620b2f071a4179e779b0768b2",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gaavin",
+        "repo": "nix-osu-stable",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1785307242,
@@ -189,6 +209,7 @@
         "home-manager": "home-manager",
         "nix-cachyos-kernel": "nix-cachyos-kernel",
         "nix-gaming-edge": "nix-gaming-edge",
+        "nix-osu-stable": "nix-osu-stable",
         "nixpkgs": "nixpkgs_2",
         "steam-config-nix": "steam-config-nix"
       }

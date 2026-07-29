@@ -3,6 +3,7 @@
   lib,
   pkgs,
   firefox-addons,
+  nix-osu-stable,
   ...
 }:
 
@@ -34,7 +35,14 @@ in
     ];
   };
 
+  imports = [ nix-osu-stable.homeModules.osu-stable ];
+
   programs = {
+    osu-stable = {
+      enable = true;
+      package = nix-osu-stable.packages.${pkgs.stdenv.hostPlatform.system}.osu-wine;
+    };
+
     cursor = {
       enable = true;
       mutableExtensionsDir = true;
