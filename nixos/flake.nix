@@ -23,6 +23,10 @@
       url = "github:gaavin/steam-config-nix/feat/display-rates-as-bits";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nix-osu-stable = {
+      url = "github:gaavin/nix-osu-stable";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     home-manager = {
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -67,7 +71,10 @@
             home-manager = {
               useGlobalPkgs = true;
               useUserPackages = true;
-              extraSpecialArgs = { inherit firefox-addons; };
+              extraSpecialArgs = {
+                inherit firefox-addons;
+                inherit (inputs) nix-osu-stable;
+              };
               users.max = import ./home.nix;
               backupFileExtension = "bak";
             };
