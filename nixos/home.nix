@@ -42,6 +42,8 @@ in
       enable = true;
       package = nix-osu-stable.packages.${pkgs.stdenv.hostPlatform.system}.osu-wine;
       gamemode = false;
+      # OTD Absolute Mode + Wayland/XWayland: wine-osu tablet fix (see osu-winello wiki)
+      environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
     };
 
     cursor = {
