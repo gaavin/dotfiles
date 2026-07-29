@@ -41,6 +41,7 @@ in
     osu-stable = {
       enable = true;
       package = nix-osu-stable.packages.${pkgs.stdenv.hostPlatform.system}.osu-wine;
+      gamemode = false;
     };
 
     cursor = {
