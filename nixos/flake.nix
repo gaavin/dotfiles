@@ -5,16 +5,20 @@
     extra-substituters = [
       "https://attic.xuyh0120.win/lantian"
       "https://nix-cache.tokidoki.dev/tokidoki"
+      "https://nix-gaming.cachix.org"
     ];
     extra-trusted-public-keys = [
       "lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc="
       "tokidoki:MD4VWt3kK8Fmz3jkiGoNRJIW31/QAm7l1Dcgz2Xa4hk="
+      "nix-gaming.cachix.org-1:nbjlureqMbRAxR1gJ/f3hxemL9svXaZF/Ees8vCUUs4="
     ];
   };
 
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
     nix-cachyos-kernel.url = "github:xddxdd/nix-cachyos-kernel/release";
+    # Don't follow nixpkgs — wine builds are cached against nix-gaming's pin.
+    nix-gaming.url = "github:fufexan/nix-gaming";
     nix-gaming-edge = {
       url = "github:powerofthe69/nix-gaming-edge";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -39,6 +43,7 @@
       nixpkgs,
       home-manager,
       nix-cachyos-kernel,
+      nix-gaming,
       nix-gaming-edge,
       steam-config-nix,
       firefox-addons,
@@ -67,7 +72,7 @@
             home-manager = {
               useGlobalPkgs = true;
               useUserPackages = true;
-              extraSpecialArgs = { inherit firefox-addons; };
+              extraSpecialArgs = { inherit firefox-addons nix-gaming; };
               users.max = import ./home.nix;
               backupFileExtension = "bak";
             };
