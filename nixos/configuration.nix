@@ -174,6 +174,18 @@ in
         onSteamRunning = "close";
         defaultCompatTool = pkgs.proton-cachyos-x86_64-v3;
         displayRatesAsBits = false;
+        apps = {
+          "Counter-Strike 2" = {
+            id = 730;
+            launchOptions = {
+              args = [
+                "-vulkan"
+                "-novid"
+                "-nojoy"
+              ];
+            };
+          };
+        };
       };
     };
     _1password-gui = {
