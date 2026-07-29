@@ -3,7 +3,6 @@
   lib,
   pkgs,
   firefox-addons,
-  nix-gaming,
   ...
 }:
 
@@ -32,7 +31,6 @@ in
       pnpm
       spotify
       fastfetch
-      nix-gaming.packages.${pkgs.stdenv.hostPlatform.system}.osu-stable
     ];
   };
 
