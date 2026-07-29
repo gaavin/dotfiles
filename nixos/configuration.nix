@@ -169,9 +169,6 @@ in
       enable = true;
       remotePlay.openFirewall = true;
       dedicatedServer.openFirewall = true;
-      extraCompatPackages = with pkgs; [
-        proton-cachyos-x86_64-v3
-      ];
       config = {
         enable = true;
         onSteamRunning = "close";
