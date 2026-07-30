@@ -202,6 +202,7 @@ in
                 "org/gnome/desktop/interface" = {
                   clock-format = "12h";
                   color-scheme = "prefer-dark";
+                  gtk-theme = "adw-gtk3";
                   monospace-font-name = "JetBrainsMono Nerd Font 11";
                 };
                 "org/gnome/desktop/peripherals/mouse" = {
@@ -240,6 +241,7 @@ in
                 "org/gnome/desktop/interface" = {
                   clock-format = "12h";
                   color-scheme = "prefer-dark";
+                  gtk-theme = "adw-gtk3";
                   monospace-font-name = "JetBrainsMono Nerd Font 11";
                 };
                 "org/gnome/desktop/peripherals/mouse" = {
@@ -259,7 +261,6 @@ in
       };
     };
   };
-
   fonts = {
     packages = with pkgs; [
       nerd-fonts.jetbrains-mono
@@ -274,6 +275,7 @@ in
       gnomeExtensions.appindicator
       vim
       wget
+      adw-gtk3
     ];
     gnome.excludePackages = with pkgs; [
       epiphany
