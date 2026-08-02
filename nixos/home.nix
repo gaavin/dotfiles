@@ -267,6 +267,7 @@ in
 
     vesktop = {
       enable = true;
+      settings.appBadge = false;
       vencord.settings = {
         autoUpdate = true;
         autoUpdateNotification = true;
