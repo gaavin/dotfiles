@@ -9,7 +9,6 @@
   hardware = {
     uinput.enable = true;
     opentabletdriver.enable = true;
-    steam-hardware.enable = true;
   };
 
   chaotic.mesa-git.enable = true;
