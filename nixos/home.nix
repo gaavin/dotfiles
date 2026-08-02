@@ -31,6 +31,7 @@ in
       nixfmt
       nodejs
       pnpm
+      prismlauncher
       spotify
       fastfetch
     ];
