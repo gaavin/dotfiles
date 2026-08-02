@@ -1,28 +1,18 @@
-{
-  pkgs,
-  inputs,
-  lib,
-  ...
-}:
-
-let
-  wallpaper = ./wallpaper.jpg;
-in
+{ pkgs, steam-config-nix, ... }:
 
 {
   imports = [
     ./hardware-configuration.nix
-    inputs.steam-config-nix.nixosModules.default
-    inputs.nix-gaming-edge.nixosModules.mesa-git
+    steam-config-nix.nixosModules.default
   ];
 
-  drivers.mesa-git.enable = true;
-
   hardware = {
+    uinput.enable = true;
     opentabletdriver.enable = true;
     steam-hardware.enable = true;
-    uinput.enable = true;
   };
+
+  chaotic.mesa-git.enable = true;
 
   boot = {
     initrd = {
@@ -31,11 +21,13 @@ in
     };
     kernelParams = [
       "quiet"
+      "boot.shell_on_fail"
       "splash"
-      "loglevel=0"
+      "loglevel=3"
       "amd_pstate=guided"
       "preempt=full"
     ];
+    kernelPackages = pkgs.linuxPackages_cachyos-lto;
     kernelModules = [ "uinput" ];
     kernel.sysctl = {
       "vm.swappiness" = 180;
@@ -45,7 +37,7 @@ in
     };
     plymouth = {
       enable = true;
-      theme = "spinner";
+      theme = "breeze";
     };
     loader = {
       efi = {
@@ -55,6 +47,7 @@ in
       grub = {
         devices = [ "nodev" ];
         efiSupport = true;
+        gfxmodeEfi = "2560x1440";
         enable = true;
         extraEntries = ''
           menuentry "Windows 10 IoT Enterprise LTSC 2021" {
@@ -62,7 +55,7 @@ in
             insmod fat
             insmod search_fs_uuid
             insmod chain
-            search --fs-uuid --set=root EE20-98A5
+            search --fs-uuid --set=root 7C9E-C49F
             chainloader /EFI/Microsoft/Boot/bootmgfw.efi
           }
         '';
@@ -86,11 +79,6 @@ in
     extraGroups = [ "wheel" ];
   };
 
-  systemd.tmpfiles.rules = [
-    "f+ /var/lib/AccountsService/users/max 0600 root root - [User]\\nIcon=/var/lib/AccountsService/icons/max\\n"
-    "L+ /var/lib/AccountsService/icons/max - - - - ${pkgs.gnome-control-center}/share/pixmaps/faces/cat.jpg"
-  ];
-
   networking = {
     hostName = "mina";
     networkmanager = {
@@ -103,12 +91,56 @@ in
     ];
   };
 
+  programs = {
+    _1password-gui = {
+      enable = true;
+      polkitPolicyOwners = [ "max" ];
+    };
+
+    steam = {
+      enable = true;
+      remotePlay.openFirewall = true;
+      dedicatedServer.openFirewall = true;
+      config = {
+        enable = true;
+        onSteamRunning = "close";
+        defaultCompatTool = pkgs.proton-cachyos_x86_64_v3;
+        displayRatesAsBits = false;
+        apps = {
+          "Counter-Strike 2" = {
+            id = 730;
+            launchOptions = {
+              args = [
+                "-vulkan"
+                "-novid"
+                "-nojoy"
+              ];
+            };
+          };
+        };
+      };
+    };
+  };
+
+  fonts = {
+    packages = with pkgs; [
+      nerd-fonts.jetbrains-mono
+    ];
+    fontconfig.defaultFonts = {
+      monospace = [ "JetBrainsMono Nerd Font" ];
+    };
+  };
+
   services = {
+    desktopManager.plasma6.enable = true;
+    displayManager.plasma-login-manager.enable = true;
+
     udev.extraRules = ''
       # ADIOS I/O scheduler for NVMe and SSDs; BFQ for rotational HDDs
       ACTION=="add|change", KERNEL=="nvme[0-9]*|sd[a-z]*|mmcblk[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="adios"
       ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
     '';
+
     resolved = {
       enable = true;
       settings.Resolve = {
@@ -142,8 +174,6 @@ in
         };
       };
     };
-    displayManager.gdm.enable = true;
-    desktopManager.gnome.enable = true;
   };
 
   security = {
@@ -164,126 +194,10 @@ in
     ];
   };
 
-  programs = {
-    steam = {
-      enable = true;
-      remotePlay.openFirewall = true;
-      dedicatedServer.openFirewall = true;
-      config = {
-        enable = true;
-        onSteamRunning = "close";
-        defaultCompatTool = pkgs.proton-cachyos-x86_64-v3;
-        displayRatesAsBits = false;
-        apps = {
-          "Counter-Strike 2" = {
-            id = 730;
-            launchOptions = {
-              args = [
-                "-vulkan"
-                "-novid"
-                "-nojoy"
-              ];
-            };
-          };
-        };
-      };
-    };
-    _1password-gui = {
-      enable = true;
-      polkitPolicyOwners = [ "max" ];
-    };
-    dconf = {
-      enable = true;
-      profiles = {
-        user = {
-          databases = [
-            {
-              settings = {
-                "org/gnome/desktop/interface" = {
-                  clock-format = "12h";
-                  color-scheme = "prefer-dark";
-                  gtk-theme = "adw-gtk3";
-                  monospace-font-name = "JetBrainsMono Nerd Font 11";
-                };
-                "org/gnome/desktop/peripherals/mouse" = {
-                  accel-profile = "flat";
-                };
-                "org/gnome/desktop/background" = {
-                  picture-uri = "file://${wallpaper}";
-                  picture-uri-dark = "file://${wallpaper}";
-                };
-                "org/gnome/desktop/screensaver" = {
-                  picture-uri = "file://${wallpaper}";
-                };
-                "org/gnome/desktop/session" = {
-                  idle-delay = lib.gvariant.mkUint32 1800;
-                };
-                "org/gnome/settings-daemon/plugins/power" = {
-                  sleep-inactive-ac-type = "nothing";
-                  sleep-inactive-battery-type = "nothing";
-                };
-                "org/gnome/shell" = {
-                  enabled-extensions = [ "appindicatorsupport@rgcjonas.gmail.com" ];
-                };
-              };
-              locks = [
-                "/org/gnome/desktop/session/idle-delay"
-                "/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-type"
-                "/org/gnome/settings-daemon/plugins/power/sleep-inactive-battery-type"
-              ];
-            }
-          ];
-        };
-        gdm = {
-          databases = [
-            {
-              settings = {
-                "org/gnome/desktop/interface" = {
-                  clock-format = "12h";
-                  color-scheme = "prefer-dark";
-                  gtk-theme = "adw-gtk3";
-                  monospace-font-name = "JetBrainsMono Nerd Font 11";
-                };
-                "org/gnome/desktop/peripherals/mouse" = {
-                  accel-profile = "flat";
-                };
-                "org/gnome/desktop/background" = {
-                  picture-uri = "file://${wallpaper}";
-                  picture-uri-dark = "file://${wallpaper}";
-                };
-                "org/gnome/desktop/screensaver" = {
-                  picture-uri = "file://${wallpaper}";
-                };
-              };
-            }
-          ];
-        };
-      };
-    };
-  };
-  fonts = {
-    packages = with pkgs; [
-      nerd-fonts.jetbrains-mono
-    ];
-    fontconfig.defaultFonts = {
-      monospace = [ "JetBrainsMono Nerd Font" ];
-    };
-  };
-
-  environment = {
-    systemPackages = with pkgs; [
-      gnomeExtensions.appindicator
-      vim
-      wget
-      adw-gtk3
-    ];
-    gnome.excludePackages = with pkgs; [
-      epiphany
-      gnome-maps
-      gnome-music
-      gnome-calendar
-    ];
-  };
+  environment.systemPackages = with pkgs; [
+    vim
+    wget
+  ];
 
   # Open ports in the firewall.
   # networking.firewall.allowedTCPPorts = [ ... ];
@@ -310,23 +224,9 @@ in
   # For more information, see `man configuration.nix` or https://nixos.org/manual/nixos/stable/options#opt-system.stateVersion .
   nixpkgs.config.allowUnfree = true;
   nix.settings = {
-    trusted-users = [
-      "root"
-      "@wheel"
-    ];
     experimental-features = [
       "nix-command"
       "flakes"
-    ];
-    substituters = [
-      "https://cache.nixos.org"
-      "https://attic.xuyh0120.win/lantian"
-      "https://nix-cache.tokidoki.dev/tokidoki"
-    ];
-    trusted-public-keys = [
-      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-      "lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc="
-      "tokidoki:MD4VWt3kK8Fmz3jkiGoNRJIW31/QAm7l1Dcgz2Xa4hk="
     ];
   };
   system.stateVersion = "26.05"; # Did you read the comment?
