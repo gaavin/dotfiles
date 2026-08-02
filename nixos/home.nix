@@ -12,11 +12,12 @@ let
 in
 
 {
+  imports = [ nix-osu-stable.homeModules.osu-stable ];
+
   home = {
     username = "max";
     homeDirectory = "/home/max";
     stateVersion = "26.05";
-
     sessionVariables = {
       MOZ_ENABLE_WAYLAND = "1";
       SDL_VIDEO_DRIVER = "wayland";
@@ -24,8 +25,8 @@ in
       SSH_AUTH_SOCK = onePasswordPath;
       EDITOR = "vim";
     };
-
     packages = with pkgs; [
+      kdePackages.breeze-gtk
       nil
       nixfmt
       nodejs
@@ -35,40 +36,55 @@ in
     ];
   };
 
-  imports = [ nix-osu-stable.homeModules.osu-stable ];
+  qt = {
+    enable = true;
+    platformTheme.name = "kde";
+    style.name = "breeze";
+  };
+
+  gtk = {
+    enable = true;
+    theme = {
+      name = "Breeze-Dark";
+      package = pkgs.kdePackages.breeze-gtk;
+    };
+    iconTheme = {
+      name = "breeze-dark";
+      package = pkgs.kdePackages.breeze-icons;
+    };
+  };
 
   programs = {
-    osu-stable = {
+    plasma = {
       enable = true;
-      package = nix-osu-stable.packages.${pkgs.stdenv.hostPlatform.system}.osu-wine;
-      gamemode = false;
-      # OTD Absolute Mode + Wayland/XWayland: wine-osu tablet fix (see osu-winello wiki)
-      environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
-    };
-
-    cursor = {
-      enable = true;
-      mutableExtensionsDir = true;
-      profiles.default = {
-        extensions = with pkgs.vscode-extensions; [
-          jnoortheen.nix-ide
-        ];
-        userSettings = {
-          "editor.fontFamily" = "'JetBrainsMono Nerd Font', 'Courier New', monospace";
-          "terminal.integrated.fontFamily" = "'JetBrainsMono Nerd Font'";
-          "editor.fontLigatures" = true;
-          "editor.formatOnSave" = true;
-          "editor.formatOnPaste" = true;
-          "nix.enableLanguageServer" = true;
-          "nix.serverPath" = "${pkgs.nil}/bin/nil";
-          "nix.serverSettings" = {
-            nil.formatting.command = [ "${pkgs.nixfmt}/bin/nixfmt" ];
-          };
-          "[nix]" = {
-            "editor.defaultFormatter" = "jnoortheen.nix-ide";
-          };
-        };
+      overrideConfig = true;
+      workspace = {
+        lookAndFeel = "org.kde.breezedark.desktop";
+        theme = "breeze-dark";
+        colorScheme = "BreezeDark";
+        iconTheme = "breeze-dark";
+        wallpaper = ./wallpaper.jpg;
       };
+      fonts.fixedWidth = {
+        family = "JetBrainsMono Nerd Font";
+        pointSize = 10;
+      };
+      input.mice = [
+        {
+          enable = true;
+          name = "Logitech PRO X";
+          vendorId = "046d";
+          productId = "4093";
+          accelerationProfile = "none";
+        }
+        {
+          enable = true;
+          name = "Logitech PRO X Wireless";
+          vendorId = "046d";
+          productId = "c094";
+          accelerationProfile = "none";
+        }
+      ];
     };
 
     bash = {
@@ -99,6 +115,31 @@ in
         ServerAliveCountMax = 3;
         UserKnownHostsFile = "~/.ssh/known_hosts";
         IdentityAgent = onePasswordPath;
+      };
+    };
+
+    cursor = {
+      enable = true;
+      mutableExtensionsDir = true;
+      profiles.default = {
+        extensions = with pkgs.vscode-extensions; [
+          jnoortheen.nix-ide
+        ];
+        userSettings = {
+          "editor.fontFamily" = "'JetBrainsMono Nerd Font', 'Courier New', monospace";
+          "terminal.integrated.fontFamily" = "'JetBrainsMono Nerd Font'";
+          "editor.fontLigatures" = true;
+          "editor.formatOnSave" = true;
+          "editor.formatOnPaste" = true;
+          "nix.enableLanguageServer" = true;
+          "nix.serverPath" = "${pkgs.nil}/bin/nil";
+          "nix.serverSettings" = {
+            nil.formatting.command = [ "${pkgs.nixfmt}/bin/nixfmt" ];
+          };
+          "[nix]" = {
+            "editor.defaultFormatter" = "jnoortheen.nix-ide";
+          };
+        };
       };
     };
 
@@ -218,6 +259,12 @@ in
       };
     };
 
+    osu-stable = {
+      enable = true;
+      package = nix-osu-stable.packages.${pkgs.stdenv.hostPlatform.system}.osu-wine;
+      environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
+    };
+
     vesktop = {
       enable = true;
       vencord.settings = {
@@ -230,6 +277,6 @@ in
         };
       };
     };
-  };
 
+  };
 }

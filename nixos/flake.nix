@@ -1,82 +1,61 @@
 {
   description = "configuration for desktop";
 
-  nixConfig = {
-    extra-substituters = [
-      "https://attic.xuyh0120.win/lantian"
-      "https://nix-cache.tokidoki.dev/tokidoki"
-    ];
-    extra-trusted-public-keys = [
-      "lantian:EeAUQ+W+6r7EtwnmYjeVwx5kOGEBpjlBfPlzGlTNvHc="
-      "tokidoki:MD4VWt3kK8Fmz3jkiGoNRJIW31/QAm7l1Dcgz2Xa4hk="
-    ];
-  };
-
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
-    nix-cachyos-kernel.url = "github:xddxdd/nix-cachyos-kernel/release";
-    nix-gaming-edge = {
-      url = "github:powerofthe69/nix-gaming-edge";
+    chaotic.url = "github:chaotic-cx/nyx/nyxpkgs-unstable";
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    plasma-manager = {
+      url = "github:nix-community/plasma-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.home-manager.follows = "home-manager";
+    };
+    firefox-addons = {
+      url = "gitlab:rycee/nur-expressions?dir=pkgs/firefox-addons";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     steam-config-nix = {
-      url = "github:gaavin/steam-config-nix/feat/display-rates-as-bits";
+      url = "github:gaavin/steam-config-nix/fix/compat-tool-bin-layout";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     nix-osu-stable = {
       url = "github:gaavin/nix-osu-stable";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    home-manager = {
-      url = "github:nix-community/home-manager";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    firefox-addons = {
-      url = "gitlab:rycee/nur-expressions?dir=pkgs/firefox-addons";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
-    inputs@{
+    {
       self,
       nixpkgs,
+      chaotic,
       home-manager,
-      nix-cachyos-kernel,
-      nix-gaming-edge,
-      steam-config-nix,
+      plasma-manager,
       firefox-addons,
+      steam-config-nix,
+      nix-osu-stable,
       ...
     }:
     {
       nixosConfigurations.mina = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
-        specialArgs = {
-          inherit inputs;
-          system = "x86_64-linux";
-        };
+        specialArgs = { inherit steam-config-nix; };
         modules = [
-          ({ pkgs, ... }: {
-            nixpkgs.overlays = [
-              nix-cachyos-kernel.overlays.pinned
-              nix-gaming-edge.overlays.default
-            ];
-            boot.kernelPackages = pkgs.cachyosKernels.linuxPackages-cachyos-bore-lto-x86_64-v3;
-          })
-
           ./configuration.nix
-
+          chaotic.nixosModules.default
           home-manager.nixosModules.home-manager
           {
             home-manager = {
               useGlobalPkgs = true;
               useUserPackages = true;
-              extraSpecialArgs = {
-                inherit firefox-addons;
-                inherit (inputs) nix-osu-stable;
-              };
+              extraSpecialArgs = { inherit firefox-addons nix-osu-stable; };
               users.max = import ./home.nix;
+              sharedModules = [ plasma-manager.homeModules.plasma-manager ];
               backupFileExtension = "bak";
+              overwriteBackup = true;
             };
           }
         ];
