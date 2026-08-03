@@ -70,6 +70,7 @@ in
         family = "JetBrainsMono Nerd Font";
         pointSize = 10;
       };
+      kwin.effects.shakeCursor.enable = false;
       input.mice = [
         {
           enable = true;
