@@ -263,7 +263,6 @@ in
 
     osu-stable = {
       enable = true;
-      package = nix-osu-stable.packages.${pkgs.stdenv.hostPlatform.system}.osu-wine;
       environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
     };
 
