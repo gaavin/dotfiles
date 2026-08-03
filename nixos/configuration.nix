@@ -177,20 +177,6 @@
 
   security = {
     rtkit.enable = true;
-    pam.loginLimits = [
-      {
-        domain = "@audio";
-        type = "-";
-        item = "rtprio";
-        value = "95";
-      }
-      {
-        domain = "@audio";
-        type = "-";
-        item = "memlock";
-        value = "unlimited";
-      }
-    ];
   };
 
   environment.systemPackages = with pkgs; [
