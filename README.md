@@ -67,7 +67,7 @@ sudo nixos-enter --root /mnt -c 'passwd max'
 
 ## Rebuild
 
-After the first boot, from the installed system:
+After installation, you can apply any configuration changes with this command:
 
 ```bash
 rebuild
