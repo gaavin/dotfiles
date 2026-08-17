@@ -21,18 +21,12 @@
               format = "vfat";
               mountpoint = "/efi";
               mountOptions = [
-                "nodev"
-                "nosuid"
-                "noexec"
-                "fmask=0177"
-                "dmask=0077"
+                "umask=0077"
               ];
             };
           };
-
           root = {
             size = "100%";
-
             content = {
               type = "filesystem";
               format = "xfs";
