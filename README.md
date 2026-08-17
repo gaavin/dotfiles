@@ -1,7 +1,5 @@
 <div align="center">
 
-# mina
-
 **Declarative NixOS desktop** · flakes · Plasma 6 · AMD
 
 [![NixOS](https://img.shields.io/badge/NixOS-unstable-5277C3?logo=nixos&logoColor=white)](https://nixos.org)
@@ -14,8 +12,6 @@ Personal configuration for **mina** — an AMD desktop with CachyOS kernel, Stea
 </div>
 
 ---
-
-## Stack
 
 | Layer | Choice |
 | --- | --- |
