@@ -6,6 +6,44 @@
     steam-config-nix.nixosModules.default
   ];
 
+  disko.devices = {
+    disk.main = {
+      device = "/dev/nvme0n1";
+      type = "disk";
+      content = {
+        type = "gpt";
+        partitions = {
+          ESP = {
+            type = "EF00";
+            size = "2G";
+            content = {
+              type = "filesystem";
+              format = "vfat";
+              mountpoint = "/efi";
+              mountOptions = [
+                "nodev"
+                "nosuid"
+                "noexec"
+                "fmask=0177"
+                "dmask=0077"
+              ];
+            };
+          };
+
+          root = {
+            size = "100%";
+
+            content = {
+              type = "filesystem";
+              format = "xfs";
+              mountpoint = "/";
+            };
+          };
+        };
+      };
+    };
+  };
+
   hardware = {
     uinput.enable = true;
     opentabletdriver.enable = true;
@@ -48,16 +86,6 @@
         efiSupport = true;
         gfxmodeEfi = "2560x1440";
         enable = true;
-        extraEntries = ''
-          menuentry "Windows 10 IoT Enterprise LTSC 2021" {
-            insmod part_gpt
-            insmod fat
-            insmod search_fs_uuid
-            insmod chain
-            search --fs-uuid --set=root 7C9E-C49F
-            chainloader /EFI/Microsoft/Boot/bootmgfw.efi
-          }
-        '';
       };
     };
   };
@@ -73,9 +101,10 @@
   time.timeZone = "America/St_Johns";
 
   users.users.max = {
-    isNormalUser = true;
-    description = "Max Power";
-    extraGroups = [ "wheel" ];
+      isNormalUser = true;
+      initialHashedPassword="";
+      description = "Max Power";
+      extraGroups = [ "wheel" ];
   };
 
   networking = {
