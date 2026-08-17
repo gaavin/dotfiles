@@ -102,7 +102,6 @@
 
   users.users.max = {
       isNormalUser = true;
-      initialHashedPassword="";
       description = "Max Power";
       extraGroups = [ "wheel" ];
   };
