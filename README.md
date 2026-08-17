@@ -32,7 +32,7 @@ nvme0n1
 
 ## Install
 
-Boot a NixOS installer, clone this repo, then run the commands from `nixos/` (the flake root).
+Boot a NixOS installer, clone this repo, then run the commands from `dotfiles/nixos/` (the flake root).
 
 > [!CAUTION]
 > Disko `--mode destroy,format,mount` **wipes** `/dev/nvme0n1`. Confirm the disk before continuing.
