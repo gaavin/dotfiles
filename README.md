@@ -7,8 +7,6 @@
 [![Plasma](https://img.shields.io/badge/KDE-Plasma%206-1D99F3?logo=kde&logoColor=white)](https://kde.org/plasma-desktop/)
 [![License](https://img.shields.io/badge/license-personal-lightgrey)](https://github.com/gaavin/dotfiles)
 
-Personal configuration for **mina** — an AMD desktop with CachyOS kernel, Steam, and a dark Plasma workspace.
-
 </div>
 
 ---
