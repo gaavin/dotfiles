@@ -75,10 +75,7 @@
         canTouchEfiVariables = true;
         efiSysMountPoint = "/efi";
       };
-      grub = {
-        devices = [ "nodev" ];
-        efiSupport = true;
-        gfxmodeEfi = "2560x1440";
+      systemd-boot = {
         enable = true;
       };
     };
