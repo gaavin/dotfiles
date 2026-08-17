@@ -1,6 +1,6 @@
 <div align="center">
 
-**Declarative NixOS desktop** · flakes · Plasma 6 · AMD
+**Declarative NixOS desktop** · Flakes · Plasma 6 · AMD
 
 [![NixOS](https://img.shields.io/badge/NixOS-unstable-5277C3?logo=nixos&logoColor=white)](https://nixos.org)
 [![Flakes](https://img.shields.io/badge/nix-flakes-informational?logo=nixos&logoColor=white)](https://nixos.wiki/wiki/Flakes)
