@@ -264,6 +264,7 @@ in
     osu-stable = {
       enable = true;
       environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
+      offsetCalculator.enable = true;
     };
 
     vesktop = {

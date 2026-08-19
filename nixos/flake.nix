@@ -28,7 +28,7 @@
     };
 
     nix-osu-stable = {
-      url = "github:gaavin/nix-osu-stable";
+      url = "github:gaavin/nix-osu-stable/feat/osu-offset";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
