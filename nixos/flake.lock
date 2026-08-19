@@ -126,11 +126,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787164822,
-        "narHash": "sha256-fgi9dJtceRgxoUm64wAA3Ua+NncQ4cZRGBbNqdg3g9Q=",
+        "lastModified": 1787176219,
+        "narHash": "sha256-djoRr6jBpe35q/0JwAvXpFXg1Ktf+X54NU2RLR7wnHw=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "152b9dcad099ed3d85d4f90152a110dd8b84c73f",
+        "rev": "c53d643b3737e2fcd04e6cb3b3580ef50b2087a0",
         "type": "github"
       },
       "original": {
@@ -147,16 +147,15 @@
         "offset-calc-osu-stable": "offset-calc-osu-stable"
       },
       "locked": {
-        "lastModified": 1787173247,
-        "narHash": "sha256-lj3j6EYOq7VijeNGKI6bnBjrtsig90kd281ZLyWKJiE=",
+        "lastModified": 1787177683,
+        "narHash": "sha256-fjdDaPeDALRN8OTKCK+jCbJlIw4wgmFB7tCE8IHQMsU=",
         "owner": "gaavin",
         "repo": "nix-osu-stable",
-        "rev": "90562deb2a8c98cc1b6af7db7bb35b9a584647d9",
+        "rev": "9b17952a714629a08bf7e5003d77a238cc544290",
         "type": "github"
       },
       "original": {
         "owner": "gaavin",
-        "ref": "feat/osu-offset",
         "repo": "nix-osu-stable",
         "type": "github"
       }
@@ -199,11 +198,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787172492,
-        "narHash": "sha256-iMH6eC/YwP3RGoD9aB2TEE+XnH4NC//w6hnA5sD7Toc=",
+        "lastModified": 1787177310,
+        "narHash": "sha256-WAML9KftVoNt7VEbZVy5PCHUOOh1P+JCOJU8+4tEFuc=",
         "owner": "gaavin",
         "repo": "offset-calc-osu-stable",
-        "rev": "60da70aef8ce95f04d1f23b23ac2fc19e5bb5ca0",
+        "rev": "479655da4301bb1d5e6485883517e4d1d3f37512",
         "type": "github"
       },
       "original": {
