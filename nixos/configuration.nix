@@ -92,9 +92,9 @@
   time.timeZone = "America/St_Johns";
 
   users.users.max = {
-      isNormalUser = true;
-      description = "Max Power";
-      extraGroups = [ "wheel" ];
+    isNormalUser = true;
+    description = "Max Power";
+    extraGroups = [ "wheel" ];
   };
 
   networking = {
@@ -127,13 +127,11 @@
         apps = {
           "Counter-Strike 2" = {
             id = 730;
-            launchOptions = {
-              args = [
-                "-vulkan"
-                "-novid"
-                "-nojoy"
-              ];
-            };
+            args = [
+              "-vulkan"
+              "-novid"
+              "-nojoy"
+            ];
           };
         };
       };

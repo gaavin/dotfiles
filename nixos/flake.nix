@@ -23,7 +23,7 @@
     };
 
     steam-config-nix = {
-      url = "github:gaavin/steam-config-nix/fix/compat-tool-bin-layout";
+      url = "github:different-name/steam-config-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
