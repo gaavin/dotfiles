@@ -196,10 +196,13 @@
     rtkit.enable = true;
   };
 
-  environment.systemPackages = with pkgs; [
-    vim
-    wget
-  ];
+  environment = {
+    plasma6.excludePackages = [ pkgs.kdePackages.discover ];
+    systemPackages = with pkgs; [
+      vim
+      wget
+    ];
+  };
 
   # Open ports in the firewall.
   # networking.firewall.allowedTCPPorts = [ ... ];
