@@ -4,6 +4,7 @@
   pkgs,
   firefox-addons,
   nix-osu-stable,
+  nix-battle-net,
   ...
 }:
 
@@ -12,7 +13,10 @@ let
 in
 
 {
-  imports = [ nix-osu-stable.homeModules.osu-stable ];
+  imports = [
+    nix-osu-stable.homeModules.osu-stable
+    nix-battle-net.homeModules.battle-net
+  ];
 
   home = {
     username = "max";
@@ -265,6 +269,11 @@ in
       enable = true;
       environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
       offsetCalculator.enable = true;
+    };
+
+    battle-net = {
+      enable = true;
+      protonVersion = pkgs.proton-cachyos_x86_64_v3;
     };
 
     vesktop = {

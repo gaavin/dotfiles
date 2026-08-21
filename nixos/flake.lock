@@ -7,11 +7,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1787135913,
-        "narHash": "sha256-fCC0jvRmODxUqZ+TrJOlsNYjeEnnSVDQ+9r/xkx0/Ng=",
+        "lastModified": 1787253000,
+        "narHash": "sha256-Cr52M7PGduMEKXZlFFkRA8l5IjzsaJvHSBMztz42xwQ=",
         "owner": "chaotic-cx",
         "repo": "nyx",
-        "rev": "962d6a8e88f5f81750a928475d72b25d49461752",
+        "rev": "810054bfabeaa2fd7ad603736c57f476a603b28c",
         "type": "github"
       },
       "original": {
@@ -106,11 +106,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1786999651,
-        "narHash": "sha256-MTGMFlLDTklsXhCp4r5GXB4VAVadPdalXLvUjd/K7h0=",
+        "lastModified": 1787176219,
+        "narHash": "sha256-djoRr6jBpe35q/0JwAvXpFXg1Ktf+X54NU2RLR7wnHw=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "353742587cbaf079b3caee743115d037bc51fea6",
+        "rev": "c53d643b3737e2fcd04e6cb3b3580ef50b2087a0",
         "type": "github"
       },
       "original": {
@@ -139,6 +139,26 @@
         "type": "github"
       }
     },
+    "nix-battle-net": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787276625,
+        "narHash": "sha256-L0mowoBSlNn/A2eThYrvg6jDnbcWdhjCvBkdv+lNhDo=",
+        "owner": "gaavin",
+        "repo": "nix-battle-net",
+        "rev": "80a9d3a217f81d948478572b73da686d810f1e83",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gaavin",
+        "repo": "nix-battle-net",
+        "type": "github"
+      }
+    },
     "nix-osu-stable": {
       "inputs": {
         "nixpkgs": [
@@ -147,11 +167,11 @@
         "offset-calc-osu-stable": "offset-calc-osu-stable"
       },
       "locked": {
-        "lastModified": 1787177683,
-        "narHash": "sha256-fjdDaPeDALRN8OTKCK+jCbJlIw4wgmFB7tCE8IHQMsU=",
+        "lastModified": 1787187847,
+        "narHash": "sha256-r/NSyyg0b+FJwqgQ+2QTXuFSSa0T8bMW1Mw5sJjPMgw=",
         "owner": "gaavin",
         "repo": "nix-osu-stable",
-        "rev": "9b17952a714629a08bf7e5003d77a238cc544290",
+        "rev": "cc3ac4c6fdb7479eb70fd934d53bde83ac23acc6",
         "type": "github"
       },
       "original": {
@@ -162,11 +182,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1787070829,
-        "narHash": "sha256-vXNVDVtvfiQuXthP0NHPFdNvvMTkGpx0UP8oddIWbNk=",
+        "lastModified": 1787135253,
+        "narHash": "sha256-RD2kNWCG+Bjo6h+JVjWVNntZs2GtRoeY2xHjts/FNkA=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "0ae2bc1419c3f345984c2629e72e7a631820fa4d",
+        "rev": "ffb3c9b700e759be2ef13237c9d8f953b32a1e46",
         "type": "github"
       },
       "original": {
@@ -178,11 +198,11 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1787070829,
-        "narHash": "sha256-xe+M6F3syqECh9nH7Fmyxrjs13PtQV3S9o/EbutKz84=",
-        "rev": "0ae2bc1419c3f345984c2629e72e7a631820fa4d",
+        "lastModified": 1787135253,
+        "narHash": "sha256-M5/r2v++FjVhdsxXYMb4BDJ5YLAdCWFt3aZotcshocA=",
+        "rev": "ffb3c9b700e759be2ef13237c9d8f953b32a1e46",
         "type": "tarball",
-        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1057639.0ae2bc1419c3/nixexprs.tar.xz"
+        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1058091.ffb3c9b700e7/nixexprs.tar.xz"
       },
       "original": {
         "id": "nixpkgs",
@@ -198,11 +218,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787177310,
-        "narHash": "sha256-WAML9KftVoNt7VEbZVy5PCHUOOh1P+JCOJU8+4tEFuc=",
+        "lastModified": 1787187396,
+        "narHash": "sha256-/RTkb7UaY0Cl4SVEZfj41bVyiwpJqon+V8tEm9ESrsU=",
         "owner": "gaavin",
         "repo": "offset-calc-osu-stable",
-        "rev": "479655da4301bb1d5e6485883517e4d1d3f37512",
+        "rev": "11ddeb930241b4501c17e0e29a2ac35ea43bfdc3",
         "type": "github"
       },
       "original": {
@@ -240,6 +260,7 @@
         "disko": "disko",
         "firefox-addons": "firefox-addons",
         "home-manager": "home-manager_2",
+        "nix-battle-net": "nix-battle-net",
         "nix-osu-stable": "nix-osu-stable",
         "nixpkgs": "nixpkgs_2",
         "plasma-manager": "plasma-manager",
