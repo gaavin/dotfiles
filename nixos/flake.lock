@@ -7,11 +7,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1787253000,
-        "narHash": "sha256-Cr52M7PGduMEKXZlFFkRA8l5IjzsaJvHSBMztz42xwQ=",
+        "lastModified": 1787315718,
+        "narHash": "sha256-EdGzLV24ZQYo18DArDReJaTo+qyX+trOlxMaBrKe2s4=",
         "owner": "chaotic-cx",
         "repo": "nyx",
-        "rev": "810054bfabeaa2fd7ad603736c57f476a603b28c",
+        "rev": "5da4bd68801f1a9fcdbdad32da3fa4c6c1456eba",
         "type": "github"
       },
       "original": {
@@ -49,11 +49,11 @@
       },
       "locked": {
         "dir": "pkgs/firefox-addons",
-        "lastModified": 1787112172,
-        "narHash": "sha256-UMk1vXwGwx7dSxHAst6EcOvsryXIRuRF1QIFCz3oG+k=",
+        "lastModified": 1787284994,
+        "narHash": "sha256-ekBKvaEJY74xfbvB/QWLaB42XspwLlO5ySfmgvgKeeM=",
         "owner": "rycee",
         "repo": "nur-expressions",
-        "rev": "b6890db16471fa96d9223b538bcd30af7ea0a9bb",
+        "rev": "6e90cf8523a05e55621ede7cf1e101e1a70c5446",
         "type": "gitlab"
       },
       "original": {
@@ -167,11 +167,11 @@
         "offset-calc-osu-stable": "offset-calc-osu-stable"
       },
       "locked": {
-        "lastModified": 1787187847,
-        "narHash": "sha256-r/NSyyg0b+FJwqgQ+2QTXuFSSa0T8bMW1Mw5sJjPMgw=",
+        "lastModified": 1787280056,
+        "narHash": "sha256-6LO28bcGMWsllMri2KQsshQKPKfl3J3gXYhWg2E2iN4=",
         "owner": "gaavin",
         "repo": "nix-osu-stable",
-        "rev": "cc3ac4c6fdb7479eb70fd934d53bde83ac23acc6",
+        "rev": "c78d4de2341768ff90e8a450135b2bd056dbd2b7",
         "type": "github"
       },
       "original": {
@@ -218,11 +218,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787187396,
-        "narHash": "sha256-/RTkb7UaY0Cl4SVEZfj41bVyiwpJqon+V8tEm9ESrsU=",
+        "lastModified": 1787279683,
+        "narHash": "sha256-gHwz/G1J69Vs5DTVcyXYOktLyhMpN8SyoaCz5jyCrNM=",
         "owner": "gaavin",
         "repo": "offset-calc-osu-stable",
-        "rev": "11ddeb930241b4501c17e0e29a2ac35ea43bfdc3",
+        "rev": "ccb640f86f8c12e50356062168cb347fba12c174",
         "type": "github"
       },
       "original": {
@@ -276,11 +276,11 @@
         "systems": "systems"
       },
       "locked": {
-        "lastModified": 1786793596,
-        "narHash": "sha256-gif52G1Z57qQrvkHiwWHvn42qNkh6engloF2ZdTW950=",
+        "lastModified": 1787302388,
+        "narHash": "sha256-yxf4VNstB9G8EQnhuDQv1bO/l7OJiDJRMQMZTElXhDA=",
         "owner": "different-name",
         "repo": "steam-config-nix",
-        "rev": "30dc17418e7aff0b78ee14ef6c451b5f3422e792",
+        "rev": "0be0e63afbe6a9bb0fdacf190c0c5219e7889c64",
         "type": "github"
       },
       "original": {

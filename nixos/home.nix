@@ -36,6 +36,7 @@ in
       nodejs
       pnpm
       prismlauncher
+      qbittorrent
       spotify
       fastfetch
     ];
