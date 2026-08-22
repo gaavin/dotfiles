@@ -11,12 +11,20 @@
 
   nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
 
+  boot.initrd.services.lvm.enable = true;
+
+  boot.initrd.luks.devices.cryptroot = {
+    # filled by hosts/air/install.sh
+    device = "/dev/disk/by-uuid/00000000-0000-0000-0000-000000000000";
+    allowDiscards = true;
+  };
+
   fileSystems."/" = {
-    device = "/dev/disk/by-label/nixos";
+    device = "/dev/mapper/air-root";
     fsType = "xfs";
   };
 
-  # Replace this partuuid at install from:
+  # filled by hosts/air/install.sh from:
   #   tr -d '\0' < /proc/device-tree/chosen/asahi,efi-system-partition
   fileSystems."/efi" = {
     device = "/dev/disk/by-partuuid/00000000-0000-0000-0000-000000000000";
@@ -24,5 +32,7 @@
     options = [ "umask=0077" ];
   };
 
-  swapDevices = [ ];
+  swapDevices = [
+    { device = "/dev/mapper/air-swap"; }
+  ];
 }
