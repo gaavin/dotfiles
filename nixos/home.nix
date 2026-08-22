@@ -61,6 +61,11 @@ in
   };
 
   programs = {
+    aria2 = {
+      enable = true;
+      settings.max-connection-per-server = 5;
+    };
+
     plasma = {
       enable = true;
       overrideConfig = true;
