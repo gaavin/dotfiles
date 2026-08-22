@@ -159,6 +159,26 @@
         "type": "github"
       }
     },
+    "nix-epic-games-launcher": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787428469,
+        "narHash": "sha256-YT+tRuOCd7uV5U3I8PePk9a992GLbHiestd00gZOSFg=",
+        "owner": "gaavin",
+        "repo": "nix-epic-games-launcher",
+        "rev": "c7fe10e85f8046a3009e68fac53eeafeb40c30fa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gaavin",
+        "repo": "nix-epic-games-launcher",
+        "type": "github"
+      }
+    },
     "nix-osu-stable": {
       "inputs": {
         "nixpkgs": [
@@ -261,6 +281,7 @@
         "firefox-addons": "firefox-addons",
         "home-manager": "home-manager_2",
         "nix-battle-net": "nix-battle-net",
+        "nix-epic-games-launcher": "nix-epic-games-launcher",
         "nix-osu-stable": "nix-osu-stable",
         "nixpkgs": "nixpkgs_2",
         "plasma-manager": "plasma-manager",

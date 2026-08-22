@@ -37,6 +37,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nix-epic-games-launcher = {
+      url = "github:gaavin/nix-epic-games-launcher";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -54,6 +59,7 @@
       steam-config-nix,
       nix-osu-stable,
       nix-battle-net,
+      nix-epic-games-launcher,
       disko,
       ...
     }:
@@ -73,7 +79,14 @@
             home-manager = {
               useGlobalPkgs = true;
               useUserPackages = true;
-              extraSpecialArgs = { inherit firefox-addons nix-osu-stable nix-battle-net; };
+              extraSpecialArgs = {
+                inherit
+                  firefox-addons
+                  nix-osu-stable
+                  nix-battle-net
+                  nix-epic-games-launcher
+                  ;
+              };
               users.max = import ./home.nix;
               sharedModules = [ plasma-manager.homeModules.plasma-manager ];
               backupFileExtension = "bak";

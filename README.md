@@ -18,7 +18,7 @@
 | Kernel / GPU | `linuxPackages_cachyos-lto`, mesa-git, amdgpu |
 | Disk | Disko · GPT · 2G ESP (`/efi`) · XFS root on `nvme0n1` |
 | Audio | PipeWire, 128/48000 low-latency |
-| Apps | Steam/Battle.net (Proton CachyOS), osu! stable, Firefox, Cursor, 1Password |
+| Apps | Steam/Battle.net/Epic Games (Proton CachyOS), osu! stable, Firefox, Cursor, 1Password |
 
 ```
 nvme0n1

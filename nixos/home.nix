@@ -5,6 +5,7 @@
   firefox-addons,
   nix-osu-stable,
   nix-battle-net,
+  nix-epic-games-launcher,
   ...
 }:
 
@@ -16,6 +17,7 @@ in
   imports = [
     nix-osu-stable.homeModules.osu-stable
     nix-battle-net.homeModules.battle-net
+    nix-epic-games-launcher.homeModules.epic-games-launcher
   ];
 
   home = {
@@ -274,6 +276,11 @@ in
     };
 
     battle-net = {
+      enable = true;
+      protonVersion = pkgs.proton-cachyos_x86_64_v3;
+    };
+
+    epic-games-launcher = {
       enable = true;
       protonVersion = pkgs.proton-cachyos_x86_64_v3;
     };
