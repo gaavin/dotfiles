@@ -1,6 +1,6 @@
 <div align="center">
 
-**Declarative NixOS** · Flakes · Plasma 6 · mina (AMD) · air (Asahi)
+**NixOS** · Flakes · Plasma 6 · mina (AMD) · air (M1)
 
 [![NixOS](https://img.shields.io/badge/NixOS-unstable-5277C3?logo=nixos&logoColor=white)](https://nixos.org)
 [![Flakes](https://img.shields.io/badge/nix-flakes-informational?logo=nixos&logoColor=white)](https://nixos.wiki/wiki/Flakes)
@@ -11,119 +11,138 @@
 
 ---
 
-| Layer | mina | air |
-| --- | --- | --- |
-| OS | NixOS unstable, flakes, Home Manager | same |
-| Desktop | KDE Plasma 6, Breeze Dark, systemd-boot + Plymouth | same |
-| Kernel / GPU | `linuxPackages_cachyos-lto`, mesa-git, amdgpu | `linux-asahi`, Mesa Asahi |
-| Disk | Disko · GPT · 2G ESP (`/efi`) · XFS root | Asahi stub + ESP · XFS root in free space |
-| Audio | PipeWire, 128/48000 low-latency | same, plus Asahi speaker safety |
-| Apps | Steam/Battle.net/Epic, osu!, Firefox, Cursor, 1Password |
-
 ```
 mina nvme0n1                          air nvme0n1
-├── ESP   2G    vfat   /efi           ├── iBootSystemContainer
-└── root  rest  xfs    /              ├── macOS APFS
+├── ESP   2G    vfat   /efi           ├── iBoot
+└── root  rest  xfs    /              ├── macOS
                                       ├── Asahi stub
-                                      ├── ESP   ~500M  vfat  /efi
-                                      ├── root  rest   xfs   /
-                                      └── RecoveryOSContainer
+                                      ├── ESP    vfat  /efi
+                                      ├── root   xfs   /
+                                      └── Recovery
 ```
-
-Apple Silicon hardware support is documented on the [Asahi feature-support wiki](https://github.com/AsahiLinux/docs/wiki/Feature-Support).
 
 ---
 
-## Install mina (AMD desktop)
+## Install mina
 
-Boot a generic NixOS installer, clone this repo, then run the commands from `dotfiles/nixos/` (the flake root).
+Boot a NixOS installer, clone this repo, run from `dotfiles/nixos/`.
 
 > [!CAUTION]
-> Disko `--mode destroy,format,mount` **wipes** `/dev/nvme0n1`. Confirm the disk before continuing. Never run this on the MacBook.
+> Disko `--mode destroy,format,mount` wipes `/dev/nvme0n1`.
 
 ```bash
 git clone https://github.com/gaavin/dotfiles.git
 cd dotfiles/nixos
-```
 
-Partition, format, and mount:
-
-```bash
 sudo nix --extra-experimental-features 'nix-command flakes' \
   run github:nix-community/disko/latest -- \
   --mode destroy,format,mount \
   --flake .#mina
-```
 
-Install the system:
-
-```bash
 sudo nixos-install --flake .#mina
-```
-
-Set the user password, then reboot:
-
-```bash
 sudo nixos-enter --root /mnt -c 'passwd max'
 ```
 
 ---
 
-## Install air (M1 MacBook Air)
+## Install air
 
-Do **not** use a generic NixOS ISO or Disko. Apple's iBoot and recovery partitions must stay intact. Follow the [nixos-apple-silicon UEFI guide](https://github.com/nix-community/nixos-apple-silicon/blob/main/docs/uefi-standalone.md) for the Asahi/U-Boot steps; this repo is the NixOS configuration once that environment exists.
+Needs macOS 12.3+, an admin account, and a USB stick (≥512MB) you can erase.
 
-### 1. UEFI environment from macOS
+Do not use a stock NixOS ISO. Do not run Disko. The first NVMe partition (`iBoot`) and the last (`Recovery`) must not be touched; if they are, the Mac will not boot without another computer and [idevicerestore](https://github.com/libimobiledevice/idevicerestore).
 
-In Terminal.app, as an admin:
+Upstream reference: [nixos-apple-silicon UEFI guide](https://github.com/nix-community/nixos-apple-silicon/blob/main/docs/uefi-standalone.md).
+
+### 1. From macOS: Asahi UEFI stub
+
+In Terminal.app (admin user):
 
 ```bash
 curl https://alx.sh | sh
 ```
 
-- Resize macOS (`r`) so there is room for NixOS (at least ~20GB extra; more is better).
-- Install an OS into free space (`f`) → **UEFI environment only**.
-- Name it NixOS.
-- Shut down, hold the power button into recovery, select NixOS, set a custom boot object and **permissive security**, then reboot into U-Boot.
+Go through the installer in this order:
 
-Do not install a full Asahi distro; the stub + ESP is enough.
+1. Admin password. **Do not** enable expert mode.
+2. Resize macOS: `r`. The new macOS size must be at least 20GB smaller than now (here 1GB = 1,000,000,000 bytes). Confirm. Leave it alone while it resizes (minutes). Press enter when it finishes.
+3. Install into free space: `f` → **UEFI environment only** → name it `NixOS` (this is the boot picker label). Password again. Wait until the default boot volume is set. Read the last screen, press enter — the Mac shuts down.
 
-### 2. Installer ISO
+Then, exactly as that last screen said:
 
-Download the latest Apple Silicon installer ISO from [nixos-apple-silicon releases](https://github.com/nix-community/nixos-apple-silicon/releases) (not a generic NixOS ISO). `dd` it to a USB drive. Programs like unetbootin are not supported.
+1. Hold the power button until the boot picker appears. Choose **NixOS**.
+2. Admin password. Wait for the local policy update.
+3. Set a custom boot object and **permissive security**. Admin username (same account as the password) and password.
+4. Reboot. You should get the Asahi and U-Boot logos. Hold the power button to shut down.
+
+If you already have an old Asahi/UEFI stub, recreate it; old m1n1 often will not boot the current installer ISO.
+
+### 2. Write the installer USB
+
+Download the latest `*-apple-silicon-*.iso` from [nixos-apple-silicon releases](https://github.com/nix-community/nixos-apple-silicon/releases). `dd` it to the disk, not a partition. Not Etcher / unetbootin.
+
+macOS (`diskutil list` → your USB, e.g. `disk4`; this erases it):
+
+```bash
+diskutil unmountDisk /dev/disk4
+sudo dd if=nixos-*.iso of=/dev/rdisk4 bs=1m
+```
+
+Linux:
+
+```bash
+sudo dd if=nixos-*.iso of=/dev/sdX bs=4M status=progress oflag=direct
+```
 
 ### 3. Boot the installer
 
-Shut down, plug in the USB drive, power on. U-Boot should boot from USB. If something is already on the internal ESP, interrupt autoboot and run `bootmenu`, then choose `usb 0`. If that is missing: `setenv boot_targets "usb" ; setenv bootmeths "efi" ; boot`.
+Plug in the USB, power on. U-Boot should boot from USB.
 
-Get a root shell with `sudo su`. Use `iwctl` for Wi-Fi (`station wlan0 scan` / `connect`).
+If it boots the internal disk instead: hit a key to stop autoboot, then:
 
-### 4. Partition (free space only)
+```
+eficonfig
+```
 
-> [!CAUTION]
-> Do **not** run Disko, `wipefs` on the whole disk, or any automatic partitioner. Damaging `iBootSystemContainer` or `RecoveryOSContainer` can make the Mac unrecoverable without another computer.
+Change Boot Order → move `usb 0` to the top with `+` → Save → Quit → `boot`.
 
-Add a root partition in the remaining free space and format it XFS (same as mina; the upstream guide uses ext4):
+GRUB, then the NixOS installer. At the console:
+
+```bash
+sudo su
+setfont ter-v32n
+```
+
+Wi-Fi:
+
+```
+iwctl
+[iwd]# station wlan0 scan
+[iwd]# station wlan0 connect YourSSID
+```
+
+### 4. Root partition
+
+Only add a partition in the free space Asahi left. No distro auto-partitioner.
 
 ```bash
 sgdisk /dev/nvme0n1 -n 0:0 -s
 sgdisk /dev/nvme0n1 -p
 ```
 
-Use the new `8300` partition (typically second to last). Then:
+The new partition is type `8300`, usually second from last. If that number is `5`:
 
 ```bash
-mkfs.xfs -L nixos /dev/nvme0n1pN
+mkfs.xfs -L nixos /dev/nvme0n1p5
 ```
 
-### 5. Mount, firmware, and flake
+### 5. Mount, firmware, install
 
 ```bash
 mount /dev/disk/by-label/nixos /mnt
 mkdir -p /mnt/efi /mnt/home/max
 mount /dev/disk/by-partuuid/"$(tr -d '\0' < /proc/device-tree/chosen/asahi,efi-system-partition)" /mnt/efi
 
-# linux-asahi has no binary cache; 8GB machines often OOM without this
+# no asahi kernel cache; 8GB machines OOM without swap
 fallocate -l 8G /mnt/swapfile
 chmod 600 /mnt/swapfile
 mkswap /mnt/swapfile
@@ -137,13 +156,8 @@ git add -f hosts/air/firmware/firmware.cpio
 
 ESP_UUID="$(tr -d '\0' < /proc/device-tree/chosen/asahi,efi-system-partition)"
 sed -i "s/00000000-0000-0000-0000-000000000000/${ESP_UUID}/" hosts/air/hardware.nix
-```
 
-`firmware.cpio` is non-redistributable Apple firmware. It is gitignored; `git add -f` is only so the flake can see it. Do not push it.
-
-### 6. Install
-
-```bash
+systemctl restart systemd-timesyncd
 nixos-install --flake /mnt/home/max/dotfiles/nixos#air
 nixos-enter --root /mnt -c 'passwd max'
 swapoff /mnt/swapfile
@@ -151,34 +165,18 @@ rm /mnt/swapfile
 reboot
 ```
 
-After reboot, hold the power button for the Apple boot picker. Option (Alt) + Always Use sets the default OS.
+`firmware.cpio` is Apple's Wi-Fi/etc firmware. It is gitignored; `git add -f` is so the flake can see it. Do not push it.
+
+After reboot, hold power for the Apple boot picker. Option (Alt) + Always Use sets the default OS.
 
 ---
 
 ## Rebuild
 
-After installation, apply configuration changes with:
-
 ```bash
 rebuild
 ```
 
-That alias updates the flake lock and switches the **current hostname** (`mina` or `air`):
-
 ```bash
 nix flake update --flake ~/dotfiles/nixos && sudo nixos-rebuild switch --flake ~/dotfiles/nixos#$(hostname)
-```
-
----
-
-## Layout
-
-```
-nixos/
-├── flake.nix                 # inputs and mkHost (mina, air)
-├── configuration.nix         # shared system
-├── home.nix                  # shared user; x86-only packages gated
-├── hosts/mina/               # Disko, CachyOS kernel, Steam, AMD
-├── hosts/air/                # Asahi kernel, iwd, firmware (local)
-└── wallpaper.jpg
 ```
