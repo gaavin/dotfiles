@@ -39,6 +39,7 @@ in
       qbittorrent
       spotify
       fastfetch
+      osu-lazer-bin
     ];
   };
 
