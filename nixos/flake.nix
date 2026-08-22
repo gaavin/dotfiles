@@ -1,5 +1,5 @@
 {
-  description = "configuration for desktop";
+  description = "NixOS configurations for mina and air";
 
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
@@ -46,11 +46,12 @@
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    nixos-apple-silicon.url = "github:nix-community/nixos-apple-silicon";
   };
 
   outputs =
     {
-      self,
       nixpkgs,
       chaotic,
       home-manager,
@@ -61,38 +62,64 @@
       nix-battle-net,
       nix-epic-games-launcher,
       disko,
+      nixos-apple-silicon,
       ...
     }:
+    let
+      mkHost =
+        {
+          hostname,
+          system,
+          extraModules ? [ ],
+          extraSpecialArgs ? { },
+        }:
+        nixpkgs.lib.nixosSystem {
+          inherit system;
+          specialArgs = extraSpecialArgs;
+          modules = [
+            ./configuration.nix
+            ./hosts/${hostname}
+            home-manager.nixosModules.home-manager
+            {
+              home-manager = {
+                useGlobalPkgs = true;
+                useUserPackages = true;
+                extraSpecialArgs = {
+                  inherit firefox-addons;
+                };
+                users.max = import ./home.nix;
+                sharedModules = [
+                  plasma-manager.homeModules.plasma-manager
+                ]
+                ++ nixpkgs.lib.optionals (system == "x86_64-linux") [
+                  nix-osu-stable.homeModules.osu-stable
+                  nix-battle-net.homeModules.battle-net
+                  nix-epic-games-launcher.homeModules.epic-games-launcher
+                ];
+                backupFileExtension = "bak";
+                overwriteBackup = true;
+              };
+            }
+          ]
+          ++ extraModules;
+        };
+    in
     {
-      nixosConfigurations.mina = nixpkgs.lib.nixosSystem {
+      nixosConfigurations.mina = mkHost {
+        hostname = "mina";
         system = "x86_64-linux";
-
-        specialArgs = { inherit steam-config-nix; };
-
-        modules = [
-          ./configuration.nix
+        extraSpecialArgs = { inherit steam-config-nix; };
+        extraModules = [
           disko.nixosModules.disko
           chaotic.nixosModules.default
-          home-manager.nixosModules.home-manager
+        ];
+      };
 
-          {
-            home-manager = {
-              useGlobalPkgs = true;
-              useUserPackages = true;
-              extraSpecialArgs = {
-                inherit
-                  firefox-addons
-                  nix-osu-stable
-                  nix-battle-net
-                  nix-epic-games-launcher
-                  ;
-              };
-              users.max = import ./home.nix;
-              sharedModules = [ plasma-manager.homeModules.plasma-manager ];
-              backupFileExtension = "bak";
-              overwriteBackup = true;
-            };
-          }
+      nixosConfigurations.air = mkHost {
+        hostname = "air";
+        system = "aarch64-linux";
+        extraModules = [
+          nixos-apple-silicon.nixosModules.apple-silicon-support
         ];
       };
     };

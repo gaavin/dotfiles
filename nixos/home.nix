@@ -2,24 +2,17 @@
   config,
   lib,
   pkgs,
+  osConfig,
   firefox-addons,
-  nix-osu-stable,
-  nix-battle-net,
-  nix-epic-games-launcher,
   ...
 }:
 
 let
+  isX86 = pkgs.stdenv.hostPlatform.isx86_64;
   onePasswordPath = "${config.home.homeDirectory}/.1password/agent.sock";
 in
 
 {
-  imports = [
-    nix-osu-stable.homeModules.osu-stable
-    nix-battle-net.homeModules.battle-net
-    nix-epic-games-launcher.homeModules.epic-games-launcher
-  ];
-
   home = {
     username = "max";
     homeDirectory = "/home/max";
@@ -31,18 +24,22 @@ in
       SSH_AUTH_SOCK = onePasswordPath;
       EDITOR = "vim";
     };
-    packages = with pkgs; [
-      kdePackages.breeze-gtk
-      nil
-      nixfmt
-      nodejs
-      pnpm
-      prismlauncher
-      qbittorrent
-      spotify
-      fastfetch
-      osu-lazer-bin
-    ];
+    packages =
+      with pkgs;
+      [
+        kdePackages.breeze-gtk
+        nil
+        nixfmt
+        nodejs
+        pnpm
+        prismlauncher
+        qbittorrent
+        spotify
+        fastfetch
+      ]
+      ++ lib.optionals isX86 [
+        osu-lazer-bin
+      ];
   };
 
   qt = {
@@ -100,7 +97,7 @@ in
     bash = {
       enable = true;
       shellAliases = {
-        rebuild = "nix flake update --flake ~/dotfiles/nixos && sudo nixos-rebuild switch --flake ~/dotfiles/nixos#mina";
+        rebuild = "nix flake update --flake ~/dotfiles/nixos && sudo nixos-rebuild switch --flake ~/dotfiles/nixos#${osConfig.networking.hostName}";
       };
     };
 
@@ -269,6 +266,22 @@ in
       };
     };
 
+    vesktop = {
+      enable = true;
+      settings.appBadge = false;
+      settings.arRPC = true;
+      vencord.settings = {
+        autoUpdate = true;
+        autoUpdateNotification = true;
+        notifyAboutUpdates = true;
+        plugins = {
+          ClearURLs.enabled = true;
+          FixYoutubeEmbeds.enabled = true;
+        };
+      };
+    };
+  }
+  // lib.optionalAttrs isX86 {
     osu-stable = {
       enable = true;
       environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
@@ -284,21 +297,5 @@ in
       enable = true;
       protonVersion = pkgs.proton-cachyos_x86_64_v3;
     };
-
-    vesktop = {
-      enable = true;
-      settings.appBadge = false;
-      settings.arRPC = true;
-      vencord.settings = {
-        autoUpdate = true;
-        autoUpdateNotification = true;
-        notifyAboutUpdates = true;
-        plugins = {
-          ClearURLs.enabled = true;
-          FixYoutubeEmbeds.enabled = true;
-        };
-      };
-    };
-
   };
 }

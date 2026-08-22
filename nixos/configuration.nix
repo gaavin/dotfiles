@@ -1,65 +1,14 @@
-{ pkgs, steam-config-nix, ... }:
+{ pkgs, ... }:
 
 {
-  imports = [
-    ./hardware-configuration.nix
-    steam-config-nix.nixosModules.default
-  ];
-
-  disko.devices = {
-    disk.main = {
-      device = "/dev/nvme0n1";
-      type = "disk";
-      content = {
-        type = "gpt";
-        partitions = {
-          ESP = {
-            type = "EF00";
-            size = "2G";
-            content = {
-              type = "filesystem";
-              format = "vfat";
-              mountpoint = "/efi";
-              mountOptions = [
-                "umask=0077"
-              ];
-            };
-          };
-          root = {
-            size = "100%";
-            content = {
-              type = "filesystem";
-              format = "xfs";
-              mountpoint = "/";
-            };
-          };
-        };
-      };
-    };
-  };
-
-  hardware = {
-    uinput.enable = true;
-    opentabletdriver.enable = true;
-  };
-
-  chaotic.mesa-git.enable = true;
-
   boot = {
-    initrd = {
-      systemd.enable = true;
-      kernelModules = [ "amdgpu" ];
-    };
+    initrd.systemd.enable = true;
     kernelParams = [
       "quiet"
       "boot.shell_on_fail"
       "splash"
       "loglevel=3"
-      "amd_pstate=guided"
-      "preempt=full"
     ];
-    kernelPackages = pkgs.linuxPackages_cachyos-lto;
-    kernelModules = [ "uinput" ];
     kernel.sysctl = {
       "vm.swappiness" = 180;
       "vm.watermark_boost_factor" = 0;
@@ -71,13 +20,8 @@
       theme = "breeze";
     };
     loader = {
-      efi = {
-        canTouchEfiVariables = true;
-        efiSysMountPoint = "/efi";
-      };
-      systemd-boot = {
-        enable = true;
-      };
+      efi.efiSysMountPoint = "/efi";
+      systemd-boot.enable = true;
     };
   };
 
@@ -98,7 +42,6 @@
   };
 
   networking = {
-    hostName = "mina";
     networkmanager = {
       enable = true;
       dns = "systemd-resolved";
@@ -109,33 +52,9 @@
     ];
   };
 
-  programs = {
-    _1password-gui = {
-      enable = true;
-      polkitPolicyOwners = [ "max" ];
-    };
-
-    steam = {
-      enable = true;
-      remotePlay.openFirewall = true;
-      dedicatedServer.openFirewall = true;
-      config = {
-        enable = true;
-        onSteamRunning = "close";
-        defaultCompatTool = pkgs.proton-cachyos_x86_64_v3;
-        displayRatesAsBits = false;
-        apps = {
-          "Counter-Strike 2" = {
-            id = 730;
-            args = [
-              "-vulkan"
-              "-novid"
-              "-nojoy"
-            ];
-          };
-        };
-      };
-    };
+  programs._1password-gui = {
+    enable = true;
+    polkitPolicyOwners = [ "max" ];
   };
 
   fonts = {
@@ -150,12 +69,6 @@
   services = {
     desktopManager.plasma6.enable = true;
     displayManager.plasma-login-manager.enable = true;
-
-    udev.extraRules = ''
-      # ADIOS I/O scheduler for NVMe and SSDs; BFQ for rotational HDDs
-      ACTION=="add|change", KERNEL=="nvme[0-9]*|sd[a-z]*|mmcblk[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="adios"
-      ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
-    '';
 
     resolved = {
       enable = true;
@@ -192,9 +105,7 @@
     };
   };
 
-  security = {
-    rtkit.enable = true;
-  };
+  security.rtkit.enable = true;
 
   environment = {
     plasma6.excludePackages = [ pkgs.kdePackages.discover ];
@@ -204,29 +115,6 @@
     ];
   };
 
-  # Open ports in the firewall.
-  # networking.firewall.allowedTCPPorts = [ ... ];
-  # networking.firewall.allowedUDPPorts = [ ... ];
-  # Or disable the firewall altogether.
-  # networking.firewall.enable = false;
-
-  # This option defines the first version of NixOS you have installed on this particular machine,
-  # and is used to maintain compatibility with application data (e.g. databases) created on older NixOS versions.
-  #
-  # Most users should NEVER change this value after the initial install, for any reason,
-  # even if you've upgraded your system to a new NixOS release.
-  #
-  # This value does NOT affect the Nixpkgs version your packages and OS are pulled from,
-  # so changing it will NOT upgrade your system - see https://nixos.org/manual/nixos/stable/#sec-upgrading for how
-  # to actually do that.
-  #
-  # This value being lower than the current NixOS release does NOT mean your system is
-  # out of date, out of support, or vulnerable.
-  #
-  # Do NOT change this value unless you have manually inspected all the changes it would make to your configuration,
-  # and migrated your data accordingly.
-  #
-  # For more information, see `man configuration.nix` or https://nixos.org/manual/nixos/stable/options#opt-system.stateVersion .
   nixpkgs.config.allowUnfree = true;
   nix.settings = {
     experimental-features = [
@@ -234,5 +122,5 @@
       "flakes"
     ];
   };
-  system.stateVersion = "26.05"; # Did you read the comment?
+  system.stateVersion = "26.05";
 }

@@ -63,6 +63,21 @@
         "type": "gitlab"
       }
     },
+    "flake-compat": {
+      "locked": {
+        "lastModified": 1761640442,
+        "narHash": "sha256-AtrEP6Jmdvrqiv4x2xa5mrtaIp3OEe8uBYCDZDS+hu8=",
+        "owner": "nix-community",
+        "repo": "flake-compat",
+        "rev": "4a56054d8ffc173222d09dad23adf4ba946c8884",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
@@ -200,6 +215,25 @@
         "type": "github"
       }
     },
+    "nixos-apple-silicon": {
+      "inputs": {
+        "flake-compat": "flake-compat",
+        "nixpkgs": "nixpkgs_2"
+      },
+      "locked": {
+        "lastModified": 1786862401,
+        "narHash": "sha256-zRPYCn5RJWxr9uyUwNIQjPsTFcIFRwuRnI91dqvGA0k=",
+        "owner": "nix-community",
+        "repo": "nixos-apple-silicon",
+        "rev": "53798a0eb0fa4c8cfaeca7bdc5b4ad22ed210c95",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixos-apple-silicon",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1787135253,
@@ -217,6 +251,22 @@
       }
     },
     "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1786106723,
+        "narHash": "sha256-zDSUbpoeo/9ZmD2+wXnzxoo1+uhL8vxc0b8yuYMKYq0=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "f13ff45afd1bb73e640eaa08a7066dbed07e3238",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_3": {
       "locked": {
         "lastModified": 1787360063,
         "narHash": "sha256-95aJfHyQTLWslCXFVNB0odgmVkpdmDezQwTg9mhqV1E=",
@@ -283,7 +333,8 @@
         "nix-battle-net": "nix-battle-net",
         "nix-epic-games-launcher": "nix-epic-games-launcher",
         "nix-osu-stable": "nix-osu-stable",
-        "nixpkgs": "nixpkgs_2",
+        "nixos-apple-silicon": "nixos-apple-silicon",
+        "nixpkgs": "nixpkgs_3",
         "plasma-manager": "plasma-manager",
         "steam-config-nix": "steam-config-nix"
       }
