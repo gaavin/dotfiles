@@ -18,7 +18,7 @@
 | Kernel / GPU | `linuxPackages_cachyos-lto`, mesa-git, amdgpu | `linux-asahi`, Mesa Asahi |
 | Disk | Disko · GPT · 2G ESP (`/efi`) · XFS root | Asahi stub + ESP · XFS root in free space |
 | Audio | PipeWire, 128/48000 low-latency | same, plus Asahi speaker safety |
-| Apps | Steam/Battle.net/Epic, osu!, Firefox, Cursor, 1Password | Firefox, Cursor, 1Password (no x86-only gaming) |
+| Apps | Steam/Battle.net/Epic, osu!, Firefox, Cursor, 1Password |
 
 ```
 mina nvme0n1                          air nvme0n1
