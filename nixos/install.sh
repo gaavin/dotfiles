@@ -38,18 +38,28 @@ UI_WIDTH=50
 UI_PAD_H=2
 UI_PAD_V=1
 NIXOS_VERSION="26.11 unstable"
+C_ACCENT=39
+C_SUCCESS=42
+C_WARN=214
+C_DANGER=196
+C_MUTED=245
+C_TEXT=252
+C_VIOLET=141
 
 theme() {
-  export GUM_INPUT_CURSOR_FOREGROUND="39"
-  export GUM_INPUT_PROMPT_FOREGROUND="39"
-  export GUM_INPUT_HEADER_FOREGROUND="39"
+  export GUM_INPUT_CURSOR_FOREGROUND="$C_ACCENT"
+  export GUM_INPUT_PROMPT_FOREGROUND="$C_ACCENT"
+  export GUM_INPUT_HEADER_FOREGROUND="$C_VIOLET"
   export GUM_INPUT_WIDTH="$UI_WIDTH"
   export GUM_INPUT_CHAR_LIMIT="512"
-  export GUM_CONFIRM_PROMPT_FOREGROUND="39"
+  export GUM_INPUT_PROMPT="🔑 "
+  export GUM_INPUT_PLACEHOLDER_FOREGROUND="$C_MUTED"
+  export GUM_CONFIRM_PROMPT_FOREGROUND="$C_WARN"
   export GUM_CONFIRM_SELECTED_FOREGROUND="15"
-  export GUM_CONFIRM_SELECTED_BACKGROUND="39"
+  export GUM_CONFIRM_SELECTED_BACKGROUND="$C_ACCENT"
+  export GUM_CONFIRM_UNSELECTED_FOREGROUND="$C_MUTED"
   export GUM_SPIN_SPINNER="dot"
-  export GUM_SPIN_TITLE_FOREGROUND="39"
+  export GUM_SPIN_TITLE_FOREGROUND="$C_ACCENT"
   export GUM_LOG_LEVEL="info"
 }
 
@@ -61,24 +71,59 @@ host_arch() {
   esac
 }
 
+host_icon() {
+  case $1 in
+    mina) echo "🖥" ;;
+    air) echo "💻" ;;
+    *) echo "⌁" ;;
+  esac
+}
+
+ui_ansi() {
+  printf '\033[%sm%s\033[0m' "$1" "$2"
+}
+
 ui_faint() {
-  printf '\033[2m%s\033[0m' "$1"
+  ui_ansi "2" "$1"
+}
+
+ui_installer_icon() {
+  case $1 in
+    *Password*) printf '🔐' ;;
+    *destructive*) printf '⚠' ;;
+    *LUKS*) printf '🧩' ;;
+    *Encrypt*) printf '🔒' ;;
+    *Format*) printf '💾' ;;
+    *firmware*) printf '📦' ;;
+    *Install*) printf '⚙' ;;
+    *) printf '▸' ;;
+  esac
+}
+
+ui_installer_color() {
+  case $1 in
+    *destructive*) echo "$C_DANGER" ;;
+    *Encrypt*|*LUKS*) echo "$C_VIOLET" ;;
+    *Install*) echo "$C_SUCCESS" ;;
+    *Password*) echo "$C_ACCENT" ;;
+    *) echo "$C_TEXT" ;;
+  esac
 }
 
 ui_banner() {
   local host=$1 label
-  label="$host · $(host_arch)"
+  label="$(host_icon "$host") $host · $(host_arch)"
   gum style \
     --border rounded \
-    --border-foreground 39 \
+    --border-foreground "$C_ACCENT" \
     --bold \
-    --foreground 39 \
+    --foreground "$C_ACCENT" \
     --align center \
     --width "$UI_WIDTH" \
     --padding "$UI_PAD_V $UI_PAD_H" \
     --margin "1 0 0 0" \
-    "NixOS" \
-    "$(ui_faint "Version $NIXOS_VERSION")" \
+    "❄ NixOS" \
+    "$(ui_ansi "2;38;5;${C_VIOLET}" "◈ Version $NIXOS_VERSION")" \
     "$(ui_faint "$label")"
 }
 
@@ -88,25 +133,31 @@ ui_heading() {
     --padding "0 $UI_PAD_H" \
     --margin "1 0 0 0" \
     --bold \
-    --foreground 39 \
-    "$1"
+    --foreground "$C_ACCENT" \
+    "◆ $1"
 }
 
 ui_body() {
   gum style \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --foreground 252 \
+    --foreground "$C_TEXT" \
     "$@"
 }
 
 ui_installer() {
-  local body=$1 line
+  local body=$1 line icon color
   ui_heading "Installer"
   while IFS= read -r line; do
     [[ -n $line ]] || continue
     line="${line#- }"
-    ui_body "  • $line"
+    icon="$(ui_installer_icon "$line")"
+    color="$(ui_installer_color "$line")"
+    gum style \
+      --width "$UI_WIDTH" \
+      --padding "0 $UI_PAD_H" \
+      --foreground "$color" \
+      "  $icon  $line"
   done <<< "$body"
 }
 
@@ -114,49 +165,54 @@ ui_ok() {
   gum style \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --foreground 42 \
-    "✓ $1"
+    --foreground "$C_SUCCESS" \
+    "✔ $1"
 }
 
 ui_warn() {
   gum style \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --foreground 214 \
+    --foreground "$C_WARN" \
     "⚠ $1"
 }
 
 ui_step() {
   STEP_N=$((STEP_N + 1))
-  ui_heading "$STEP_N/$STEP_TOTAL  $1"
+  gum style \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --margin "1 0 0 0" \
+    "$(ui_ansi "1;38;5;${C_ACCENT}" "▸ $STEP_N/$STEP_TOTAL") $(ui_ansi "1;38;5;${C_TEXT}" "$1")"
 }
 
 ui_spin() {
   local title=$1
   shift
-  gum spin --spinner dot --title "$title" --show-error -- "$@"
+  gum spin --spinner dot --title "◌ $title" --show-error -- "$@"
 }
 
 ui_box() {
   gum style \
     --border rounded \
-    --border-foreground 245 \
+    --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
     --margin "1 0 0 0" \
-    --foreground 252 \
+    --foreground "$C_TEXT" \
+    "$(ui_ansi "38;5;${C_MUTED}" "▤ storage")" \
     "$1"
 }
 
 ask_password() {
   local dest=$1 header=$2 pass pass2
   while true; do
-    pass="$(gum input --password --header "$header" --placeholder "password" --prompt "▸ " --char-limit 0)" || exit 1
+    pass="$(gum input --password --header "🔐 $header" --placeholder "password" --char-limit 0)" || exit 1
     if [[ -z $pass ]]; then
       ui_warn "Password cannot be empty"
       continue
     fi
-    pass2="$(gum input --password --header "$header" --placeholder "confirm" --prompt "▸ " --char-limit 0)" || exit 1
+    pass2="$(gum input --password --header "🔐 Confirm $header" --placeholder "confirm" --char-limit 0)" || exit 1
     if [[ $pass != "$pass2" ]]; then
       ui_warn "Passwords do not match"
       continue
@@ -172,7 +228,7 @@ confirm() {
   if [[ ${INSTALL_YES:-} == 1 ]]; then
     return
   fi
-  gum confirm --default=false --affirmative "Continue" --negative "Cancel" "$1" || {
+  gum confirm --default=false --affirmative "Continue →" --negative "✕ Cancel" "$1" || {
     ui_ok "Cancelled"
     exit 1
   }
@@ -263,9 +319,9 @@ install_system() {
   systemctl restart systemd-timesyncd || true
   ui_step "Install NixOS"
   if [[ $HOST == air ]]; then
-    ui_ok "linux-asahi will compile; swap is on"
+    ui_ok "⚙ linux-asahi will compile · swap is on"
   else
-    ui_ok "swap is on"
+    ui_ok "⚙ swap is on"
   fi
   nixos-install --no-root-password --no-channel-copy --root /mnt --flake "path:$flake#$HOST"
   set_passwords
@@ -385,20 +441,20 @@ EOF
 }
 
 finish() {
-  local msg="reboot."
+  local msg="↻ reboot."
   if [[ $HOST == air ]]; then
-    msg="reboot, then hold power for the Apple boot picker if you need macOS."
+    msg="↻ reboot, then hold power for the Apple boot picker if you need macOS."
   fi
   gum style \
     --border rounded \
-    --border-foreground 42 \
+    --border-foreground "$C_SUCCESS" \
     --bold \
-    --foreground 42 \
+    --foreground "$C_SUCCESS" \
     --align center \
     --width "$UI_WIDTH" \
     --padding "$UI_PAD_V $UI_PAD_H" \
     --margin "1 0 0 0" \
-    "Done." \
+    "✔ Done." \
     "$(ui_faint "$msg")"
 }
 
@@ -463,7 +519,7 @@ cp "$SECRETS/luks" "$LUKS_PASSFILE"
 chmod 600 "$LUKS_PASSFILE"
 ask_password "$SECRETS/root" "root password"
 ask_password "$SECRETS/max" "max password"
-ui_ok "Passwords saved"
+ui_ok "🔐 Passwords saved"
 
 case $HOST in
   mina) install_mina ;;
