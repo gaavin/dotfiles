@@ -365,7 +365,7 @@ log-format = bar-with-logs
 "
 
 if ! command -v gum >/dev/null 2>&1; then
-  exec nix_flake shell nixpkgs#gum --command env \
+  exec nix "${NIX_EXTRA[@]}" shell nixpkgs#gum --command env \
     INSTALL_YES="${INSTALL_YES:-}" \
     TERM="${TERM:-}" \
     COLORTERM="${COLORTERM:-}" \
