@@ -31,29 +31,39 @@ if [[ -e /dev/disk/by-partlabel/nixos ]]; then
   die "/dev/disk/by-partlabel/nixos already exists; aborting"
 fi
 
+SECRETS=/run/air-install
 FREE_GIB="$(sgdisk -p "$DISK" | awk '/Total free space/ { print $5 }')"
 sgdisk -p "$DISK"
 echo
 echo "This creates a LUKS partition in the free space on $DISK (${FREE_GIB} available)."
 echo "iBoot, macOS, the ESP, and Recovery are left alone."
 echo
-read -r -p "Continue? [y/N] " ok
-[[ $ok == y || $ok == Y ]] || exit 1
 
-echo
-echo "Disk encryption password (you will type it at every boot):"
-read -r -s -p "Password: " pass
-echo
-read -r -s -p "Confirm: " pass2
-echo
-[[ -n $pass ]] || die "password is empty"
-[[ $pass == "$pass2" ]] || die "passwords do not match"
+if [[ ${AIR_YES:-} == 1 ]]; then
+  ok=y
+else
+  read -r -p "Continue? [y/N] " ok
+fi
+[[ $ok == y || $ok == Y ]] || exit 1
 
 PASSFILE="$(mktemp)"
 chmod 600 "$PASSFILE"
-printf '%s' "$pass" >"$PASSFILE"
-unset pass pass2
 trap 'rm -f "$PASSFILE"' EXIT
+
+if [[ -f $SECRETS/luks ]]; then
+  cp "$SECRETS/luks" "$PASSFILE"
+  chmod 600 "$PASSFILE"
+else
+  echo "Disk encryption password (you will type it at every boot):"
+  read -r -s -p "Password: " pass
+  echo
+  read -r -s -p "Confirm: " pass2
+  echo
+  [[ -n $pass ]] || die "password is empty"
+  [[ $pass == "$pass2" ]] || die "passwords do not match"
+  printf '%s' "$pass" >"$PASSFILE"
+  unset pass pass2
+fi
 
 sgdisk "$DISK" -n 0:0:0 -t 0:8309 -c 0:nixos
 partprobe "$DISK"
@@ -145,8 +155,18 @@ echo
 echo "Installing NixOS (linux-asahi will compile; swap is on)."
 nixos-install --no-root-password --flake "$FLAKE#air"
 
-nixos-enter --root /mnt -c 'passwd max'
+if [[ -f $SECRETS/users ]]; then
+  cp "$SECRETS/users" /mnt/root/chpasswd
+  chmod 600 /mnt/root/chpasswd
+  nixos-enter --root /mnt -c 'chpasswd < /root/chpasswd; shred -u /root/chpasswd || rm -f /root/chpasswd'
+else
+  echo "Set root password:"
+  nixos-enter --root /mnt -c 'passwd root'
+  echo "Set max password:"
+  nixos-enter --root /mnt -c 'passwd max'
+fi
 chown -R 1000:1000 /mnt/home/max
+rm -rf "$SECRETS"
 
 echo
 echo "Done. reboot, then hold power for the Apple boot picker if you need macOS."

@@ -14,8 +14,7 @@
   boot.initrd.services.lvm.enable = true;
 
   boot.initrd.luks.devices.cryptroot = {
-    # filled by hosts/air/install.sh
-    device = "/dev/disk/by-uuid/00000000-0000-0000-0000-000000000000";
+    device = "/dev/disk/by-uuid/0b742a31-5a76-4d67-8f48-af86053f14ec";
     allowDiscards = true;
   };
 
@@ -24,10 +23,8 @@
     fsType = "xfs";
   };
 
-  # filled by hosts/air/install.sh from:
-  #   tr -d '\0' < /proc/device-tree/chosen/asahi,efi-system-partition
   fileSystems."/efi" = {
-    device = "/dev/disk/by-partuuid/00000000-0000-0000-0000-000000000000";
+    device = "/dev/disk/by-partuuid/c3f24abb-bf65-4ea1-a90c-aa4eecc3b2b0";
     fsType = "vfat";
     options = [ "umask=0077" ];
   };

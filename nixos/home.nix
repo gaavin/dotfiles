@@ -34,11 +34,11 @@ in
         pnpm
         prismlauncher
         qbittorrent
-        spotify
         fastfetch
       ]
       ++ lib.optionals isX86 [
         osu-lazer-bin
+        spotify
       ];
   };
 
