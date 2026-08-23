@@ -48,7 +48,7 @@ curl https://alx.sh | sh
 6. Set a custom boot object and **permissive security**. Same admin username and password.
 7. Reboot. You should get the Asahi and U-Boot logos. Hold power to shut down.
 
-Write the latest `*-apple-silicon-*.iso` from [nixos-apple-silicon releases](https://github.com/nix-community/nixos-apple-silicon/releases) to the **disk**, not a partition. Not Etcher / unetbootin / Ventoy.
+Write the latest `*-apple-silicon-*.iso` from [nixos-apple-silicon releases](https://github.com/nix-community/nixos-apple-silicon/releases) to the **usb disk**, unfortunately other solutions such as Ventoy are not working.
 
 macOS (`diskutil list` → USB, e.g. `disk4`):
 
