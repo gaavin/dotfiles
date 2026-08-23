@@ -26,6 +26,11 @@
     };
   };
 
+  fileSystems."/".options = [
+    "relatime"
+    "lazytime"
+  ];
+
   zramSwap = {
     enable = true;
     priority = 100;
