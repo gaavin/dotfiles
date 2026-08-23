@@ -102,7 +102,18 @@ in
     bash = {
       enable = true;
       shellAliases = {
-        rebuild = "nix flake update --flake ~/dotfiles/nixos && sudo nixos-rebuild switch --flake ~/dotfiles/nixos#${osConfig.networking.hostName}";
+        rebuild =
+          lib.concatStringsSep " && " (
+            lib.optionals (osConfig.networking.hostName == "air") [
+              "sudo cp /efi/vendorfw/firmware.cpio ~/dotfiles/nixos/hosts/air/firmware/firmware.cpio"
+              ''sudo chown "$(id -u):$(id -g)" ~/dotfiles/nixos/hosts/air/firmware/firmware.cpio''
+              "git -C ~/dotfiles add -f nixos/hosts/air/firmware/firmware.cpio"
+            ]
+            ++ [
+              "nix flake update --flake ~/dotfiles/nixos"
+              "sudo nixos-rebuild switch --flake ~/dotfiles/nixos#${osConfig.networking.hostName}"
+            ]
+          );
       };
     };
 
