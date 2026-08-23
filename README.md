@@ -102,21 +102,6 @@ sudo dd if=nixos-*.iso of=/dev/sdX bs=4M status=progress oflag=direct
 
 Plug in the USB, power on. U-Boot should boot from USB.
 
-If it boots the internal disk instead: hit a key to stop autoboot, then:
-
-```
-eficonfig
-```
-
-Change Boot Order → move `usb 0` to the top with `+` → Save → Quit → `boot`.
-
-GRUB, then the NixOS installer. At the console:
-
-```bash
-sudo su
-setfont ter-v32n
-```
-
 Wi-Fi:
 
 ```bash
