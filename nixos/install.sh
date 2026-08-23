@@ -211,10 +211,23 @@ disk_short() {
 fmt_size() {
   local bytes=$1
   if [[ $bytes =~ ^[0-9]+$ ]]; then
-    numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null || echo "$bytes"
+    if command -v numfmt >/dev/null 2>&1; then
+      numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null && return
+    fi
+    awk -v b="$bytes" 'BEGIN {
+      split("B KiB MiB GiB TiB", u, " ")
+      i = 1
+      while (b >= 1024 && i < 5) { b /= 1024; i++ }
+      printf "%.1f%s", b, u[i]
+    }'
   else
     echo "$bytes"
   fi
+}
+
+swapon_table() {
+  swapon --noheadings --raw --bytes --show=NAME,TYPE,SIZE,USED,PRIO 2>/dev/null ||
+    swapon --noheadings --raw --show=NAME,TYPE,SIZE,USED,PRIO 2>/dev/null
 }
 
 disk_size_human() {
@@ -298,7 +311,7 @@ mina_disk_diff() {
 
   {
     disk_diff_header
-    while IFS= read -r name size fstype label mount type; do
+    while read -r name size fstype label mount type; do
       [[ ${type:-} == part ]] || continue
       part_count=$((part_count + 1))
       spec="$(part_label_display "$label" "" "$name")  $(fmt_size "$size")"
@@ -323,7 +336,7 @@ air_disk_diff() {
 
   {
     disk_diff_header
-    while IFS= read -r name size fstype label mount type parttypename; do
+    while read -r name size fstype label mount type parttypename; do
       [[ ${type:-} == part ]] || continue
       display="$(part_label_display "$label" "$parttypename" "$name")"
       spec="$display  $(fmt_size "$size")"
@@ -439,7 +452,7 @@ air_assert_esp() {
 }
 
 swap_active_bytes() {
-  swapon --noheadings --bytes 2>/dev/null | awk '{s+=$3} END {print s+0}'
+  swapon --noheadings --raw --bytes --show=SIZE 2>/dev/null | awk '{s+=$1} END {print s+0}'
 }
 
 zram_compression() {
@@ -462,29 +475,47 @@ zram_compression() {
 
 swap_size_for() {
   local name=$1
+  local raw_size=$2
   local base="${name##*/}"
-  local size_bytes=$2
-  local sys
+  local sys size_bytes
 
   if [[ $base == zram* ]]; then
     sys="/sys/block/$base/disksize"
-    if [[ -z $size_bytes || ! $size_bytes =~ ^[0-9]+$ || $size_bytes -eq 0 ]] && [[ -f $sys ]]; then
+    if [[ -f $sys ]]; then
       size_bytes=$(<"$sys")
+      if [[ $size_bytes =~ ^[0-9]+$ && $size_bytes -gt 0 ]]; then
+        fmt_size "$size_bytes"
+        return
+      fi
     fi
   fi
 
-  if [[ -n $size_bytes && $size_bytes =~ ^[0-9]+$ && $size_bytes -gt 0 ]]; then
-    fmt_size "$size_bytes"
-  else
-    echo "?"
+  if [[ $raw_size =~ ^[0-9]+$ && $raw_size -gt 0 ]]; then
+    fmt_size "$raw_size"
+    return
   fi
+
+  if [[ -n $raw_size && $raw_size != "-" ]]; then
+    echo "$raw_size"
+    return
+  fi
+
+  if [[ -b $name ]]; then
+    size_bytes=$(lsblk -n -b -o SIZE "$name" 2>/dev/null | head -n1)
+    if [[ $size_bytes =~ ^[0-9]+$ && $size_bytes -gt 0 ]]; then
+      fmt_size "$size_bytes"
+      return
+    fi
+  fi
+
+  echo "unknown"
 }
 
 collect_swap_lines() {
   local name type size_bytes base algo size_h
   local -a zram_lines=() disk_lines=()
 
-  while IFS= read -r name type size_bytes _ _; do
+  while read -r name type size_bytes _ _; do
     [[ -n $name ]] || continue
     base="${name##*/}"
     size_h="$(swap_size_for "$name" "$size_bytes")"
@@ -494,7 +525,7 @@ collect_swap_lines() {
     else
       disk_lines+=("$(ui_ansi "38;5;${C_SUCCESS}" "  💾 ${size_h}  swap partition")")
     fi
-  done < <(swapon --noheadings --bytes 2>/dev/null)
+  done < <(swapon_table)
 
   ((${#zram_lines[@]})) && printf '%s\n' "${zram_lines[@]}"
   ((${#disk_lines[@]})) && printf '%s\n' "${disk_lines[@]}"
