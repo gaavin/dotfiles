@@ -106,7 +106,6 @@ fi
 FLAKE=/mnt/home/max/dotfiles/nixos
 mkdir -p "$FLAKE/hosts/air/firmware"
 cp /mnt/efi/vendorfw/firmware.cpio "$FLAKE/hosts/air/firmware/"
-git_cmd -C /mnt/home/max/dotfiles add -f nixos/hosts/air/firmware/firmware.cpio
 
 LUKS_UUID="$(cryptsetup luksUUID "$PART")"
 cat >"$FLAKE/hosts/air/hardware.nix" <<EOF
@@ -153,7 +152,7 @@ systemctl restart systemd-timesyncd || true
 
 echo
 echo "Installing NixOS (linux-asahi will compile; swap is on)."
-nixos-install --no-root-password --flake "$FLAKE#air"
+nixos-install --no-root-password --flake "path:$FLAKE#air"
 
 if [[ -f $SECRETS/users ]]; then
   cp "$SECRETS/users" /mnt/root/chpasswd

@@ -133,7 +133,7 @@ cd dotfiles
 reboot
 ```
 
-`firmware.cpio` is Apple's Wi-Fi firmware. The script `git add -f`s it so the flake can see it. Do not push it.
+`firmware.cpio` is Apple's Wi-Fi firmware. It is gitignored; `path:` lets Nix see it anyway. Do not commit it.
 
 After reboot you will be asked for the disk password, then you can log in. Hold power for the Apple boot picker. Option (Alt) + Always Use sets the default OS.
 
@@ -145,6 +145,8 @@ After reboot you will be asked for the disk password, then you can log in. Hold 
 rebuild
 ```
 
+`rebuild` is a command, not a shell alias. Open a new terminal after the first switch (or run `unalias rebuild`) so the old alias is not used.
+
 ```bash
-nix flake update --flake ~/dotfiles/nixos && sudo nixos-rebuild switch --flake ~/dotfiles/nixos#$(hostname)
+nix flake update --flake ~/dotfiles/nixos && sudo nixos-rebuild switch --flake path:$HOME/dotfiles/nixos#$(hostname)
 ```

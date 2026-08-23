@@ -35,6 +35,17 @@ in
         prismlauncher
         qbittorrent
         fastfetch
+        (pkgs.writeShellScriptBin "rebuild" ''
+          set -euo pipefail
+          flake_dir="$HOME/dotfiles/nixos"
+          host="${osConfig.networking.hostName}"
+          if [ "$host" = air ]; then
+            sudo cp /efi/vendorfw/firmware.cpio "$flake_dir/hosts/air/firmware/firmware.cpio"
+            sudo chown "$(id -u):$(id -g)" "$flake_dir/hosts/air/firmware/firmware.cpio"
+          fi
+          nix flake update --flake "$flake_dir"
+          exec sudo nixos-rebuild switch --flake "path:$flake_dir#$host"
+        '')
       ]
       ++ lib.optionals isX86 [
         osu-lazer-bin
@@ -101,20 +112,6 @@ in
 
     bash = {
       enable = true;
-      shellAliases = {
-        rebuild =
-          lib.concatStringsSep " && " (
-            lib.optionals (osConfig.networking.hostName == "air") [
-              "sudo cp /efi/vendorfw/firmware.cpio ~/dotfiles/nixos/hosts/air/firmware/firmware.cpio"
-              ''sudo chown "$(id -u):$(id -g)" ~/dotfiles/nixos/hosts/air/firmware/firmware.cpio''
-              "git -C ~/dotfiles add -f nixos/hosts/air/firmware/firmware.cpio"
-            ]
-            ++ [
-              "nix flake update --flake ~/dotfiles/nixos"
-              "sudo nixos-rebuild switch --flake ~/dotfiles/nixos#${osConfig.networking.hostName}"
-            ]
-          );
-      };
     };
 
     git = {
