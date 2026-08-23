@@ -16,6 +16,9 @@ STEP_TOTAL=0
 BUILD_PID=""
 BUILD_LOG_OFFSET=0
 INSTALL_ABORTED=0
+UI_SWAP_RENDERED=""
+UI_SWAP_HEIGHT=0
+UI_STACK_HEIGHT=0
 
 die() {
   if command -v gum >/dev/null 2>&1; then
@@ -60,6 +63,7 @@ UI_MARGIN_TIGHT="0 0 0 0"
 UI_MARGIN_BOX="1 0 1 0"
 UI_MARGIN_BEFORE="1 0 0 0"
 UI_MARGIN_AFTER="0 0 1 0"
+UI_MARGIN_STACK_GAP="0 0 0 0"
 UI_BUILD_LINES=3
 NIXOS_VERSION="26.11 unstable"
 ZRAM_ALGORITHM=lz4
@@ -326,6 +330,39 @@ ui_box_redraw() {
   box_height=$lines
 }
 
+ui_stack_redraw() {
+  local build_rendered=$1 build_height_name=$2
+  local -n build_height=$build_height_name
+  local combined count_text lines clear_lines i
+
+  if [[ -n ${UI_SWAP_RENDERED:-} ]]; then
+    combined="${UI_SWAP_RENDERED}"$'\n'"${build_rendered}"
+  else
+    combined="$build_rendered"
+  fi
+
+  count_text=$combined
+  while [[ $count_text == *$'\n' ]]; do
+    count_text="${count_text%$'\n'}"
+  done
+  lines="$(ui_box_line_count "$count_text")"
+  clear_lines=$lines
+  if ((UI_STACK_HEIGHT > clear_lines)); then
+    clear_lines=$UI_STACK_HEIGHT
+  fi
+
+  if ((UI_STACK_HEIGHT > 0)) && [[ -e /dev/tty ]]; then
+    for ((i = 0; i < clear_lines; i++)); do
+      tput cuu1 >/dev/tty 2>&1 || break
+      tput el >/dev/tty 2>&1 || true
+    done
+  fi
+
+  ui_tty_write "${combined}"$'\n'
+  build_height="$(ui_box_line_count "$build_rendered")"
+  UI_STACK_HEIGHT=$lines
+}
+
 ui_build_truncate() {
   local text=$1 max=$2
   text="${text//[$'\t\r\n']/ }"
@@ -536,20 +573,27 @@ ui_build_progress_apply() {
   fi
 }
 
-ui_build_progress_label() {
+ui_build_spinner_frame() {
+  local tick=$1
+  local -a frames=('|' '/' '-' '\')
+  echo "${frames[tick % ${#frames[@]}]}"
+}
+
+ui_build_status() {
   local done=$1 expected=$2
-  local percent
 
   if ((expected > 0 && done > 0)); then
-    percent="$(ui_build_percent "$done" "$expected")"
-    echo "${percent}%"
-  elif ((expected > 0)); then
-    echo "0/$(fmt_size "$expected")"
-  elif ((done > 0)); then
-    fmt_size "$done"
-  else
-    echo '…'
+    local pct=$((done * 100 / expected))
+    if ((pct > 0 && pct < 100)); then
+      echo "${pct}%"
+      return
+    fi
   fi
+  if ((done > 0)); then
+    fmt_size "$done"
+    return
+  fi
+  echo 'working…'
 }
 
 ui_build_bar() {
@@ -658,35 +702,29 @@ ui_build_box_poll() {
 ui_build_box_render() {
   local cur_done=$1 cur_expected=$2 tick=$3
   local -n _activities=$4
-  local bar body rendered width label
+  local body rendered width spinner status
 
   width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
   body="$(ui_build_activity_block _activities)"
-
-  if ((cur_expected > 0 && cur_done > 0)); then
-    percent="$(ui_build_percent "$cur_done" "$cur_expected")"
-    bar="$(ui_build_bar "$percent")"
-  else
-    bar="$(ui_build_bar_indeterminate "$tick")"
-  fi
-  label="$(ui_build_progress_label "$cur_done" "$cur_expected")"
+  spinner="$(ui_build_spinner_frame "$tick")"
+  status="$(ui_build_status "$cur_done" "$cur_expected")"
 
   if [[ -n $body ]]; then
     body+=$'\n'
   fi
-  body+="$(ui_ansi "38;5;${C_VIOLET}" "$bar") $(ui_faint "$label")"
+  body+="$(ui_ansi "38;5;${C_VIOLET}" "$spinner") $(ui_faint "$status")"
 
   rendered="$(gum style \
     --border rounded \
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN_BEFORE" \
+    --margin "$UI_MARGIN_STACK_GAP" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
     "$body")"
 
-  ui_box_redraw "$rendered" "$5"
+  ui_stack_redraw "$rendered" "$5"
 }
 
 ui_build_show_errors() {
@@ -1243,15 +1281,18 @@ ui_swap_box() {
   local body
   body="$(collect_swap_lines)"
   [[ -n $body ]] || return 1
-  gum style \
+  UI_SWAP_RENDERED="$(gum style \
     --border rounded \
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN_AFTER" \
+    --margin "$UI_MARGIN_STACK_GAP" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ swap")" \
-    "$body"
+    "$body")"
+  UI_SWAP_HEIGHT="$(ui_box_line_count "$UI_SWAP_RENDERED")"
+  ui_tty_write "${UI_SWAP_RENDERED}"$'\n'
+  UI_STACK_HEIGHT=$UI_SWAP_HEIGHT
 }
 
 reset_zram_swap() {
