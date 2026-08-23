@@ -30,10 +30,7 @@ sudo ./nixos/install.sh
 ```
 
 > [!CAUTION]
-> **mina:** Disko wipes `/dev/nvme0n1`.
-> **air:** Do not use a stock NixOS ISO. Do not run Disko. Leave `iBoot` and `Recovery` alone — touching them bricks the Mac until you restore from another computer with [idevicerestore](https://github.com/libimobiledevice/idevicerestore).
-
-Unlock the disk, then log in as `max`. On air, hold power for the Apple boot picker; Option (Alt) + Always Use sets the default OS.
+> **Destructive** This script will wipe any existing partitions on the preconfigured disks.
 
 ### Air, from macOS
 
