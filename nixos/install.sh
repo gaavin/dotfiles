@@ -61,11 +61,12 @@ cleanup() {
 }
 
 # Like macOS caffeinate: block sleep/suspend/idle while installing.
+# Do not inhibit shutdown — reboot after install must still work.
 start_sleep_inhibit() {
   [[ -n ${SLEEP_INHIBIT_PID:-} ]] && return 0
   command -v systemd-inhibit >/dev/null 2>&1 || return 0
   systemd-inhibit \
-    --what=idle:sleep:shutdown:handle-lid-switch:handle-suspend-key:handle-hibernate-key:handle-power-key \
+    --what=idle:sleep:handle-lid-switch:handle-suspend-key:handle-hibernate-key \
     --who="nixos-install.sh" \
     --why="NixOS installation in progress" \
     --mode=block \
@@ -1570,7 +1571,10 @@ $(ui_faint "Hold power at boot for the Apple boot picker if you need macOS.")"
   )" || exit 0
 
   case $choice in
-    *Reboot*) reboot ;;
+    *Reboot*)
+      stop_sleep_inhibit
+      reboot
+      ;;
   esac
 }
 
