@@ -108,6 +108,8 @@ ZRAM_SWAP_PRIORITY=100
 SWAP_ZRAM_KIND=zram
 SWAP_DISK_KIND=swap
 SWAP_DISK_DETAIL=partition
+PLANNED_ESP_BYTES=$((2 * 1024 * 1024 * 1024))
+PLANNED_SWAP_BYTES=$((8 * 1024 * 1024 * 1024))
 C_ACCENT=39
 C_SUCCESS=42
 C_WARN=214
@@ -577,7 +579,86 @@ swapon_table() {
 }
 
 disk_size_human() {
-  fmt_size "$(lsblk -n -b -d -o SIZE "$DISK" 2>/dev/null || echo 0)"
+  fmt_size "$(disk_size_bytes)"
+}
+
+disk_size_bytes() {
+  local size
+  size="$(lsblk -n -b -d -o SIZE "$DISK" 2>/dev/null || echo 0)"
+  [[ $size =~ ^[0-9]+$ ]] || size=0
+  echo "$size"
+}
+
+disk_air_free_bytes() {
+  local free=0
+
+  if command -v parted >/dev/null 2>&1; then
+    while IFS= read -r line; do
+      [[ $line == *:free\; ]] || continue
+      IFS=: read -r _ start end _ _ _ <<<"$line"
+      [[ $start =~ ^[0-9]+$ && $end =~ ^[0-9]+$ ]] || continue
+      free=$((free + end - start))
+    done < <(parted -ms "$DISK" unit B print free 2>/dev/null || true)
+  fi
+
+  if ((free > 0)); then
+    echo "$free"
+    return
+  fi
+
+  local disk_bytes used_bytes=0
+  disk_bytes="$(disk_size_bytes)"
+  while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    NAME= SIZE= TYPE=
+    eval "$line"
+    [[ ${TYPE:-} == part ]] || continue
+    [[ $SIZE =~ ^[0-9]+$ ]] || continue
+    used_bytes=$((used_bytes + SIZE))
+  done < <(disk_lsblk)
+  echo $((disk_bytes - used_bytes))
+}
+
+disk_planned_luks_bytes() {
+  local host=$1
+  if [[ $host == mina ]]; then
+    echo $(( $(disk_size_bytes) - PLANNED_ESP_BYTES ))
+  else
+    disk_air_free_bytes
+  fi
+}
+
+disk_planned_root_bytes() {
+  local luks_bytes=$1
+  echo $((luks_bytes - PLANNED_SWAP_BYTES))
+}
+
+disk_planned_total_bytes() {
+  local host=$1
+  if [[ $host == mina ]]; then
+    disk_size_bytes
+  else
+    disk_planned_luks_bytes air
+  fi
+}
+
+disk_planned_layout() {
+  local host=$1 luks_bytes root_bytes luks_h root_h swap_h
+
+  luks_bytes="$(disk_planned_luks_bytes "$host")"
+  root_bytes="$(disk_planned_root_bytes "$luks_bytes")"
+  luks_h="$(fmt_size "$luks_bytes")"
+  root_h="$(fmt_size "$root_bytes")"
+  swap_h="$(fmt_size "$PLANNED_SWAP_BYTES")"
+
+  if [[ $host == mina ]]; then
+    ui_diff_add "💿 ESP     $(fmt_size "$PLANNED_ESP_BYTES")  vfat  /efi$(disk_mount_opts_suffix /efi)"
+    ui_diff_add "🔒 nixos   ${luks_h}  LUKS  cryptroot"
+  else
+    ui_diff_add "🔒 nixos   ${luks_h}  LUKS  cryptroot  (free space)"
+  fi
+  ui_diff_add "  📦 swap  ${swap_h}"
+  ui_diff_add "  📦 root  ${root_h}  xfs  /$(disk_mount_opts_suffix /)"
 }
 
 ui_diff_ctx() {
@@ -743,11 +824,12 @@ disk_diff_indent() {
 }
 
 disk_diff_header() {
-  local disk_name size_h
+  local host=$1 disk_name now_h planned_h
   disk_name="$(disk_short)"
-  size_h="$(disk_size_human)"
-  ui_diff_ctx "--- ${disk_name} · ${size_h}"
-  ui_diff_ctx "+++ ${disk_name} · planned"
+  now_h="$(disk_size_human)"
+  planned_h="$(fmt_size "$(disk_planned_total_bytes "$host")")"
+  ui_diff_ctx "${disk_name} · ${now_h}"
+  ui_diff_ctx "planned · ${planned_h}"
   ui_diff_ctx ""
 }
 
@@ -759,7 +841,7 @@ mina_disk_diff() {
   disk_build_parent_map pkmap devtypes
 
   {
-    disk_diff_header
+    disk_diff_header mina
 
     while IFS= read -r line; do
       [[ -z $line ]] && continue
@@ -779,15 +861,11 @@ mina_disk_diff() {
     done < <(disk_lsblk)
 
     if [[ $removed -eq 0 ]]; then
-      ui_diff_ctx "  (empty disk)"
+      ui_diff_ctx "(empty disk)"
     fi
 
     ui_diff_ctx ""
-    ui_diff_add "💿 ESP  2G  vfat  /efi$(disk_mount_opts_suffix /efi)"
-    ui_diff_add "💿 nixos  LUKS"
-    ui_diff_add "  🔒 cryptroot"
-    ui_diff_add "    📦 swap  8G"
-    ui_diff_add "    📦 root  xfs  /$(disk_mount_opts_suffix /)"
+    disk_planned_layout mina
   }
 }
 
@@ -813,7 +891,7 @@ air_disk_diff() {
   disk_build_parent_map pkmap devtypes
 
   {
-    disk_diff_header
+    disk_diff_header air
 
     while IFS= read -r line; do
       [[ -z $line ]] && continue
@@ -825,15 +903,13 @@ air_disk_diff() {
       spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
       role="$(part_role_air "$PARTLABEL" "$FSTYPE" "$PARTTYPENAME")"
       case $role in
-        esp) ui_diff_mod "${indent}${spec}  (mount at /efi, not formatted)" ;;
-        preserved) ui_diff_ctx "${indent}${spec}  (preserved)" ;;
+        esp) ui_diff_mod "${indent}${spec}  → /efi, not formatted" ;;
+        preserved) ui_diff_ctx "${indent}${spec}" ;;
       esac
     done < <(disk_lsblk)
 
     ui_diff_ctx ""
-    ui_diff_add "🔒 nixos  LUKS  cryptroot  (free space)"
-    ui_diff_add "  📦 swap  8G"
-    ui_diff_add "  📦 root  xfs  /$(disk_mount_opts_suffix /)"
+    disk_planned_layout air
   }
 }
 
