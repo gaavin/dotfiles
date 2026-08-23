@@ -286,12 +286,103 @@ part_role_air() {
   echo preserved
 }
 
+disk_lsblk() {
+  lsblk -P -o NAME,SIZE,FSTYPE,LABEL,PARTLABEL,MOUNTPOINT,TYPE,PARTTYPENAME,PKNAME "$DISK" 2>/dev/null || true
+}
+
+disk_entry_desc() {
+  local name=$1 size=$2 fstype=$3 label=$4 partlabel=$5 mount=$6 type=$7
+  local title size_h spec icon
+
+  title="$(part_label_display "$partlabel" "" "$name")"
+  if [[ $title == "$name" && -n $label && $label != "-" ]]; then
+    title="$label"
+  fi
+  if [[ $type == part && $fstype == crypto_LUKS && $title == "$name" ]]; then
+    title="nixos"
+  fi
+
+  size_h="$(fmt_size "$size")"
+  spec="${title}  ${size_h}"
+  [[ -n $fstype && $fstype != "-" ]] && spec="$spec  ${fstype}"
+  [[ -n $mount && $mount != "-" ]] && spec="$spec  ${mount}"
+
+  case $type in
+    crypt) icon="🔒" ;;
+    lvm) icon="📦" ;;
+    part) icon="💿" ;;
+    *) icon="▸" ;;
+  esac
+
+  printf '%s %s' "$icon" "$spec"
+}
+
+disk_device_depth() {
+  local name=$1
+  local -n parents=$2
+  local depth=0 pk="${parents[$name]:-}"
+
+  while [[ -n $pk && $pk != "$(disk_short)" ]]; do
+    depth=$((depth + 1))
+    pk="${parents[$pk]:-}"
+  done
+
+  echo "$depth"
+}
+
+disk_diff_indent() {
+  printf '%*s' "$(( ${1:-0} * 2 ))" ''
+}
+
 disk_diff_header() {
   local disk_name size_h
   disk_name="$(disk_short)"
   size_h="$(disk_size_human)"
-  ui_diff_ctx "--- $disk_name · $size_h"
-  ui_diff_ctx "+++ $disk_name · planned"
+  ui_diff_ctx "--- ${disk_name} · ${size_h}"
+  ui_diff_ctx "+++ ${disk_name} · planned"
+  ui_diff_ctx ""
+}
+
+mina_disk_diff() {
+  local line removed=0 depth indent spec
+  local -A pkmap=()
+
+  while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
+    eval "$line"
+    [[ -n ${NAME:-} ]] && pkmap[$NAME]=${PKNAME:-}
+  done < <(disk_lsblk)
+
+  {
+    disk_diff_header
+
+    while IFS= read -r line; do
+      [[ -z $line ]] && continue
+      NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
+      eval "$line"
+      [[ ${TYPE:-} == disk ]] && continue
+      case ${TYPE:-} in
+        part | crypt | lvm) ;;
+        *) continue ;;
+      esac
+      removed=1
+      depth="$(disk_device_depth "$NAME" pkmap)"
+      indent="$(disk_diff_indent "$depth")"
+      spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
+      ui_diff_del "${indent}${spec}"
+    done < <(disk_lsblk)
+
+    if [[ $removed -eq 0 ]]; then
+      ui_diff_ctx "  (empty disk)"
+    fi
+
+    ui_diff_ctx ""
+    ui_diff_add "💿 ESP  2G  vfat  /efi"
+    ui_diff_add "🔒 nixos  LUKS  cryptroot"
+    ui_diff_add "  📦 swap  8G"
+    ui_diff_add "  📦 root  xfs  /"
+  }
 }
 
 ui_disk_diff_box() {
@@ -306,52 +397,40 @@ ui_disk_diff_box() {
     "$1"
 }
 
-mina_disk_diff() {
-  local part_count=0 name size fstype label mount type spec
-
-  {
-    disk_diff_header
-    while read -r name size fstype label mount type; do
-      [[ ${type:-} == part ]] || continue
-      part_count=$((part_count + 1))
-      spec="$(part_label_display "$label" "" "$name")  $(fmt_size "$size")"
-      [[ -n $fstype && $fstype != "-" ]] && spec="$spec  $fstype"
-      [[ -n $mount && $mount != "-" ]] && spec="$spec  mount $mount"
-      ui_diff_del "$spec  (wiped)"
-    done < <(lsblk -n -r -o NAME,SIZE,FSTYPE,PARTLABEL,MOUNTPOINT,TYPE "$DISK" 2>/dev/null || true)
-
-    if [[ $part_count -eq 0 ]]; then
-      ui_diff_ctx "(empty disk)"
-    fi
-
-    ui_diff_add "ESP  2G  vfat  /efi"
-    ui_diff_add "nixos  LUKS  cryptroot"
-    ui_diff_add "  swap  8G"
-    ui_diff_add "  root  xfs  /  (remaining space)"
-  }
-}
-
 air_disk_diff() {
-  local name size fstype label mount type parttypename role display spec
+  local line role depth indent spec
+  local -A pkmap=()
+
+  while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
+    eval "$line"
+    [[ -n ${NAME:-} ]] && pkmap[$NAME]=${PKNAME:-}
+  done < <(disk_lsblk)
 
   {
     disk_diff_header
-    while read -r name size fstype label mount type parttypename; do
-      [[ ${type:-} == part ]] || continue
-      display="$(part_label_display "$label" "$parttypename" "$name")"
-      spec="$display  $(fmt_size "$size")"
-      [[ -n $fstype && $fstype != "-" ]] && spec="$spec  $fstype"
-      [[ -n $mount && $mount != "-" ]] && spec="$spec  mount $mount"
-      role="$(part_role_air "$label" "$fstype" "$parttypename")"
-      case $role in
-        esp) ui_diff_mod "$spec  (mount at /efi, not formatted)" ;;
-        preserved) ui_diff_ctx "$spec  (preserved)" ;;
-      esac
-    done < <(lsblk -n -r -o NAME,SIZE,FSTYPE,PARTLABEL,MOUNTPOINT,TYPE,PARTTYPENAME "$DISK" 2>/dev/null || true)
 
-    ui_diff_add "nixos  LUKS  cryptroot  (free space)"
-    ui_diff_add "  swap  8G"
-    ui_diff_add "  root  xfs  /  (remaining space)"
+    while IFS= read -r line; do
+      [[ -z $line ]] && continue
+      NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
+      eval "$line"
+      [[ ${TYPE:-} == disk ]] && continue
+      [[ ${TYPE:-} == part ]] || continue
+      depth="$(disk_device_depth "$NAME" pkmap)"
+      indent="$(disk_diff_indent "$depth")"
+      spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
+      role="$(part_role_air "$PARTLABEL" "$FSTYPE" "$PARTTYPENAME")"
+      case $role in
+        esp) ui_diff_mod "${indent}${spec}  (mount at /efi, not formatted)" ;;
+        preserved) ui_diff_ctx "${indent}${spec}  (preserved)" ;;
+      esac
+    done < <(disk_lsblk)
+
+    ui_diff_ctx ""
+    ui_diff_add "🔒 nixos  LUKS  cryptroot  (free space)"
+    ui_diff_add "  📦 swap  8G"
+    ui_diff_add "  📦 root  xfs  /"
   }
 }
 
