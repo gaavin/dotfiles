@@ -463,8 +463,6 @@ swap_status_summary() {
     if [[ $base == zram* ]]; then
       algo="$(zram_compression "$base")"
       parts+=("${size_h} zram ${algo}")
-    elif [[ $name == *install-swap* ]]; then
-      parts+=("${size_h} temporary swap file on disk")
     else
       parts+=("${size_h} swap partition on disk")
     fi
@@ -495,7 +493,7 @@ enable_zram_swap() {
 }
 
 activate_target_swap() {
-  local dev swapfile=/mnt/.install-swap activated=0
+  local dev activated=0
 
   vgchange -ay 2>/dev/null || true
   udevadm settle 2>/dev/null || true
@@ -514,15 +512,7 @@ activate_target_swap() {
     fi
   done < <(lsblk -pn -o NAME,FSTYPE | awk '$2 == "swap" {print $1}')
 
-  [[ $activated -eq 1 || $(swap_active_bytes) -gt 0 ]] && return 0
-
-  mountpoint -q /mnt || return 1
-  if [[ ! -f $swapfile ]]; then
-    ui_spin "Creating temporary swap file..." \
-      bash -c "fallocate -l 8G '$swapfile' && chmod 600 '$swapfile' && mkswap '$swapfile' && swapon '$swapfile'"
-  else
-    swapon "$swapfile" 2>/dev/null || return 1
-  fi
+  [[ $activated -eq 1 ]]
 }
 
 ensure_swap() {
@@ -535,14 +525,6 @@ ensure_swap() {
   fi
   ui_warn "⚙ swap is off — install may run out of memory"
   return 1
-}
-
-install_swap_cleanup() {
-  local swapfile=/mnt/.install-swap
-  if [[ -f $swapfile ]]; then
-    swapoff "$swapfile" 2>/dev/null || true
-    rm -f "$swapfile"
-  fi
 }
 
 set_passwords() {
@@ -568,7 +550,6 @@ install_system() {
   fi
   ensure_swap
   nixos-install --no-root-password --no-channel-copy --root /mnt --flake "path:$flake#$HOST"
-  install_swap_cleanup
   set_passwords
 }
 
