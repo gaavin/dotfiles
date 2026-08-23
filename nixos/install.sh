@@ -218,7 +218,7 @@ ui_spin() {
   while kill -0 "$pid" 2>/dev/null; do
     line="${pad}$(ui_ansi "38;5;${C_VIOLET}" "${frames[i]}") $(ui_ansi "38;5;${C_ACCENT}" "$title")"
     if [[ -e /dev/tty ]]; then
-      printf '\r\033[K%s' "$line" >/dev/tty
+      printf '\r\033[K%s' "$line" >/dev/tty 2>/dev/null || printf '\r\033[K%s' "$line" >&2
     else
       printf '\r\033[K%s' "$line" >&2
     fi
@@ -229,7 +229,7 @@ ui_spin() {
   wait "$pid" || status=$?
 
   if [[ -e /dev/tty ]]; then
-    printf '\r\033[K' >/dev/tty
+    printf '\r\033[K' >/dev/tty 2>/dev/null || printf '\r\033[K' >&2
   else
     printf '\r\033[K' >&2
   fi
@@ -254,7 +254,7 @@ ui_tty() {
 
 ui_tty_write() {
   if [[ -e /dev/tty ]]; then
-    printf '%b' "$1" >/dev/tty
+    printf '%b' "$1" >/dev/tty 2>/dev/null || printf '%b' "$1" >&2
   else
     printf '%b' "$1" >&2
   fi
@@ -332,6 +332,17 @@ ui_build_format_line() {
   elif [[ $text =~ copying[[:space:]]+path[[:space:]]+\'/nix/store/ ]]; then
     name="$(ui_build_store_name "$text")"
     text="copying ${name:-${text#copying path }}"
+  elif [[ $text =~ copying[[:space:]]+\"([^\"]+)\"[[:space:]]+to[[:space:]]+the[[:space:]]+store ]]; then
+    text="copying $(basename "${BASH_REMATCH[1]}")"
+  elif [[ $text =~ ^evaluating[[:space:]]+(.+) ]]; then
+    flake="${BASH_REMATCH[1]}"
+    flake="${flake#flake:}"
+    flake="${flake#path:}"
+    if [[ $flake == /* ]]; then
+      text="evaluating $(basename "$flake")"
+    else
+      text="evaluating $flake"
+    fi
   elif [[ $text =~ fetching[[:space:]]+Git[[:space:]]+repository[[:space:]]+\'([^\']+) ]]; then
     text="fetching ${BASH_REMATCH[1]}"
   elif [[ $text =~ querying[[:space:]]+info[[:space:]]+about ]]; then
@@ -351,7 +362,7 @@ ui_build_push_activity() {
   local line=$2
 
   [[ -n $line ]] || return 0
-  if ((${#_acts[@]} > 0 && "${_acts[-1]}" == "$line")); then
+  if ((${#_acts[@]} > 0)) && [[ ${_acts[-1]} == "$line" ]]; then
     return 0
   fi
   _acts+=("$line")
@@ -459,7 +470,7 @@ ui_build_box_poll() {
       [[ -n $msg ]] || continue
       if [[ $msg == *error:* ]]; then
         ui_build_push_activity _activities "$(ui_build_format_line "$msg" "$width")"
-      elif [[ $msg == copying\ * || $msg == building\ * || $msg == *substituting* ]]; then
+      elif [[ $msg == copying\ * || $msg == building\ * || $msg == evaluating\ * || $msg == *substituting* ]]; then
         ui_build_push_activity _activities "$(ui_build_format_line "$msg" "$width")"
       fi
     fi
@@ -1077,7 +1088,7 @@ reset_zram_swap() {
     name=$(basename "$sys")
     swapoff "/dev/$name" 2>/dev/null || true
     if [[ -e $sys/reset ]]; then
-      echo 0 >"$sys/reset" 2>/dev/null || true
+      echo 1 >"$sys/reset" 2>/dev/null || echo 0 >"$sys/reset" 2>/dev/null || true
     else
       echo 0 >"$sys/disksize" 2>/dev/null || true
     fi
@@ -1088,10 +1099,39 @@ reset_zram_swap() {
   fi
 }
 
+live_store_avail() {
+  df -B1 --output=avail /nix 2>/dev/null | tail -1 | tr -d ' '
+}
+
+prepare_live_environment() {
+  local avail min_free=$((2 * 1024 * 1024 * 1024))
+
+  pkill -TERM nixos-install 2>/dev/null || true
+  sleep 0.5
+
+  rm -rf /nix/var/nix/builds/* 2>/dev/null || true
+  rm -rf /tmp/nix-* 2>/dev/null || true
+
+  if command -v nix-collect-garbage >/dev/null 2>&1; then
+    ui_spin "Reclaiming space on live system..." \
+      bash -c 'nix-collect-garbage -d >/dev/null 2>&1 || true'
+  elif command -v nix >/dev/null 2>&1; then
+    ui_spin "Reclaiming space on live system..." \
+      bash -c 'nix store gc >/dev/null 2>&1 || true'
+  fi
+
+  avail=$(live_store_avail)
+  avail=${avail:-0}
+  if ((avail < min_free)); then
+    ui_warn "⚙ only $(fmt_size "$avail") free on /nix — reboot the live ISO if install fails"
+  fi
+}
+
 enable_zram_swap() {
   local dev=/dev/zram0 mem_kb size_bytes
 
   reset_zram_swap
+  sleep 0.2
 
   modprobe zram num_devices=1 2>/dev/null || return 1
   [[ -e /sys/block/zram0/disksize ]] || return 1
@@ -1101,10 +1141,19 @@ enable_zram_swap() {
 
   mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
   size_bytes=$((mem_kb * 1024 * ZRAM_MEMORY_PERCENT / 100))
-  echo "$size_bytes" > /sys/block/zram0/disksize
+  if ! echo "$size_bytes" > /sys/block/zram0/disksize 2>/dev/null; then
+    reset_zram_swap
+    return 1
+  fi
 
-  mkswap "$dev" >/dev/null 2>&1 || return 1
-  swapon -p "$ZRAM_SWAP_PRIORITY" "$dev" 2>/dev/null || swapon "$dev" 2>/dev/null || return 1
+  mkswap "$dev" >/dev/null 2>&1 || {
+    reset_zram_swap
+    return 1
+  }
+  swapon -p "$ZRAM_SWAP_PRIORITY" "$dev" 2>/dev/null || swapon "$dev" 2>/dev/null || {
+    reset_zram_swap
+    return 1
+  }
 }
 
 activate_target_swap() {
@@ -1163,6 +1212,7 @@ install_system() {
   if [[ $HOST == air ]]; then
     ui_ok "⚙ linux-asahi will compile from source"
   fi
+  prepare_live_environment
   ensure_swap
   ui_build_box nixos-install --no-root-password --no-channel-copy --root /mnt \
     --flake "path:$flake#$HOST" || die "failed to install system"
