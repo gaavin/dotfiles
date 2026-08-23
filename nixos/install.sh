@@ -35,6 +35,7 @@ nix_flake() {
 }
 
 UI_WIDTH=50
+UI_DISK_WIDTH=64
 UI_PAD_H=2
 UI_PAD_V=1
 NIXOS_VERSION="26.11 unstable"
@@ -204,6 +205,144 @@ ui_box() {
     "$1"
 }
 
+disk_short() {
+  basename "$DISK"
+}
+
+fmt_size() {
+  local bytes=$1
+  if [[ $bytes =~ ^[0-9]+$ ]]; then
+    numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null || echo "$bytes"
+  else
+    echo "$bytes"
+  fi
+}
+
+disk_size_human() {
+  fmt_size "$(lsblk -n -b -d -o SIZE "$DISK" 2>/dev/null || echo 0)"
+}
+
+ui_diff_ctx() {
+  printf '%s\n' "$(ui_ansi "38;5;${C_MUTED}" "  $1")"
+}
+
+ui_diff_del() {
+  printf '%s\n' "$(ui_ansi "38;5;${C_DANGER}" "- $1")"
+}
+
+ui_diff_add() {
+  printf '%s\n' "$(ui_ansi "38;5;${C_SUCCESS}" "+ $1")"
+}
+
+ui_diff_mod() {
+  printf '%s\n' "$(ui_ansi "38;5;${C_WARN}" "~ $1")"
+}
+
+part_label_display() {
+  local label=$1 parttypename=$2 name=$3
+  if [[ -n $label && $label != "-" ]]; then
+    echo "$label"
+  elif [[ -n $parttypename && $parttypename != "-" ]]; then
+    echo "$parttypename"
+  else
+    echo "$name"
+  fi
+}
+
+part_role_air() {
+  local label=$1 fstype=$2 parttypename=$3
+  local l="${label,,}"
+  local t="${parttypename,,}"
+
+  if [[ $fstype == vfat || $t == *efi* ]]; then
+    echo esp
+    return
+  fi
+
+  case "$l" in
+    *iboot*|*macos*|*recovery*|*asahi*|*stub*) echo preserved; return ;;
+    *efi*|*esp*) echo esp; return ;;
+  esac
+
+  case "$t" in
+    *iboot*|*apple*boot*) echo preserved; return ;;
+    *apfs*|*macos*|*hfs*) echo preserved; return ;;
+    *recovery*) echo preserved; return ;;
+    *asahi*) echo preserved; return ;;
+  esac
+
+  echo preserved
+}
+
+disk_diff_header() {
+  local disk_name size_h
+  disk_name="$(disk_short)"
+  size_h="$(disk_size_human)"
+  ui_diff_ctx "--- $disk_name · $size_h"
+  ui_diff_ctx "+++ $disk_name · planned"
+}
+
+ui_disk_diff_box() {
+  gum style \
+    --border rounded \
+    --border-foreground "$C_MUTED" \
+    --width "$UI_DISK_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --margin "1 0 0 0" \
+    --foreground "$C_TEXT" \
+    "$(ui_ansi "38;5;${C_MUTED}" "▤ storage")" \
+    "$1"
+}
+
+mina_disk_diff() {
+  local part_count=0 name size fstype label mount type spec
+
+  {
+    disk_diff_header
+    while IFS= read -r name size fstype label mount type; do
+      [[ ${type:-} == part ]] || continue
+      part_count=$((part_count + 1))
+      spec="$(part_label_display "$label" "" "$name")  $(fmt_size "$size")"
+      [[ -n $fstype && $fstype != "-" ]] && spec="$spec  $fstype"
+      [[ -n $mount && $mount != "-" ]] && spec="$spec  mount $mount"
+      ui_diff_del "$spec  (wiped)"
+    done < <(lsblk -n -r -o NAME,SIZE,FSTYPE,PARTLABEL,MOUNTPOINT,TYPE "$DISK" 2>/dev/null || true)
+
+    if [[ $part_count -eq 0 ]]; then
+      ui_diff_ctx "(empty disk)"
+    fi
+
+    ui_diff_add "ESP  2G  vfat  /efi"
+    ui_diff_add "nixos  LUKS  cryptroot"
+    ui_diff_add "  swap  8G"
+    ui_diff_add "  root  xfs  /  (remaining space)"
+  }
+}
+
+air_disk_diff() {
+  local name size fstype label mount type parttypename role display spec
+
+  {
+    disk_diff_header
+    while IFS= read -r name size fstype label mount type parttypename; do
+      [[ ${type:-} == part ]] || continue
+      display="$(part_label_display "$label" "$parttypename" "$name")"
+      spec="$display  $(fmt_size "$size")"
+      [[ -n $fstype && $fstype != "-" ]] && spec="$spec  $fstype"
+      [[ -n $mount && $mount != "-" ]] && spec="$spec  mount $mount"
+      role="$(part_role_air "$label" "$fstype" "$parttypename")"
+      case $role in
+        esp) ui_diff_mod "$spec  (mount at /efi, not formatted)" ;;
+        preserved) ui_diff_ctx "$spec  (preserved)" ;;
+      esac
+    done < <(lsblk -n -r -o NAME,SIZE,FSTYPE,PARTLABEL,MOUNTPOINT,TYPE,PARTTYPENAME "$DISK" 2>/dev/null || true)
+
+    ui_diff_add "nixos  LUKS  cryptroot  (free space)"
+    ui_diff_add "  swap  8G"
+    ui_diff_add "  root  xfs  /  (remaining space)"
+  }
+}
+
 ask_password() {
   local dest=$1 header=$2 pass pass2
   while true; do
@@ -332,7 +471,7 @@ install_mina() {
   [[ -b $DISK ]] || die "$DISK not found"
 
   ui_step "Set up the disks (destructive)"
-  ui_box "$(lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT "$DISK" 2>/dev/null || true)"
+  ui_disk_diff_box "$(mina_disk_diff)"
   confirm "This WIPES $DISK."
 
   disko_run destroy,format,mount --yes-wipe-all-disks
@@ -356,7 +495,7 @@ install_air() {
   esp_dev="$(readlink -f "$esp")"
 
   ui_step "Create LUKS partition"
-  ui_box "$(sgdisk -p "$DISK")"
+  ui_disk_diff_box "$(air_disk_diff)"
   confirm "Create a LUKS partition in the free space on $DISK. iBoot, macOS, the ESP, and Recovery are left alone."
 
   before="$(air_part_state)"
