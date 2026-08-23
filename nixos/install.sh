@@ -15,6 +15,7 @@ STEP_N=0
 STEP_TOTAL=0
 BUILD_PID=""
 BUILD_LOG_OFFSET=0
+INSTALL_ABORTED=0
 
 die() {
   if command -v gum >/dev/null 2>&1; then
@@ -32,10 +33,18 @@ cleanup() {
   fi
   BUILD_PID=""
   reset_zram_swap
+  if [[ ${INSTALL_ABORTED:-0} -eq 1 ]]; then
+    ui_abort
+  fi
   if [[ -n ${SECRETS:-} && -d $SECRETS ]]; then
     rm -rf "$SECRETS"
   fi
   rm -f "$LUKS_PASSFILE" /mnt/root/chpasswd
+}
+
+on_interrupt() {
+  INSTALL_ABORTED=1
+  exit 130
 }
 
 nix_flake() {
@@ -207,6 +216,20 @@ ui_ok() {
 
 ui_warn() {
   ui_line "$(ui_ansi "38;5;${C_WARN}" "⚠ $1")"
+}
+
+ui_abort() {
+  local msg
+  msg="$(gum style \
+    --border rounded \
+    --border-foreground "$C_WARN" \
+    --foreground "$C_WARN" \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --margin "$UI_MARGIN_SECTION" \
+    "✕ Installation aborted." \
+    "$(ui_faint "Re-run ./nixos/install.sh to resume.")")"
+  ui_tty_write "${msg}"$'\n'
 }
 
 ui_line() {
@@ -1433,6 +1456,7 @@ if ! command -v gum >/dev/null 2>&1; then
 fi
 
 theme
+trap on_interrupt INT
 trap cleanup EXIT
 
 detected="$(detect_host)"
