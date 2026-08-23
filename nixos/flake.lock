@@ -161,11 +161,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787276625,
-        "narHash": "sha256-L0mowoBSlNn/A2eThYrvg6jDnbcWdhjCvBkdv+lNhDo=",
+        "lastModified": 1787446438,
+        "narHash": "sha256-B25tbEj4GDqpO4owYgvyhzgZuq4GK3ebBBEwD8evi2M=",
         "owner": "gaavin",
         "repo": "nix-battle-net",
-        "rev": "80a9d3a217f81d948478572b73da686d810f1e83",
+        "rev": "75faabf2b24a614d634d8d3daca83e367e8fb040",
         "type": "github"
       },
       "original": {
@@ -181,11 +181,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787428469,
-        "narHash": "sha256-YT+tRuOCd7uV5U3I8PePk9a992GLbHiestd00gZOSFg=",
+        "lastModified": 1787446438,
+        "narHash": "sha256-4gvLsXfkp2xaZAaA7FvId0wK/elJDl5h3t4ctWKs5W0=",
         "owner": "gaavin",
         "repo": "nix-epic-games-launcher",
-        "rev": "c7fe10e85f8046a3009e68fac53eeafeb40c30fa",
+        "rev": "5fa269d03485e6fb604cf9d780d704f96987dc90",
         "type": "github"
       },
       "original": {
@@ -202,11 +202,11 @@
         "offset-calc-osu-stable": "offset-calc-osu-stable"
       },
       "locked": {
-        "lastModified": 1787280056,
-        "narHash": "sha256-6LO28bcGMWsllMri2KQsshQKPKfl3J3gXYhWg2E2iN4=",
+        "lastModified": 1787446438,
+        "narHash": "sha256-hdWV76ucp9ya7d8WRB05mOYkJZnTi4ThOmGjEtV1EMI=",
         "owner": "gaavin",
         "repo": "nix-osu-stable",
-        "rev": "c78d4de2341768ff90e8a450135b2bd056dbd2b7",
+        "rev": "b3fec0d5bb2fbdc1a6aded50b597445b9e38937b",
         "type": "github"
       },
       "original": {
