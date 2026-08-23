@@ -23,7 +23,7 @@ Boot a NixOS installer, clone this repo, run the script.
 > [!CAUTION]
 > **Destructive** This script will wipe any (except for mac related partitions) existing partitions on the preconfigured disks (/dev/nvme0n1).
 
-> **😪😪😪** This configuration takes a long time to build for the first time.
+> **😪😪😪** This configuration takes a long time to build for the first time. The script will prevent your computer from going to sleep.
 
 
 ```bash
