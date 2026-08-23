@@ -362,6 +362,10 @@ ui_build_json_id() {
   sed -n 's/.*"id":\([0-9]*\).*/\1/p' <<<"$1" | head -1
 }
 
+ui_build_json_activity_type() {
+  grep -o '"type":[0-9]*' <<<"$1" | tail -1 | sed 's/"type"://'
+}
+
 ui_build_short_url() {
   local url=$1
   if [[ $url =~ ^https?://([^/:]+) ]]; then
@@ -489,25 +493,41 @@ ui_build_parse_status_progress() {
 }
 
 ui_build_progress_apply() {
-  local id=$1 done=$2 expected=$3 running=$4
-  local -n _pid=$5 _done=$6 _expected=$7 _running=$8
+  local id=$1 done=$2 expected=$3 running=$4 atype=$5
+  local -n _pid=$6 _done=$7 _expected=$8 _running=$9
 
   done=${done:-0}
   expected=${expected:-0}
   running=${running:-0}
+  atype=${atype:-0}
   [[ -n $id ]] || return 0
 
+  # actCopyPaths / actBuilds counters stay at 0 until a whole batch finishes.
+  if ((done == 0)) && [[ $atype == 103 || $atype == 104 ]]; then
+    return 0
+  fi
+
   if ((expected > 0)); then
-    if [[ -z $_pid ]] || ((expected > _expected)) \
-      || ((expected == _expected && done >= _done)) \
-      || ((_expected == 0)); then
+    # Do not replace live byte progress with a fresh 0/N from another download.
+    if ((done == 0 && _done > 0)); then
+      return 0
+    fi
+    # Ignore small path-count totals when waiting for byte progress.
+    if ((done == 0 && _done == 0 && expected < 4096 && atype != 101)); then
+      return 0
+    fi
+    if [[ -z $_pid ]] \
+      || [[ $atype == 101 && ( -z $_pid || $id == "$_pid" || _done == 0 ) ]] \
+      || ((done > _done)) \
+      || ((done == _done && expected > _expected)) \
+      || ((_done == 0 && (atype == 101 || expected >= 4096))); then
       _pid=$id
       _done=$done
       _expected=$expected
       _running=$running
     fi
   elif ((done > 0)); then
-    if [[ -z $_pid ]] || ((_expected == 0 && done >= _done)); then
+    if [[ -z $_pid ]] || ((_expected == 0 && done >= _done)) || ((done > _done)); then
       _pid=$id
       _done=$done
       _expected=0
@@ -517,12 +537,14 @@ ui_build_progress_apply() {
 }
 
 ui_build_progress_label() {
-  local done=$1 expected=$2 tick=$3
+  local done=$1 expected=$2
   local percent
 
-  if ((expected > 0)); then
+  if ((expected > 0 && done > 0)); then
     percent="$(ui_build_percent "$done" "$expected")"
     echo "${percent}%"
+  elif ((expected > 0)); then
+    echo "0/$(fmt_size "$expected")"
   elif ((done > 0)); then
     fmt_size "$done"
   else
@@ -563,8 +585,8 @@ ui_build_bar_indeterminate() {
 
 ui_build_box_poll() {
   local log=$1
-  local -n _offset=$2 _cur_id=$3 _progress_id=$4 _cur_done=$5 _cur_expected=$6 _cur_running=$7 _activities=$8
-  local chunk line text msg id d e r f status parsed_done parsed_expected new_bytes
+  local -n _offset=$2 _cur_id=$3 _progress_id=$4 _cur_done=$5 _cur_expected=$6 _cur_running=$7 _activities=$8 _act_types=$9
+  local chunk line text msg id atype d e r f status parsed_done parsed_expected new_bytes
   local width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
 
   [[ -f $log ]] || return 0
@@ -580,6 +602,8 @@ ui_build_box_poll() {
     id="$(ui_build_json_id "$line")"
 
     if [[ $line == *'"action":"start"'* ]]; then
+      atype="$(ui_build_json_activity_type "$line")"
+      [[ -n $id && -n $atype ]] && _act_types[$id]=$atype
       text="$(ui_build_json_text "$line")"
       if [[ -n $text ]]; then
         ui_build_push_activity _activities "$(ui_build_format_line "$text" "$width")"
@@ -590,21 +614,31 @@ ui_build_box_poll() {
           _cur_running=0
         fi
       fi
+      if [[ $atype == 101 ]]; then
+        _progress_id=$id
+        _cur_done=0
+        _cur_expected=0
+        _cur_running=0
+      fi
       [[ -n $id ]] && _cur_id=$id
     elif [[ $line == *'"action":"stop"'* ]]; then
-      if [[ -n $id && $id == "$_progress_id" && _cur_expected -gt 0 ]]; then
-        _cur_done=$_cur_expected
+      if [[ -n $id && $id == "$_progress_id" ]]; then
+        if ((_cur_expected > 0)); then
+          _cur_done=$_cur_expected
+        fi
+        _progress_id=0
         _cur_running=0
       fi
     elif [[ $line == *'"action":"result"'* && $line == *'"type":105'* ]]; then
       read -r d e r f <<<"$(ui_build_json_fields105 "$line")"
-      ui_build_progress_apply "$id" "$d" "$e" "$r" \
+      atype=${_act_types[$id]:-0}
+      ui_build_progress_apply "$id" "$d" "$e" "$r" "$atype" \
         _progress_id _cur_done _cur_expected _cur_running
     elif [[ $line == *'"action":"result"'* && $line == *'"type":108'* ]]; then
       status="$(ui_build_json_fetch_status "$line")"
       if [[ -n $status ]] \
         && ui_build_parse_status_progress "$status" parsed_done parsed_expected; then
-        ui_build_progress_apply "$id" "$parsed_done" "$parsed_expected" 0 \
+        ui_build_progress_apply "$id" "$parsed_done" "$parsed_expected" 0 "${_act_types[$id]:-0}" \
           _progress_id _cur_done _cur_expected _cur_running
       fi
     elif [[ $line == *'"action":"msg"'* ]]; then
@@ -624,18 +658,18 @@ ui_build_box_poll() {
 ui_build_box_render() {
   local cur_done=$1 cur_expected=$2 tick=$3
   local -n _activities=$4
-  local bar body rendered width percent label
+  local bar body rendered width label
 
   width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
   body="$(ui_build_activity_block _activities)"
 
-  if ((cur_expected > 0)); then
+  if ((cur_expected > 0 && cur_done > 0)); then
     percent="$(ui_build_percent "$cur_done" "$cur_expected")"
     bar="$(ui_build_bar "$percent")"
   else
     bar="$(ui_build_bar_indeterminate "$tick")"
   fi
-  label="$(ui_build_progress_label "$cur_done" "$cur_expected" "$tick")"
+  label="$(ui_build_progress_label "$cur_done" "$cur_expected")"
 
   if [[ -n $body ]]; then
     body+=$'\n'
@@ -668,6 +702,7 @@ ui_build_show_errors() {
 ui_build_box() {
   local log out status=0 height=0 pid tick=0 offset=0
   local cur_id=0 progress_id=0 cur_done=0 cur_expected=0 cur_running=0
+  local -A act_types=()
   local -a activities=('starting…')
   log="$(mktemp)"
   out="$(mktemp)"
@@ -684,7 +719,7 @@ ui_build_box() {
   BUILD_LOG_OFFSET=0
 
   while kill -0 "$pid" 2>/dev/null; do
-    ui_build_box_poll "$log" offset cur_id progress_id cur_done cur_expected cur_running activities
+    ui_build_box_poll "$log" offset cur_id progress_id cur_done cur_expected cur_running activities act_types
     ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities height
     tick=$((tick + 1))
     sleep 0.15
@@ -693,7 +728,7 @@ ui_build_box() {
   wait "$pid" || status=$?
   BUILD_PID=""
 
-  ui_build_box_poll "$log" offset cur_id progress_id cur_done cur_expected cur_running activities
+  ui_build_box_poll "$log" offset cur_id progress_id cur_done cur_expected cur_running activities act_types
   if ((status != 0)); then
     activities=('build failed')
   elif ((status == 0)); then
