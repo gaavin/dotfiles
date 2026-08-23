@@ -34,11 +34,13 @@ nix_flake() {
   command nix "${NIX_EXTRA[@]}" "$@"
 }
 
+UI_WIDTH=52
+
 theme() {
   export GUM_INPUT_CURSOR_FOREGROUND="39"
   export GUM_INPUT_PROMPT_FOREGROUND="39"
   export GUM_INPUT_HEADER_FOREGROUND="39"
-  export GUM_INPUT_WIDTH="48"
+  export GUM_INPUT_WIDTH="$UI_WIDTH"
   export GUM_INPUT_CHAR_LIMIT="512"
   export GUM_CONFIRM_PROMPT_FOREGROUND="39"
   export GUM_CONFIRM_SELECTED_FOREGROUND="15"
@@ -59,22 +61,22 @@ host_arch() {
 ui_banner() {
   local host=$1 label
   label="$host · $(host_arch)"
-  {
-    gum style --bold --align center --width 44 --foreground 39 "NixOS"
-    gum style --faint --align center --width 44 --foreground 252 "$label"
-  } | gum style \
+  gum style \
     --border rounded \
     --border-foreground 39 \
-    --align center \
-    --width 48 \
+    --bold \
+    --foreground 39 \
+    --width "$UI_WIDTH" \
     --padding "1 2" \
-    --margin "1 0"
+    --margin "1 0" \
+    "NixOS" \
+    "$(gum style --faint --foreground 252 "$label")"
 }
 
 ui_installer() {
-  local body=$1
   gum format -- "## Installer
-$body" | gum style --align center --width 52 --margin "0 0 1 0"
+$1"
+  echo
 }
 
 ui_ok() {
@@ -344,28 +346,18 @@ EOF
 
 finish() {
   echo
+  local msg="reboot."
   if [[ $HOST == air ]]; then
-    {
-      gum style --align center --width 44 --foreground 42 "Done."
-      gum style --faint --align center --width 44 --foreground 252 \
-        "reboot, then hold power for the Apple boot picker if you need macOS."
-    } | gum style \
-      --border rounded \
-      --border-foreground 42 \
-      --align center \
-      --width 48 \
-      --padding "1 2"
-  else
-    {
-      gum style --align center --width 44 --foreground 42 "Done."
-      gum style --faint --align center --width 44 --foreground 252 "reboot."
-    } | gum style \
-      --border rounded \
-      --border-foreground 42 \
-      --align center \
-      --width 48 \
-      --padding "1 2"
+    msg="reboot, then hold power for the Apple boot picker if you need macOS."
   fi
+  gum style \
+    --border rounded \
+    --border-foreground 42 \
+    --foreground 42 \
+    --width "$UI_WIDTH" \
+    --padding "1 2" \
+    "Done." \
+    "$(gum style --faint --foreground 252 "$msg")"
 }
 
 if [[ $EUID -ne 0 ]]; then
