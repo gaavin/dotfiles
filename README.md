@@ -84,10 +84,8 @@ Plug in the USB and power on. Then run **Install** above.
 
 ## Rebuild
 
-```bash
-rebuild
-```
+Updates the flake and runs `nixos-rebuild switch` for the current hostname. On air, also syncs firmware from `/efi`.
 
 ```bash
-nix flake update --flake ~/dotfiles/nixos && sudo nixos-rebuild switch --flake path:$HOME/dotfiles/nixos#$(hostname)
+rebuild
 ```
