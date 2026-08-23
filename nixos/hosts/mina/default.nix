@@ -111,6 +111,10 @@
     };
   };
 
+  services.logind.settings = {
+    IdleAction = "ignore";
+  };
+
   services.udev.extraRules = ''
     # ADIOS I/O scheduler for NVMe and SSDs; BFQ for rotational HDDs
     ACTION=="add|change", KERNEL=="nvme[0-9]*|sd[a-z]*|mmcblk[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="adios"
