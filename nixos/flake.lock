@@ -194,6 +194,26 @@
         "type": "github"
       }
     },
+    "nix-grok-build": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787455761,
+        "narHash": "sha256-XheXqHnyw7ITg9q1dJyER4thv0R9mhohCfa82qrIyto=",
+        "owner": "gaavin",
+        "repo": "nix-grok-build",
+        "rev": "3a6e69f28d3a8ee937a479ec6c65906cfe075539",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gaavin",
+        "repo": "nix-grok-build",
+        "type": "github"
+      }
+    },
     "nix-osu-stable": {
       "inputs": {
         "nixpkgs": [
@@ -352,6 +372,7 @@
         "home-manager": "home-manager_2",
         "nix-battle-net": "nix-battle-net",
         "nix-epic-games-launcher": "nix-epic-games-launcher",
+        "nix-grok-build": "nix-grok-build",
         "nix-osu-stable": "nix-osu-stable",
         "nix-spotify-aarch64": "nix-spotify-aarch64",
         "nixos-apple-silicon": "nixos-apple-silicon",

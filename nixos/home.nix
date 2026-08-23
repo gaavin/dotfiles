@@ -294,6 +294,8 @@ in
         };
       };
     };
+
+    grok-build.enable = true;
   }
   // lib.optionalAttrs isX86 {
     osu-stable = {

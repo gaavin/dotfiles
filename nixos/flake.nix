@@ -47,6 +47,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nix-grok-build = {
+      url = "github:gaavin/nix-grok-build";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -67,6 +72,7 @@
       nix-battle-net,
       nix-epic-games-launcher,
       nix-spotify-aarch64,
+      nix-grok-build,
       disko,
       nixos-apple-silicon,
       ...
@@ -96,6 +102,7 @@
                 users.max = import ./home.nix;
                 sharedModules = [
                   plasma-manager.homeModules.plasma-manager
+                  nix-grok-build.homeModules.grok-build
                 ]
                 ++ nixpkgs.lib.optionals (system == "x86_64-linux") [
                   nix-osu-stable.homeModules.osu-stable
