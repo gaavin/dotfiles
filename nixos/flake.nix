@@ -43,7 +43,7 @@
     };
 
     nix-spotify-aarch64 = {
-      url = "path:/home/max/Projects/nix-spotify-aarch64";
+      url = "github:gaavin/nix-spotify-aarch64";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 

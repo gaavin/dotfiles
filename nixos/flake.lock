@@ -222,14 +222,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1787448519,
-        "narHash": "sha256-VklEUTNbsU6drtnCR0jbD1a18jq94TVM4vbNTH09rRs=",
-        "path": "/home/max/Projects/nix-spotify-aarch64",
-        "type": "path"
+        "lastModified": 1787448471,
+        "narHash": "sha256-SZetdxijIcWE6TFL3gxqSguKGrcSWt3zKHNDj+9Y8yo=",
+        "owner": "gaavin",
+        "repo": "nix-spotify-aarch64",
+        "rev": "f03f31d9c83a8b948fa4018869950c85a6c33c56",
+        "type": "github"
       },
       "original": {
-        "path": "/home/max/Projects/nix-spotify-aarch64",
-        "type": "path"
+        "owner": "gaavin",
+        "repo": "nix-spotify-aarch64",
+        "type": "github"
       }
     },
     "nixos-apple-silicon": {
