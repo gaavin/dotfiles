@@ -37,7 +37,8 @@ mina nvme0n1                          air nvme0n1
 Boot a NixOS installer, clone this repo, run the script.
 
 ```bash
-nmtui (if connecting to wifi)
+# if you need to connect to wifi
+nmtui
 
 git clone https://github.com/gaavin/dotfiles.git
 cd dotfiles
