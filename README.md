@@ -83,7 +83,7 @@ If you already have an old Asahi/UEFI stub, recreate it; old m1n1 often will not
 
 ### 2. Write the installer USB
 
-Download the latest `*-apple-silicon-*.iso` from [nixos-apple-silicon releases](https://github.com/nix-community/nixos-apple-silicon/releases). `dd` it to the disk, not a partition. Not Etcher / unetbootin.
+Download the latest `*-apple-silicon-*.iso` from [nixos-apple-silicon releases](https://github.com/nix-community/nixos-apple-silicon/releases). `dd` it to the disk, not a partition. Not Etcher / unetbootin, even Ventoy does not work on my machine.
 
 macOS (`diskutil list` → your USB, e.g. `disk4`; this erases it):
 
@@ -101,21 +101,6 @@ sudo dd if=nixos-*.iso of=/dev/sdX bs=4M status=progress oflag=direct
 ### 3. Boot the installer
 
 Plug in the USB, power on. U-Boot should boot from USB.
-
-If it boots the internal disk instead: hit a key to stop autoboot, then:
-
-```
-eficonfig
-```
-
-Change Boot Order → move `usb 0` to the top with `+` → Save → Quit → `boot`.
-
-GRUB, then the NixOS installer. At the console:
-
-```bash
-sudo su
-setfont ter-v32n
-```
 
 Wi-Fi:
 
