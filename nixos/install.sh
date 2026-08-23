@@ -360,9 +360,7 @@ if [[ $EUID -ne 0 ]]; then
     "$0" "$@"
 fi
 
-export NIX_CONFIG="experimental-features = nix-command flakes
-log-format = bar-with-logs
-"
+export NIX_CONFIG="experimental-features = nix-command flakes"
 
 if ! command -v gum >/dev/null 2>&1; then
   exec nix "${NIX_EXTRA[@]}" shell nixpkgs#gum --command env \
