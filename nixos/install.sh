@@ -115,31 +115,17 @@ ui_faint() {
   ui_ansi "2" "$1"
 }
 
-UI_INSTALLER_ICON_COL=2
-
+# Single-column markers only — emoji widths vary by terminal and break alignment.
 ui_installer_icon() {
   case $1 in
-    *Password*) printf '🔐' ;;
-    *destructive*) printf '⚠' ;;
-    *LUKS*) printf '🧩' ;;
-    *Encrypt*) printf '🔒' ;;
-    *Format*) printf '💾' ;;
-    *firmware*) printf '📦' ;;
-    *Install*) printf '⚙' ;;
+    *Password*) printf '◈' ;;
+    *destructive*) printf '!' ;;
+    *LUKS*) printf '▣' ;;
+    *Encrypt*) printf '●' ;;
+    *Format*) printf '■' ;;
+    *firmware*) printf '□' ;;
+    *Install*) printf '◎' ;;
     *) printf '▸' ;;
-  esac
-}
-
-ui_installer_icon_width() {
-  case $1 in
-    *Password*) echo 1 ;;
-    *destructive*) echo 2 ;;
-    *LUKS*) echo 2 ;;
-    *Encrypt*) echo 2 ;;
-    *Format*) echo 2 ;;
-    *firmware*) echo 2 ;;
-    *Install*) echo 2 ;;
-    *) echo 1 ;;
   esac
 }
 
@@ -193,22 +179,18 @@ ui_body() {
 }
 
 ui_installer() {
-  local body=$1 line icon color icon_w pad row
+  local body=$1 line icon color
   ui_heading "Installer"
   while IFS= read -r line; do
     [[ -n $line ]] || continue
     line="${line#- }"
     icon="$(ui_installer_icon "$line")"
     color="$(ui_installer_color "$line")"
-    icon_w="$(ui_installer_icon_width "$line")"
-    pad=$((UI_INSTALLER_ICON_COL - icon_w))
-    ((pad < 0)) && pad=0
-    row="$(printf '  %s%*s %s' "$icon" "$pad" '' "$line")"
     gum style \
       --width "$UI_WIDTH" \
       --padding "0 $UI_PAD_H" \
       --foreground "$color" \
-      "$row"
+      "  $icon $line"
   done <<< "$body"
 }
 
