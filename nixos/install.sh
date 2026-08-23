@@ -17,7 +17,6 @@ BUILD_PID=""
 BUILD_LOG_OFFSET=0
 INSTALL_ABORTED=0
 UI_SWAP_RENDERED=""
-UI_SWAP_HEIGHT=0
 UI_STACK_HEIGHT=0
 
 die() {
@@ -64,6 +63,7 @@ UI_MARGIN_BOX="1 0 1 0"
 UI_MARGIN_BEFORE="1 0 0 0"
 UI_MARGIN_AFTER="0 0 1 0"
 UI_MARGIN_STACK_GAP="0 0 0 0"
+UI_MARGIN_LIVE_TOP="1 0 0 0"
 UI_BUILD_LINES=3
 NIXOS_VERSION="26.11 unstable"
 ZRAM_ALGORITHM=lz4
@@ -288,22 +288,17 @@ ui_box_line_count() {
   awk 'END {print NR}' <<< "$text"
 }
 
-ui_box_redraw() {
-  local rendered=$1 height_name=$2
-  local -n box_height=$height_name
-  local lines clear_lines i count_text
+# Redraw swap/build on /dev/tty. Only clears UI_STACK_HEIGHT lines — the last
+# paint — so growing the stack (e.g. adding build below swap) never erases
+# static content above (storage box, step headers).
+ui_live_stack_paint() {
+  local rendered=$1
+  local new_lines clear_lines i
 
-  count_text=$rendered
-  while [[ $count_text == *$'\n' ]]; do
-    count_text="${count_text%$'\n'}"
-  done
-  lines="$(ui_box_line_count "$count_text")"
-  clear_lines=$lines
-  if ((box_height > clear_lines)); then
-    clear_lines=$box_height
-  fi
+  new_lines="$(ui_box_line_count "$rendered")"
+  clear_lines=$UI_STACK_HEIGHT
 
-  if ((box_height > 0)) && [[ -e /dev/tty ]]; then
+  if ((clear_lines > 0)) && [[ -e /dev/tty ]]; then
     for ((i = 0; i < clear_lines; i++)); do
       tput cuu1 >/dev/tty 2>&1 || break
       tput el >/dev/tty 2>&1 || true
@@ -311,40 +306,16 @@ ui_box_redraw() {
   fi
 
   ui_tty_write "${rendered}"$'\n'
-  box_height=$lines
+  UI_STACK_HEIGHT=$new_lines
 }
 
-ui_stack_redraw() {
-  local build_rendered=$1 build_height_name=$2
-  local -n build_height=$build_height_name
-  local combined count_text lines clear_lines i
-
+ui_live_stack_combine() {
+  local build_rendered=$1
   if [[ -n ${UI_SWAP_RENDERED:-} ]]; then
-    combined="${UI_SWAP_RENDERED}"$'\n'"${build_rendered}"
+    printf '%s\n%s' "$UI_SWAP_RENDERED" "$build_rendered"
   else
-    combined="$build_rendered"
+    printf '%s' "$build_rendered"
   fi
-
-  count_text=$combined
-  while [[ $count_text == *$'\n' ]]; do
-    count_text="${count_text%$'\n'}"
-  done
-  lines="$(ui_box_line_count "$count_text")"
-  clear_lines=$lines
-  if ((UI_STACK_HEIGHT > clear_lines)); then
-    clear_lines=$UI_STACK_HEIGHT
-  fi
-
-  if ((UI_STACK_HEIGHT > 0)) && [[ -e /dev/tty ]]; then
-    for ((i = 0; i < clear_lines; i++)); do
-      tput cuu1 >/dev/tty 2>&1 || break
-      tput el >/dev/tty 2>&1 || true
-    done
-  fi
-
-  ui_tty_write "${combined}"$'\n'
-  build_height="$(ui_box_line_count "$build_rendered")"
-  UI_STACK_HEIGHT=$lines
 }
 
 ui_build_truncate() {
@@ -698,17 +669,20 @@ ui_build_box_render() {
   fi
   body+="$(ui_ansi "38;5;${C_VIOLET}" "$spinner") $(ui_faint "$status")"
 
+  local margin=$UI_MARGIN_STACK_GAP
+  [[ -z ${UI_SWAP_RENDERED:-} ]] && margin=$UI_MARGIN_LIVE_TOP
+
   rendered="$(gum style \
     --border rounded \
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN_STACK_GAP" \
+    --margin "$margin" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
     "$body")"
 
-  ui_stack_redraw "$rendered" "$5"
+  ui_live_stack_paint "$(ui_live_stack_combine "$rendered")"
 }
 
 ui_build_show_errors() {
@@ -722,14 +696,14 @@ ui_build_show_errors() {
 }
 
 ui_build_box() {
-  local log out status=0 height=0 pid tick=0 offset=0
+  local log out status=0 pid tick=0 offset=0
   local cur_id=0 progress_id=0 cur_done=0 cur_expected=0 cur_running=0
   local -A act_types=()
   local -a activities=('starting…')
   log="$(mktemp)"
   out="$(mktemp)"
 
-  ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities height
+  ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities
 
   local -a run=( "$@" --log-format internal-json )
   if command -v stdbuf >/dev/null 2>&1; then
@@ -742,7 +716,7 @@ ui_build_box() {
 
   while kill -0 "$pid" 2>/dev/null; do
     ui_build_box_poll "$log" offset cur_id progress_id cur_done cur_expected cur_running activities act_types
-    ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities height
+    ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities
     tick=$((tick + 1))
     sleep 0.15
   done
@@ -759,7 +733,7 @@ ui_build_box() {
       activities=("${activities[@]:1}")
     fi
   fi
-  ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities height
+  ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities
 
   if ((status != 0)); then
     ui_build_show_errors "$log"
@@ -769,18 +743,6 @@ ui_build_box() {
 
   rm -f "$log" "$out"
   return 0
-}
-
-ui_box() {
-  gum style \
-    --border rounded \
-    --border-foreground "$C_MUTED" \
-    --width "$UI_WIDTH" \
-    --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN_BOX" \
-    --foreground "$C_TEXT" \
-    "$(ui_ansi "38;5;${C_MUTED}" "▤ storage")" \
-    "$1"
 }
 
 disk_short() {
@@ -1023,7 +985,8 @@ mina_disk_diff() {
 }
 
 ui_disk_diff_box() {
-  gum style \
+  local rendered
+  rendered="$(gum style \
     --border rounded \
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
@@ -1031,7 +994,8 @@ ui_disk_diff_box() {
     --margin "$UI_MARGIN_TIGHT" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ storage")" \
-    "$1"
+    "$1")"
+  ui_tty_write "${rendered}"$'\n'
 }
 
 air_disk_diff() {
@@ -1284,13 +1248,11 @@ ui_swap_box() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN_STACK_GAP" \
+    --margin "$UI_MARGIN_LIVE_TOP" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ swap")" \
     "$body")"
-  UI_SWAP_HEIGHT="$(ui_box_line_count "$UI_SWAP_RENDERED")"
-  ui_tty_write "${UI_SWAP_RENDERED}"$'\n'
-  UI_STACK_HEIGHT=$UI_SWAP_HEIGHT
+  ui_live_stack_paint "$UI_SWAP_RENDERED"
 }
 
 reset_zram_swap() {
