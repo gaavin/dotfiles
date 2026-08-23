@@ -51,6 +51,7 @@ C_DANGER=196
 C_MUTED=245
 C_TEXT=252
 C_VIOLET=141
+C_SPIN=201
 
 theme() {
   export GUM_INPUT_CURSOR_FOREGROUND="$C_ACCENT"
@@ -195,7 +196,39 @@ ui_step() {
 ui_spin() {
   local title=$1
   shift
-  gum spin --spinner dot --title "◌ $title" --show-error -- "$@"
+  local log status=0 pid i=0 pad line
+  local -a frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+  log="$(mktemp)"
+  pad="$(printf '%*s' "$UI_PAD_H" '')"
+
+  "$@" >"$log" 2>&1 &
+  pid=$!
+
+  while kill -0 "$pid" 2>/dev/null; do
+    line="${pad}$(ui_ansi "38;5;${C_SPIN}" "${frames[i]}") $(ui_ansi "38;5;${C_ACCENT}" "$title")"
+    if [[ -e /dev/tty ]]; then
+      printf '\r%-*s' "$UI_WIDTH" "$line" >/dev/tty
+    else
+      printf '\r%-*s' "$UI_WIDTH" "$line" >&2
+    fi
+    i=$(((i + 1) % ${#frames[@]}))
+    sleep 0.08
+  done
+
+  wait "$pid" || status=$?
+
+  if ((status == 0)); then
+    line="${pad}$(ui_ansi "38;5;${C_SUCCESS}" "✔") $(ui_ansi "38;5;${C_TEXT}" "$title")"
+  else
+    line="${pad}$(ui_ansi "38;5;${C_DANGER}" "✕") $(ui_ansi "38;5;${C_TEXT}" "$title")"
+  fi
+  ui_tty "$line"
+
+  if ((status != 0)); then
+    cat "$log" >&2
+  fi
+  rm -f "$log"
+  return "$status"
 }
 
 ui_tty() {
@@ -220,19 +253,32 @@ ui_build_json_num() {
   sed -n "s/.*\"$2\":\\([0-9]*\\).*/\\1/p" <<<"$1" | head -1
 }
 
+ui_build_json_fields105() {
+  sed -n 's/.*"fields":\[\([0-9]*\),\([0-9]*\),\([0-9]*\),\([0-9]*\)\].*/\1 \2 \3 \4/p' <<<"$1" | head -1
+}
+
 ui_build_json_text() {
   sed -n 's/.*"text":"\(.*\)","type".*/\1/p' <<<"$1" |
     sed 's/\\"/"/g; s/\\n/ /g; s/\\u001b\[[0-9;]*m//g'
 }
 
-ui_build_bar() {
-  local done=$1 expected=$2 width=28 filled=0 bar='' i
+ui_build_percent() {
+  local done=$1 expected=$2
   if ((expected > 0)); then
-    filled=$((done * width / expected))
-    if ((filled > width)); then
-      filled=$width
-    fi
+    echo $((done * 100 / expected))
+  else
+    echo 0
   fi
+}
+
+ui_build_bar() {
+  local percent=$1 width=28 filled=0 bar='' i
+  if ((percent < 0)); then
+    percent=0
+  elif ((percent > 100)); then
+    percent=100
+  fi
+  filled=$((percent * width / 100))
   for ((i = 0; i < width; i++)); do
     if ((i < filled)); then
       bar+='█'
@@ -245,24 +291,38 @@ ui_build_bar() {
 
 ui_build_box_poll() {
   local log=$1
-  local -n _done=$2 _expected=$3 _running=$4 _activity=$5
-  local line num text
+  local -n _done=$2 _expected=$3 _running=$4 _activity=$5 _builds_id=$6
+  local line num text d e r f id
 
   [[ -f $log ]] || return 0
 
   while IFS= read -r line; do
     [[ $line == @nix\ * ]] || continue
     line="${line#@nix }"
-    if [[ $line == *'"action":"progress"'* ]]; then
-      num="$(ui_build_json_num "$line" done)"
-      [[ -n $num ]] && _done=$num
-      num="$(ui_build_json_num "$line" expected)"
-      [[ -n $num ]] && _expected=$num
-      num="$(ui_build_json_num "$line" running)"
-      [[ -n $num ]] && _running=$num
+    if [[ $line == *'"action":"start"'* && $line == *'"type":104'* && $line == *'"parent":0'* ]]; then
+      id="$(ui_build_json_num "$line" id)"
+      [[ -n $id ]] && _builds_id=$id
+    elif [[ $line == *'"action":"result"'* && $line == *'"type":105'* ]]; then
+      read -r d e r f <<<"$(ui_build_json_fields105 "$line")"
+      [[ -n $e ]] || continue
+      id="$(ui_build_json_num "$line" id)"
+      if [[ -n $_builds_id && $id == "$_builds_id" ]]; then
+        _done=${d:-0}
+        _expected=$e
+        _running=${r:-0}
+      elif ((e >= _expected)); then
+        _done=${d:-0}
+        _expected=$e
+        _running=${r:-0}
+      fi
     elif [[ $line == *'"action":"start"'* ]]; then
       text="$(ui_build_json_text "$line")"
-      [[ -n $text ]] && _activity="$text"
+      [[ -n $text ]] || continue
+      if [[ $text == building* ]]; then
+        _activity="$text"
+      elif [[ $_activity == starting* ]]; then
+        _activity="$text"
+      fi
     fi
   done <"$log"
 }
@@ -270,15 +330,16 @@ ui_build_box_poll() {
 ui_build_box_render() {
   local done=$1 expected=$2 running=$3 activity=$4
   local -n _height=$5
-  local bar body rendered lines width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
-
-  bar="$(ui_build_bar "$done" "$expected")"
+  local bar body rendered lines width percent
+  width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
+  percent="$(ui_build_percent "$done" "$expected")"
   activity="$(ui_build_truncate "$activity" "$width")"
-  body="$(ui_ansi "38;5;201" "$bar") $(ui_faint "${done}/${expected}")"
+  bar="$(ui_build_bar "$percent")"
+  body="$activity"
+  body+=$'\n'"$(ui_ansi "38;5;${C_SPIN}" "$bar") $(ui_faint "${percent}/100")"
   if ((running > 0)); then
     body+=$'\n'"$(ui_faint "$running active")"
   fi
-  body+=$'\n'"$activity"
 
   rendered="$(gum style \
     --border rounded \
@@ -299,7 +360,7 @@ ui_build_box_render() {
 }
 
 ui_build_box() {
-  local log out status=0 height=0 pid
+  local log out status=0 height=0 pid builds_id=0
   local done=0 expected=0 running=0 activity='starting…'
   log="$(mktemp)"
   out="$(mktemp)"
@@ -310,14 +371,14 @@ ui_build_box() {
   pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
-    ui_build_box_poll "$log" done expected running activity
+    ui_build_box_poll "$log" done expected running activity builds_id
     ui_build_box_render "$done" "$expected" "$running" "$activity" height
     sleep 0.15
   done
 
   wait "$pid" || status=$?
 
-  ui_build_box_poll "$log" done expected running activity
+  ui_build_box_poll "$log" done expected running activity builds_id
   if ((status != 0)); then
     activity='build failed'
   elif ((expected > 0 && done >= expected)); then
