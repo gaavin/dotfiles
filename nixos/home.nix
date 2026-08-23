@@ -316,6 +316,6 @@ in
   }
   // lib.optionalAttrs (!isX86) {
     nix-spotify-aarch64.enable = true;
-    nix-osu-lazer-bin-aarch64.enable = true;
+    nix-osu-lazer-aarch64.enable = true;
   };
 }

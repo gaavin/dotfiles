@@ -47,8 +47,8 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    nix-osu-lazer-bin-aarch64 = {
-      url = "github:gaavin/nix-osu-lazer-bin-aarch64";
+    nix-osu-lazer-aarch64 = {
+      url = "github:gaavin/nix-osu-lazer-aarch64";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -77,7 +77,7 @@
       nix-battle-net,
       nix-epic-games-launcher,
       nix-spotify-aarch64,
-      nix-osu-lazer-bin-aarch64,
+      nix-osu-lazer-aarch64,
       nix-grok-build,
       disko,
       nixos-apple-silicon,
@@ -117,7 +117,7 @@
                 ]
                 ++ nixpkgs.lib.optionals (system == "aarch64-linux") [
                   nix-spotify-aarch64.homeModules.nix-spotify-aarch64
-                  nix-osu-lazer-bin-aarch64.homeModules.nix-osu-lazer-bin-aarch64
+                  nix-osu-lazer-aarch64.homeModules.nix-osu-lazer-aarch64
                 ];
                 backupFileExtension = "bak";
                 overwriteBackup = true;

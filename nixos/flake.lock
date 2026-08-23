@@ -214,23 +214,23 @@
         "type": "github"
       }
     },
-    "nix-osu-lazer-bin-aarch64": {
+    "nix-osu-lazer-aarch64": {
       "inputs": {
         "nixpkgs": [
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1787456715,
-        "narHash": "sha256-4rV0J8xQ7+BiXhEBcTOfkUduLfInGDFW5K36z0yI67U=",
+        "lastModified": 1787456869,
+        "narHash": "sha256-yg4atJnkKlTtIP7U1wrTkMTMSry3bCWWRE9YuBahAGE=",
         "owner": "gaavin",
-        "repo": "nix-osu-lazer-bin-aarch64",
-        "rev": "404a2cd6c5dfa95bc9c4eea9535106b9aabc78e0",
+        "repo": "nix-osu-lazer-aarch64",
+        "rev": "61e51aee6564d097a67fa6d78ecf8f7103bf5f51",
         "type": "github"
       },
       "original": {
         "owner": "gaavin",
-        "repo": "nix-osu-lazer-bin-aarch64",
+        "repo": "nix-osu-lazer-aarch64",
         "type": "github"
       }
     },
@@ -393,7 +393,7 @@
         "nix-battle-net": "nix-battle-net",
         "nix-epic-games-launcher": "nix-epic-games-launcher",
         "nix-grok-build": "nix-grok-build",
-        "nix-osu-lazer-bin-aarch64": "nix-osu-lazer-bin-aarch64",
+        "nix-osu-lazer-aarch64": "nix-osu-lazer-aarch64",
         "nix-osu-stable": "nix-osu-stable",
         "nix-spotify-aarch64": "nix-spotify-aarch64",
         "nixos-apple-silicon": "nixos-apple-silicon",
