@@ -455,17 +455,22 @@ zram_compression() {
 }
 
 swap_status_summary() {
-  local parts=() name size_bytes size_h base algo
+  local parts=() name size_bytes size_h base algo sys
 
   while IFS= read -r name size_bytes _; do
     [[ -n $name ]] || continue
     base="${name##*/}"
-    size_h="$(fmt_size "$size_bytes")"
     if [[ $base == zram* ]]; then
+      sys="/sys/block/$base/disksize"
+      if [[ -z $size_bytes || $size_bytes -eq 0 ]] && [[ -f $sys ]]; then
+        size_bytes=$(<"$sys")
+      fi
+      size_h="$(fmt_size "$size_bytes")"
       algo="$(zram_compression "$base")"
       parts+=("${size_h} zram ${algo}")
     else
-      parts+=("${size_h} swap partition on disk")
+      size_h="$(fmt_size "$size_bytes")"
+      parts+=("${size_h} swap partition")
     fi
   done < <(swapon --noheadings --bytes --show=NAME,SIZE 2>/dev/null)
 
