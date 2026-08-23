@@ -260,25 +260,25 @@ ui_tty_write() {
 }
 
 ui_box_redraw() {
-  local rendered=$1
-  local -n _height=$2
-  local lines clear=$ _height i
+  local rendered=$1 height_name=$2
+  local -n box_height=$height_name
+  local lines clear_lines i
 
   lines="$(printf '%b\n' "$rendered" | wc -l)"
-  clear=$lines
-  if (($_height > clear)); then
-    clear=$_height
+  clear_lines=$lines
+  if ((box_height > clear_lines)); then
+    clear_lines=$box_height
   fi
 
-  if (($_height > 0)) && [[ -e /dev/tty ]]; then
-    for ((i = 0; i < clear; i++)); do
+  if ((box_height > 0)) && [[ -e /dev/tty ]]; then
+    for ((i = 0; i < clear_lines; i++)); do
       tput cuu1 >/dev/tty 2>&1 || break
       tput el >/dev/tty 2>&1 || true
     done
   fi
 
   ui_tty_write "${rendered}"$'\n'
-  _height=$lines
+  box_height=$lines
 }
 
 ui_build_truncate() {
@@ -394,7 +394,6 @@ ui_build_box_poll() {
 
 ui_build_box_render() {
   local done=$1 expected=$2 running=$3 activity=$4 tick=$5
-  local -n _height=$6
   local bar body rendered width percent label
 
   width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
@@ -425,7 +424,7 @@ ui_build_box_render() {
     "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
     "$body")"
 
-  ui_box_redraw "$rendered" _height
+  ui_box_redraw "$rendered" "$6"
 }
 
 ui_build_show_errors() {
