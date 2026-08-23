@@ -14,7 +14,6 @@ HOST=""
 STEP_N=0
 STEP_TOTAL=0
 BUILD_PID=""
-BUILD_LOG_OFFSET=0
 INSTALL_ABORTED=0
 UI_SWAP_RENDERED=""
 UI_STACK_HEIGHT=0
@@ -64,7 +63,7 @@ UI_MARGIN_BEFORE="1 0 0 0"
 UI_MARGIN_AFTER="0 0 1 0"
 UI_MARGIN_STACK_GAP="0 0 0 0"
 UI_MARGIN_LIVE_TOP="1 0 0 0"
-UI_BUILD_LINES=3
+UI_BUILD_LINES=6
 NIXOS_VERSION="26.11 unstable"
 ZRAM_ALGORITHM=lz4
 ZRAM_MEMORY_PERCENT=100
@@ -318,358 +317,36 @@ ui_live_stack_combine() {
   fi
 }
 
-ui_build_truncate() {
-  local text=$1 max=$2
-  text="${text//[$'\t\r\n']/ }"
-  if ((${#text} > max)); then
-    printf '%s…' "${text:0:max-1}"
-  else
-    printf '%s' "$text"
-  fi
-}
-
-ui_build_json_num() {
-  sed -n "s/.*\"$2\":\\([0-9]*\\).*/\\1/p" <<<"$1" | head -1
-}
-
-ui_build_json_fields105() {
-  sed -n 's/.*"fields"[[:space:]]*:[[:space:]]*\[\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)[[:space:]]*\].*/\1 \2 \3 \4/p' <<<"$1" | head -1
-}
-
-ui_build_json_fields106() {
-  sed -n 's/.*"fields"[[:space:]]*:[[:space:]]*\[\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)[[:space:]]*\].*/\1 \2/p' <<<"$1" | head -1
-}
-
-ui_build_json_text() {
-  sed -n 's/.*"text":"\(.*\)","\(level\|type\)".*/\1/p' <<<"$1" |
-    sed 's/\\"/"/g; s/\\n/ /g; s/\\u001b\[[0-9;]*m//g'
-}
-
-ui_build_json_msg() {
-  sed -n 's/.*"msg":"\(.*\)","\(level\|raw_msg\|type\)".*/\1/p' <<<"$1" |
-    sed 's/\\"/"/g; s/\\n/ /g; s/\\u001b\[[0-9;]*m//g'
-}
-
-ui_build_json_id() {
-  sed -n 's/.*"id":\([0-9]*\).*/\1/p' <<<"$1" | head -1
-}
-
-ui_build_json_activity_type() {
-  grep -o '"type":[0-9]*' <<<"$1" | tail -1 | sed 's/"type"://'
-}
-
-ui_build_short_url() {
-  local url=$1
-  if [[ $url =~ ^https?://([^/:]+) ]]; then
-    echo "${BASH_REMATCH[1]}"
-  else
-    ui_build_truncate "$url" 20
-  fi
-}
-
-ui_build_store_name() {
-  sed -n 's|.*/nix/store/[a-z0-9]\{32\}-\([^/'\'']*\).*|\1|p' <<<"$1" | head -1
-}
-
-ui_build_format_line() {
-  local text=$1 max=$2 name flake
-
-  if [[ $text =~ evaluating[[:space:]]+derivation[[:space:]]+\'([^\']+) ]]; then
-    flake="${BASH_REMATCH[1]}"
-    flake="${flake#flake:}"
-    flake="${flake#path:}"
-    text="evaluating ${flake}"
-  elif [[ $text =~ building[[:space:]]+\'/nix/store/ ]]; then
-    name="$(ui_build_store_name "$text")"
-    text="building ${name:-${text#building }}"
-  elif [[ $text =~ copying[[:space:]]+path[[:space:]]+\'/nix/store/ ]]; then
-    name="$(ui_build_store_name "$text")"
-    text="copying ${name:-${text#copying path }}"
-  elif [[ $text =~ copying[[:space:]]+\"([^\"]+)\"[[:space:]]+to[[:space:]]+the[[:space:]]+store ]]; then
-    text="copying $(basename "${BASH_REMATCH[1]}")"
-  elif [[ $text =~ ^evaluating[[:space:]]+(.+) ]]; then
-    flake="${BASH_REMATCH[1]}"
-    flake="${flake#flake:}"
-    flake="${flake#path:}"
-    if [[ $flake == /* ]]; then
-      text="evaluating $(basename "$flake")"
-    else
-      text="evaluating $flake"
-    fi
-  elif [[ $text =~ fetching[[:space:]]+Git[[:space:]]+repository[[:space:]]+\'([^\']+) ]]; then
-    text="fetching ${BASH_REMATCH[1]}"
-  elif [[ $text =~ querying[[:space:]]+info[[:space:]]+about ]]; then
-    name="$(ui_build_store_name "$text")"
-    if [[ -n $name ]]; then
-      text="querying ${name}"
-    else
-      text='querying paths'
-    fi
-  elif [[ $text =~ (downloading|unpacking)[[:space:]]+\'([^\']+) ]]; then
-    text="${BASH_REMATCH[1]} $(ui_build_short_url "${BASH_REMATCH[2]}")"
-  elif [[ $text =~ substituting[[:space:]]+.*[[:space:]]+from[[:space:]]+\'([^\']+) ]]; then
-    text="substituting $(ui_build_short_url "${BASH_REMATCH[1]}")"
-  elif [[ $text =~ (downloading|unpacking)[[:space:]]+\"([^\"]+) ]]; then
-    text="${BASH_REMATCH[1]} $(ui_build_short_url "${BASH_REMATCH[2]}")"
-  fi
-
-  ui_build_truncate "$text" "$max"
-}
-
-ui_build_push_activity() {
-  local -n _acts=$1
-  local line=$2
-
-  [[ -n $line ]] || return 0
-  if ((${#_acts[@]} > 0)) && [[ ${_acts[-1]} == "$line" ]]; then
-    return 0
-  fi
-  _acts+=("$line")
-  if ((${#_acts[@]} > UI_BUILD_LINES)); then
-    _acts=("${_acts[@]:1}")
-  fi
-}
-
-ui_build_activity_block() {
-  local -n _acts=$1
-  local i start n=${#_acts[@]}
-  local -a lines=()
-
-  start=$((n > UI_BUILD_LINES ? n - UI_BUILD_LINES : 0))
-  for ((i = start; i < start + UI_BUILD_LINES; i++)); do
-    if ((i < n)); then
-      if ((i == n - 1)); then
-        lines+=("$(ui_ansi "38;5;${C_TEXT}" "${_acts[i]}")")
-      else
-        lines+=("$(ui_faint "${_acts[i]}")")
-      fi
-    fi
-  done
-  (IFS=$'\n'; printf '%s' "${lines[*]}")
-}
-
-ui_build_percent() {
-  local done=$1 expected=$2
-  if ((expected > 0)); then
-    echo $((done * 100 / expected))
-  else
-    echo 0
-  fi
-}
-
-ui_build_json_fetch_status() {
-  sed -n 's/.*"fields"[[:space:]]*:\["\([^"]*\)".*/\1/p' <<<"$1" | head -1 |
-    sed 's/\\"/"/g; s/\\n/ /g'
-}
-
-ui_build_parse_status_progress() {
-  local status=$1
-  local -n _done=$2 _expected=$3
-
-  if [[ $status =~ ([0-9]+)/([0-9]+)[[:space:]]+objects ]]; then
-    _done=${BASH_REMATCH[1]}
-    _expected=${BASH_REMATCH[2]}
-    return 0
-  fi
-  if [[ $status =~ \[([0-9]+)/([0-9]+)[[:space:]]+KiB ]]; then
-    _done=$((${BASH_REMATCH[1]} * 1024))
-    _expected=$((${BASH_REMATCH[2]} * 1024))
-    return 0
-  fi
-  if [[ $status =~ ([0-9]+(\.[0-9]+)?)[[:space:]]+MiB ]]; then
-    _done=$(awk -v m="${BASH_REMATCH[1]}" 'BEGIN {printf "%.0f", m * 1024 * 1024}')
-    _expected=0
-    return 0
-  fi
-  return 1
-}
-
-ui_build_progress_apply() {
-  local id=$1 done=$2 expected=$3 running=$4 atype=$5
-  local -n _pid=$6 _done=$7 _expected=$8 _running=$9
-
-  done=${done:-0}
-  expected=${expected:-0}
-  running=${running:-0}
-  atype=${atype:-0}
-  [[ -n $id ]] || return 0
-
-  # actCopyPaths / actBuilds counters stay at 0 until a whole batch finishes.
-  if ((done == 0)) && [[ $atype == 103 || $atype == 104 ]]; then
-    return 0
-  fi
-
-  if ((expected > 0)); then
-    # Do not replace live byte progress with a fresh 0/N from another download.
-    if ((done == 0 && _done > 0)); then
-      return 0
-    fi
-    # Ignore small path-count totals when waiting for byte progress.
-    if ((done == 0 && _done == 0 && expected < 4096 && atype != 101)); then
-      return 0
-    fi
-    if [[ -z $_pid ]] \
-      || [[ $atype == 101 && ( -z $_pid || $id == "$_pid" || _done == 0 ) ]] \
-      || ((done > _done)) \
-      || ((done == _done && expected > _expected)) \
-      || ((_done == 0 && (atype == 101 || expected >= 4096))); then
-      _pid=$id
-      _done=$done
-      _expected=$expected
-      _running=$running
-    fi
-  elif ((done > 0)); then
-    if [[ -z $_pid ]] || ((_expected == 0 && done >= _done)) || ((done > _done)); then
-      _pid=$id
-      _done=$done
-      _expected=0
-      _running=$running
-    fi
-  fi
-}
-
-ui_build_spinner_frame() {
-  local tick=$1
-  local -a frames=('|' '/' '-' '\')
-  echo "${frames[tick % ${#frames[@]}]}"
-}
-
-ui_build_status() {
-  local done=$1 expected=$2
-
-  if ((expected > 0 && done > 0)); then
-    local pct=$((done * 100 / expected))
-    if ((pct > 0 && pct < 100)); then
-      echo "${pct}%"
-      return
-    fi
-  fi
-  if ((done > 0)); then
-    fmt_size "$done"
-    return
-  fi
-  echo 'working…'
-}
-
-ui_build_bar() {
-  local percent=$1 width=28 filled=0 bar='' i
-  if ((percent < 0)); then
-    percent=0
-  elif ((percent > 100)); then
-    percent=100
-  fi
-  filled=$((percent * width / 100))
-  for ((i = 0; i < width; i++)); do
-    if ((i < filled)); then
-      bar+='█'
-    else
-      bar+='░'
-    fi
-  done
-  printf '%s' "$bar"
-}
-
-ui_build_bar_indeterminate() {
-  local tick=$1 width=28 pos bar='' i
-  pos=$((tick % width))
-  for ((i = 0; i < width; i++)); do
-    if ((i == pos)); then
-      bar+='█'
-    else
-      bar+='░'
-    fi
-  done
-  printf '%s' "$bar"
-}
-
-ui_build_box_poll() {
+ui_build_read_lines() {
   local log=$1
-  local -n _offset=$2 _cur_id=$3 _progress_id=$4 _cur_done=$5 _cur_expected=$6 _cur_running=$7 _activities=$8 _act_types=$9
-  local chunk line text msg id atype d e r f status parsed_done parsed_expected new_bytes
-  local width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
+  local -n _lines=$2
+  local -a raw=()
 
+  _lines=()
   [[ -f $log ]] || return 0
-  new_bytes=$(wc -c <"$log")
-  ((new_bytes > _offset)) || return 0
 
-  chunk="$(tail -c +$((_offset + 1)) "$log")"
-  _offset=$new_bytes
+  mapfile -t raw < <(
+    tr '\r' '\n' <"$log" |
+      sed -e 's/[[:space:]]*$//' |
+      awk 'NF' |
+      tail -n "$UI_BUILD_LINES"
+  )
 
-  while IFS= read -r line; do
-    [[ $line == @nix\ * ]] || continue
-    line="${line#@nix }"
-    id="$(ui_build_json_id "$line")"
-
-    if [[ $line == *'"action":"start"'* ]]; then
-      atype="$(ui_build_json_activity_type "$line")"
-      [[ -n $id && -n $atype ]] && _act_types[$id]=$atype
-      text="$(ui_build_json_text "$line")"
-      if [[ -n $text ]]; then
-        ui_build_push_activity _activities "$(ui_build_format_line "$text" "$width")"
-        if [[ $text == building\ * ]]; then
-          _progress_id=0
-          _cur_done=0
-          _cur_expected=0
-          _cur_running=0
-        fi
-      fi
-      if [[ $atype == 101 ]]; then
-        _progress_id=$id
-        _cur_done=0
-        _cur_expected=0
-        _cur_running=0
-      fi
-      [[ -n $id ]] && _cur_id=$id
-    elif [[ $line == *'"action":"stop"'* ]]; then
-      if [[ -n $id && $id == "$_progress_id" ]]; then
-        if ((_cur_expected > 0)); then
-          _cur_done=$_cur_expected
-        fi
-        _progress_id=0
-        _cur_running=0
-      fi
-    elif [[ $line == *'"action":"result"'* && $line == *'"type":105'* ]]; then
-      read -r d e r f <<<"$(ui_build_json_fields105 "$line")"
-      atype=${_act_types[$id]:-0}
-      ui_build_progress_apply "$id" "$d" "$e" "$r" "$atype" \
-        _progress_id _cur_done _cur_expected _cur_running
-    elif [[ $line == *'"action":"result"'* && $line == *'"type":108'* ]]; then
-      status="$(ui_build_json_fetch_status "$line")"
-      if [[ -n $status ]] \
-        && ui_build_parse_status_progress "$status" parsed_done parsed_expected; then
-        ui_build_progress_apply "$id" "$parsed_done" "$parsed_expected" 0 "${_act_types[$id]:-0}" \
-          _progress_id _cur_done _cur_expected _cur_running
-      fi
-    elif [[ $line == *'"action":"msg"'* ]]; then
-      msg="$(ui_build_json_msg "$line")"
-      [[ -n $msg ]] || continue
-      if [[ $msg == *error:* ]]; then
-        ui_build_push_activity _activities "$(ui_build_format_line "$msg" "$width")"
-      elif [[ $msg == copying\ * || $msg == building\ * || $msg == evaluating\ * \
-        || $msg == downloading\ * || $msg == unpacking\ * || $msg == querying\ * \
-        || $msg == *substituting* ]]; then
-        ui_build_push_activity _activities "$(ui_build_format_line "$msg" "$width")"
-      fi
-    fi
-  done <<<"$chunk"
+  _lines=( "${raw[@]}" )
 }
 
 ui_build_box_render() {
-  local cur_done=$1 cur_expected=$2 tick=$3
-  local -n _activities=$4
-  local body rendered width spinner status
+  local -n _lines=$1
+  local body rendered margin
 
-  width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
-  body="$(ui_build_activity_block _activities)"
-  spinner="$(ui_build_spinner_frame "$tick")"
-  status="$(ui_build_status "$cur_done" "$cur_expected")"
-
-  if [[ -n $body ]]; then
-    body+=$'\n'
+  if ((${#_lines[@]} > 0)); then
+    body="$(printf '%s\n' "${_lines[@]}")"
+    body="${body%$'\n'}"
+  else
+    body="$(ui_faint 'starting…')"
   fi
-  body+="$(ui_ansi "38;5;${C_VIOLET}" "$spinner") $(ui_faint "$status")"
 
-  local margin=$UI_MARGIN_STACK_GAP
+  margin=$UI_MARGIN_STACK_GAP
   [[ -z ${UI_SWAP_RENDERED:-} ]] && margin=$UI_MARGIN_LIVE_TOP
 
   rendered="$(gum style \
@@ -687,61 +364,44 @@ ui_build_box_render() {
 
 ui_build_show_errors() {
   local log=$1
-  grep -E '"action":"msg"' "$log" 2>/dev/null |
-    grep -E 'error:|warning:' |
-    sed -n 's/.*"msg":"\([^"]*\)".*/\1/p' |
-    sed 's/\\"/"/g; s/\\u001b\[[0-9;]*m//g' |
-    tail -8 >&2 || true
-  grep -E '^error:|^warning:' "$log" 2>/dev/null | tail -5 >&2 || true
+  [[ -f $log ]] || return 0
+  tail -20 "$log" >&2 || true
 }
 
 ui_build_box() {
-  local log out status=0 pid tick=0 offset=0
-  local cur_id=0 progress_id=0 cur_done=0 cur_expected=0 cur_running=0
-  local -A act_types=()
-  local -a activities=('starting…')
+  local log status=0 pid
+  local -a lines=()
   log="$(mktemp)"
-  out="$(mktemp)"
 
-  ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities
+  ui_build_box_render lines
 
-  local -a run=( "$@" --log-format internal-json )
+  local -a run=( "$@" )
   if command -v stdbuf >/dev/null 2>&1; then
     run=( stdbuf -oL -eL "${run[@]}" )
   fi
-  "${run[@]}" >"$out" 2>"$log" &
+  "${run[@]}" >"$log" 2>&1 &
   pid=$!
   BUILD_PID=$pid
-  BUILD_LOG_OFFSET=0
 
   while kill -0 "$pid" 2>/dev/null; do
-    ui_build_box_poll "$log" offset cur_id progress_id cur_done cur_expected cur_running activities act_types
-    ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities
-    tick=$((tick + 1))
-    sleep 0.15
+    ui_build_read_lines "$log" lines
+    ui_build_box_render lines
+    sleep 0.12
   done
 
   wait "$pid" || status=$?
   BUILD_PID=""
 
-  ui_build_box_poll "$log" offset cur_id progress_id cur_done cur_expected cur_running activities act_types
-  if ((status != 0)); then
-    activities=('build failed')
-  elif ((status == 0)); then
-    activities+=('done')
-    if ((${#activities[@]} > UI_BUILD_LINES)); then
-      activities=("${activities[@]:1}")
-    fi
-  fi
-  ui_build_box_render "$cur_done" "$cur_expected" "$tick" activities
+  ui_build_read_lines "$log" lines
+  ui_build_box_render lines
 
   if ((status != 0)); then
     ui_build_show_errors "$log"
-    rm -f "$log" "$out"
+    rm -f "$log"
     return "$status"
   fi
 
-  rm -f "$log" "$out"
+  rm -f "$log"
   return 0
 }
 
