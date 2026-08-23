@@ -310,5 +310,8 @@ in
       enable = true;
       protonVersion = pkgs.proton-cachyos_x86_64_v3;
     };
+  }
+  // lib.optionalAttrs (!isX86) {
+    nix-spotify-aarch64.enable = true;
   };
 }

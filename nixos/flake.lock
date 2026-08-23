@@ -215,6 +215,23 @@
         "type": "github"
       }
     },
+    "nix-spotify-aarch64": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787448519,
+        "narHash": "sha256-VklEUTNbsU6drtnCR0jbD1a18jq94TVM4vbNTH09rRs=",
+        "path": "/home/max/Projects/nix-spotify-aarch64",
+        "type": "path"
+      },
+      "original": {
+        "path": "/home/max/Projects/nix-spotify-aarch64",
+        "type": "path"
+      }
+    },
     "nixos-apple-silicon": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -333,6 +350,7 @@
         "nix-battle-net": "nix-battle-net",
         "nix-epic-games-launcher": "nix-epic-games-launcher",
         "nix-osu-stable": "nix-osu-stable",
+        "nix-spotify-aarch64": "nix-spotify-aarch64",
         "nixos-apple-silicon": "nixos-apple-silicon",
         "nixpkgs": "nixpkgs_3",
         "plasma-manager": "plasma-manager",

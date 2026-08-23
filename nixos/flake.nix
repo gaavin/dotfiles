@@ -42,6 +42,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nix-spotify-aarch64 = {
+      url = "path:/home/max/Projects/nix-spotify-aarch64";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -61,6 +66,7 @@
       nix-osu-stable,
       nix-battle-net,
       nix-epic-games-launcher,
+      nix-spotify-aarch64,
       disko,
       nixos-apple-silicon,
       ...
@@ -95,6 +101,9 @@
                   nix-osu-stable.homeModules.osu-stable
                   nix-battle-net.homeModules.battle-net
                   nix-epic-games-launcher.homeModules.epic-games-launcher
+                ]
+                ++ nixpkgs.lib.optionals (system == "aarch64-linux") [
+                  nix-spotify-aarch64.homeModules.nix-spotify-aarch64
                 ];
                 backupFileExtension = "bak";
                 overwriteBackup = true;
