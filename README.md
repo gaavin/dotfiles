@@ -1,6 +1,3 @@
-> [!WARNING]
-> **This project was primarily written by an LLM (AI). Review the code yourself before running it. Use at your own risk.**
-
 <div align="center">
 
 **NixOS** · Flakes · Plasma 6 · mina (AMD) · air (M1)
@@ -11,6 +8,9 @@
 [![License](https://img.shields.io/badge/license-personal-lightgrey)](https://github.com/gaavin/dotfiles)
 
 </div>
+
+> [!WARNING]
+> **This project was primarily written by an LLM (AI). Review the code yourself before running it. Use at your own risk.**
 
 ---
 
