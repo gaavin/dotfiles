@@ -13,6 +13,8 @@ SECRETS=""
 HOST=""
 STEP_N=0
 STEP_TOTAL=0
+BUILD_PID=""
+BUILD_LOG_OFFSET=0
 
 die() {
   if command -v gum >/dev/null 2>&1; then
@@ -24,6 +26,11 @@ die() {
 }
 
 cleanup() {
+  if [[ -n ${BUILD_PID:-} ]] && kill -0 "$BUILD_PID" 2>/dev/null; then
+    kill "$BUILD_PID" 2>/dev/null || true
+    wait "$BUILD_PID" 2>/dev/null || true
+  fi
+  BUILD_PID=""
   reset_zram_swap
   if [[ -n ${SECRETS:-} && -d $SECRETS ]]; then
     rm -rf "$SECRETS"
@@ -37,6 +44,7 @@ nix_flake() {
 
 UI_WIDTH=64
 UI_PAD_H=2
+UI_MARGIN="1 0 1 0"
 NIXOS_VERSION="26.11 unstable"
 ZRAM_ALGORITHM=lz4
 ZRAM_MEMORY_PERCENT=100
@@ -128,7 +136,7 @@ ui_banner() {
     --align center \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "1 0 0 0" \
+    --margin "$UI_MARGIN" \
     "❄ NixOS" \
     "$(ui_ansi "2;38;5;${C_VIOLET}" "◈ Version $NIXOS_VERSION")" \
     "$(ui_faint "$label")"
@@ -138,7 +146,7 @@ ui_heading() {
   gum style \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "1 0 0 0" \
+    --margin "$UI_MARGIN" \
     --bold \
     --foreground "$C_ACCENT" \
     "◆ $1"
@@ -169,35 +177,31 @@ ui_installer() {
 }
 
 ui_ok() {
-  gum style \
-    --width "$UI_WIDTH" \
-    --padding "0 $UI_PAD_H" \
-    --foreground "$C_SUCCESS" \
-    "✔ $1"
+  ui_line "$(ui_ansi "38;5;${C_SUCCESS}" "✔ $1")"
 }
 
 ui_warn() {
+  ui_line "$(ui_ansi "38;5;${C_WARN}" "⚠ $1")"
+}
+
+ui_line() {
   gum style \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --foreground "$C_WARN" \
-    "⚠ $1"
+    --margin "$UI_MARGIN" \
+    "$@"
 }
 
 ui_step() {
   STEP_N=$((STEP_N + 1))
-  gum style \
-    --width "$UI_WIDTH" \
-    --padding "0 $UI_PAD_H" \
-    --margin "1 0 0 0" \
-    "$(ui_ansi "1;38;5;${C_ACCENT}" "▸ $STEP_N/$STEP_TOTAL") $(ui_ansi "1;38;5;${C_TEXT}" "$1")"
+  ui_line "$(ui_ansi "1;38;5;${C_ACCENT}" "▸ $STEP_N/$STEP_TOTAL") $(ui_ansi "1;38;5;${C_TEXT}" "$1")"
 }
 
 ui_spin() {
   local title=$1
   shift
   local log status=0 pid i=0 pad line
-  local -a frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+  local -a frames=('|' '/' '-' '\')
   log="$(mktemp)"
   pad="$(printf '%*s' "$UI_PAD_H" '')"
 
@@ -207,24 +211,26 @@ ui_spin() {
   while kill -0 "$pid" 2>/dev/null; do
     line="${pad}$(ui_ansi "38;5;${C_SPIN}" "${frames[i]}") $(ui_ansi "38;5;${C_ACCENT}" "$title")"
     if [[ -e /dev/tty ]]; then
-      printf '\r%-*s' "$UI_WIDTH" "$line" >/dev/tty
+      printf '\r\033[K%s' "$line" >/dev/tty
     else
-      printf '\r%-*s' "$UI_WIDTH" "$line" >&2
+      printf '\r\033[K%s' "$line" >&2
     fi
     i=$(((i + 1) % ${#frames[@]}))
-    sleep 0.08
+    sleep 0.1
   done
 
   wait "$pid" || status=$?
 
-  if ((status == 0)); then
-    line="${pad}$(ui_ansi "38;5;${C_SUCCESS}" "✔") $(ui_ansi "38;5;${C_TEXT}" "$title")"
+  if [[ -e /dev/tty ]]; then
+    printf '\r\033[K' >/dev/tty
   else
-    line="${pad}$(ui_ansi "38;5;${C_DANGER}" "✕") $(ui_ansi "38;5;${C_TEXT}" "$title")"
+    printf '\r\033[K' >&2
   fi
-  ui_tty "$line"
 
-  if ((status != 0)); then
+  if ((status == 0)); then
+    ui_line "$(ui_ansi "38;5;${C_SUCCESS}" "✔") $(ui_ansi "38;5;${C_TEXT}" "$title")"
+  else
+    ui_line "$(ui_ansi "38;5;${C_DANGER}" "✕") $(ui_ansi "38;5;${C_TEXT}" "$title")"
     cat "$log" >&2
   fi
   rm -f "$log"
@@ -289,54 +295,80 @@ ui_build_bar() {
   printf '%s' "$bar"
 }
 
+ui_build_bar_indeterminate() {
+  local tick=$1 width=28 pos bar='' i
+  pos=$((tick % width))
+  for ((i = 0; i < width; i++)); do
+    if ((i == pos)); then
+      bar+='█'
+    else
+      bar+='░'
+    fi
+  done
+  printf '%s' "$bar"
+}
+
 ui_build_box_poll() {
   local log=$1
-  local -n _done=$2 _expected=$3 _running=$4 _activity=$5 _builds_id=$6
-  local line num text d e r f id
+  local -n _offset=$2 _done=$3 _expected=$4 _running=$5 _activity=$6 _builds_id=$7
+  local chunk line text d e r f id new_bytes
 
   [[ -f $log ]] || return 0
+  new_bytes=$(wc -c <"$log")
+  ((new_bytes > _offset)) || return 0
+
+  chunk="$(tail -c +$((_offset + 1)) "$log")"
+  _offset=$new_bytes
 
   while IFS= read -r line; do
     [[ $line == @nix\ * ]] || continue
     line="${line#@nix }"
-    if [[ $line == *'"action":"start"'* && $line == *'"type":104'* && $line == *'"parent":0'* ]]; then
-      id="$(ui_build_json_num "$line" id)"
-      [[ -n $id ]] && _builds_id=$id
+    if [[ $line == *'"action":"start"'* && $line == *'"parent":0'* ]]; then
+      if [[ $line == *'"type":104'* ]]; then
+        id="$(ui_build_json_num "$line" id)"
+        [[ -n $id ]] && _builds_id=$id
+      fi
     elif [[ $line == *'"action":"result"'* && $line == *'"type":105'* ]]; then
       read -r d e r f <<<"$(ui_build_json_fields105 "$line")"
-      [[ -n $e ]] || continue
+      [[ -n $e && $e -gt 0 ]] || continue
       id="$(ui_build_json_num "$line" id)"
       if [[ -n $_builds_id && $id == "$_builds_id" ]]; then
         _done=${d:-0}
         _expected=$e
         _running=${r:-0}
-      elif ((e >= _expected)); then
+      elif ((e > _expected || (e == _expected && d > _done))); then
         _done=${d:-0}
         _expected=$e
         _running=${r:-0}
       fi
     elif [[ $line == *'"action":"start"'* ]]; then
       text="$(ui_build_json_text "$line")"
-      [[ -n $text ]] || continue
-      if [[ $text == building* ]]; then
-        _activity="$text"
-      elif [[ $_activity == starting* ]]; then
-        _activity="$text"
-      fi
+      [[ -n $text ]] && _activity="$text"
+    elif [[ $line == *'"action":"msg"'* && $line == *error:* ]]; then
+      text="$(sed -n 's/.*"msg":"\([^"]*error:[^"]*\)".*/\1/p' <<<"$line" |
+        sed 's/\\"/"/g; s/\\u001b\[[0-9;]*m//g')"
+      [[ -n $text ]] && _activity="$text"
     fi
-  done <"$log"
+  done <<<"$chunk"
 }
 
 ui_build_box_render() {
-  local done=$1 expected=$2 running=$3 activity=$4
-  local -n _height=$5
-  local bar body rendered lines width percent
+  local done=$1 expected=$2 running=$3 activity=$4 tick=$5
+  local -n _height=$6
+  local bar body rendered lines width percent label
+
   width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
-  percent="$(ui_build_percent "$done" "$expected")"
   activity="$(ui_build_truncate "$activity" "$width")"
-  bar="$(ui_build_bar "$percent")"
+  if ((expected > 0)); then
+    percent="$(ui_build_percent "$done" "$expected")"
+    label="${percent}/100"
+    bar="$(ui_build_bar "$percent")"
+  else
+    label='evaluating…'
+    bar="$(ui_build_bar_indeterminate "$tick")"
+  fi
   body="$activity"
-  body+=$'\n'"$(ui_ansi "38;5;${C_SPIN}" "$bar") $(ui_faint "${percent}/100")"
+  body+=$'\n'"$(ui_ansi "38;5;${C_SPIN}" "$bar") $(ui_faint "$label")"
   if ((running > 0)); then
     body+=$'\n'"$(ui_faint "$running active")"
   fi
@@ -346,7 +378,7 @@ ui_build_box_render() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "1 0 0 0" \
+    --margin "$UI_MARGIN" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
     "$body")"
@@ -359,41 +391,55 @@ ui_build_box_render() {
   _height=$lines
 }
 
+ui_build_show_errors() {
+  local log=$1
+  grep -E '"action":"msg"' "$log" 2>/dev/null |
+    grep -E 'error:|warning:' |
+    sed -n 's/.*"msg":"\([^"]*\)".*/\1/p' |
+    sed 's/\\"/"/g; s/\\u001b\[[0-9;]*m//g' |
+    tail -8 >&2 || true
+  grep -E '^error:|^warning:' "$log" 2>/dev/null | tail -5 >&2 || true
+}
+
 ui_build_box() {
-  local log out status=0 height=0 pid builds_id=0
+  local log out status=0 height=0 pid tick=0 builds_id=0 offset=0
   local done=0 expected=0 running=0 activity='starting…'
   log="$(mktemp)"
   out="$(mktemp)"
 
-  ui_build_box_render "$done" "$expected" "$running" "$activity" height
+  ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
 
   "$@" --log-format internal-json >"$out" 2>"$log" &
   pid=$!
+  BUILD_PID=$pid
+  BUILD_LOG_OFFSET=0
 
   while kill -0 "$pid" 2>/dev/null; do
-    ui_build_box_poll "$log" done expected running activity builds_id
-    ui_build_box_render "$done" "$expected" "$running" "$activity" height
-    sleep 0.15
+    ui_build_box_poll "$log" offset done expected running activity builds_id
+    ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
+    tick=$((tick + 1))
+    sleep 0.25
   done
 
   wait "$pid" || status=$?
+  BUILD_PID=""
 
-  ui_build_box_poll "$log" done expected running activity builds_id
+  ui_build_box_poll "$log" offset done expected running activity builds_id
   if ((status != 0)); then
     activity='build failed'
   elif ((expected > 0 && done >= expected)); then
     activity='done'
   fi
-  ui_build_box_render "$done" "$expected" "$running" "$activity" height
+  ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
 
   if ((status != 0)); then
-    grep -E '^error:|^warning:' "$log" 2>/dev/null | tail -5 >&2 || true
+    ui_build_show_errors "$log"
     rm -f "$log" "$out"
     return "$status"
   fi
 
-  tail -1 "$out"
   rm -f "$log" "$out"
+  return 0
 }
 
 ui_box() {
@@ -402,7 +448,7 @@ ui_box() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "1 0 0 0" \
+    --margin "$UI_MARGIN" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ storage")" \
     "$1"
@@ -639,7 +685,7 @@ ui_disk_diff_box() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "1 0 0 0" \
+    --margin "$UI_MARGIN" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ storage")" \
     "$1"
@@ -895,7 +941,7 @@ ui_swap_box() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "1 0 0 0" \
+    --margin "$UI_MARGIN" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ swap")" \
     "$body"
@@ -947,7 +993,7 @@ enable_zram_swap() {
 activate_target_swap() {
   local dev activated=0
 
-  vgchange -ay 2>/dev/null || true
+  vgchange -ay >/dev/null 2>&1 || true
   udevadm settle 2>/dev/null || true
 
   for dev in /dev/mapper/mina-swap /dev/mapper/air-swap; do
@@ -1001,13 +1047,8 @@ install_system() {
     ui_ok "⚙ linux-asahi will compile from source"
   fi
   ensure_swap
-  system="$(
-    ui_build_box nix "${NIX_EXTRA[@]}" build \
-      "path:$flake#nixosConfigurations.$HOST.config.system.build.toplevel" \
-      --print-out-paths
-  )" || die "failed to build system"
-  ui_spin "Installing system..." \
-    nixos-install --system "$system" --no-root-password --no-channel-copy --root /mnt
+  ui_build_box nixos-install --no-root-password --no-channel-copy --root /mnt \
+    --flake "path:$flake#$HOST" || die "failed to install system"
   set_passwords
 }
 
@@ -1137,7 +1178,7 @@ finish() {
     --align center \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "1 0 0 0" \
+    --margin "$UI_MARGIN" \
     "✔ Done." \
     "$(ui_faint "$msg")"
 }
