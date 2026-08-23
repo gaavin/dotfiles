@@ -146,20 +146,32 @@ ui_installer_color() {
 }
 
 ui_banner() {
-  local host=$1 label
-  label="$(host_icon "$host") $host · $(host_arch)"
+  local host=$1 installer=$2
+  local line icon color
+  local -a body=(
+    "$(ui_ansi "1;38;5;${C_ACCENT}" "❄ NixOS")"
+    "$(ui_ansi "2;38;5;${C_VIOLET}" "◈ Version $NIXOS_VERSION")"
+    "$(ui_faint "$(host_icon "$host") $host · $(host_arch)")"
+  )
+
+  if [[ -n $installer ]]; then
+    body+=("" "$(ui_ansi "1;38;5;${C_ACCENT}" "◆ Installer")")
+    while IFS= read -r line; do
+      [[ -n $line ]] || continue
+      line="${line#- }"
+      icon="$(ui_installer_icon "$line")"
+      color="$(ui_installer_color "$line")"
+      body+=("$(ui_ansi "38;5;${color}" "  ${icon} ${line}")")
+    done <<< "$installer"
+  fi
+
   gum style \
     --border rounded \
     --border-foreground "$C_ACCENT" \
-    --bold \
-    --foreground "$C_ACCENT" \
-    --align center \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
     --margin "$UI_MARGIN_SECTION" \
-    "❄ NixOS" \
-    "$(ui_ansi "2;38;5;${C_VIOLET}" "◈ Version $NIXOS_VERSION")" \
-    "$(ui_faint "$label")"
+    "${body[@]}"
 }
 
 ui_section_line() {
@@ -170,34 +182,6 @@ ui_section_line() {
     --padding "0 $UI_PAD_H" \
     --margin "$UI_MARGIN_SECTION" \
     "$(ui_ansi "1;38;5;${C_ACCENT}" "$marker") $*"
-}
-
-ui_heading() {
-  ui_section_line "◆" "$(ui_ansi "1;38;5;${C_ACCENT}" "$1")"
-}
-
-ui_body() {
-  gum style \
-    --width "$UI_WIDTH" \
-    --padding "0 $UI_PAD_H" \
-    --foreground "$C_TEXT" \
-    "$@"
-}
-
-ui_installer() {
-  local body=$1 line icon color
-  ui_heading "Installer"
-  while IFS= read -r line; do
-    [[ -n $line ]] || continue
-    line="${line#- }"
-    icon="$(ui_installer_icon "$line")"
-    color="$(ui_installer_color "$line")"
-    gum style \
-      --width "$UI_WIDTH" \
-      --padding "0 $UI_PAD_H" \
-      --foreground "$color" \
-      "  $icon $line"
-  done <<< "$body"
 }
 
 ui_ok() {
@@ -1651,30 +1635,26 @@ else
   HOST=$detected
 fi
 
-ui_banner "$HOST"
-
 SECRETS="$(mktemp -d /run/nixos-install.XXXXXX)"
 chmod 700 "$SECRETS"
 
 if [[ $HOST == air ]]; then
   STEP_TOTAL=6
-else
-  STEP_TOTAL=3
-fi
-STEP_N=0
-
-if [[ $HOST == air ]]; then
-  ui_installer "- Passwords
+  INSTALLER_OUTLINE="- Passwords
 - Create LUKS partition
 - Encrypt disk
 - Format and mount
 - Copy firmware
 - Install NixOS"
 else
-  ui_installer "- Passwords
+  STEP_TOTAL=3
+  INSTALLER_OUTLINE="- Passwords
 - Set up the disks (destructive)
 - Install NixOS"
 fi
+STEP_N=0
+
+ui_banner "$HOST" "$INSTALLER_OUTLINE"
 
 ui_step "Passwords"
 ask_password "$SECRETS/luks" "Disk encryption password"
