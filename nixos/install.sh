@@ -58,6 +58,8 @@ UI_PAD_H=2
 UI_MARGIN_SECTION="1 0 0 0"
 UI_MARGIN_TIGHT="0 0 0 0"
 UI_MARGIN_BOX="1 0 1 0"
+UI_MARGIN_BEFORE="1 0 0 0"
+UI_MARGIN_AFTER="0 0 1 0"
 UI_BUILD_LINES=3
 NIXOS_VERSION="26.11 unstable"
 ZRAM_ALGORITHM=lz4
@@ -286,12 +288,28 @@ ui_tty_write() {
   fi
 }
 
+ui_box_line_count() {
+  local text=$1
+  while [[ $text == *$'\n' ]]; do
+    text="${text%$'\n'}"
+  done
+  if [[ -z $text ]]; then
+    echo 0
+    return
+  fi
+  awk 'END {print NR}' <<< "$text"
+}
+
 ui_box_redraw() {
   local rendered=$1 height_name=$2
   local -n box_height=$height_name
-  local lines clear_lines i
+  local lines clear_lines i count_text
 
-  lines="$(printf '%b\n' "$rendered" | wc -l)"
+  count_text=$rendered
+  while [[ $count_text == *$'\n' ]]; do
+    count_text="${count_text%$'\n'}"
+  done
+  lines="$(ui_box_line_count "$count_text")"
   clear_lines=$lines
   if ((box_height > clear_lines)); then
     clear_lines=$box_height
@@ -557,7 +575,7 @@ ui_build_box_render() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN_TIGHT" \
+    --margin "$UI_MARGIN_BEFORE" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
     "$body")"
@@ -1123,7 +1141,7 @@ ui_swap_box() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN_TIGHT" \
+    --margin "$UI_MARGIN_AFTER" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ swap")" \
     "$body"
