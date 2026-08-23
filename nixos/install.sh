@@ -198,6 +198,14 @@ ui_spin() {
   gum spin --spinner dot --title "◌ $title" --show-error -- "$@"
 }
 
+ui_tty() {
+  if [[ -e /dev/tty ]]; then
+    printf '%s\n' "$@" >/dev/tty
+  else
+    printf '%s\n' "$@" >&2
+  fi
+}
+
 ui_build_truncate() {
   local text=$1 max=$2
   text="${text//[$'\t\r\n']/ }"
@@ -284,10 +292,9 @@ ui_build_box_render() {
 
   lines="$(printf '%s\n' "$rendered" | wc -l)"
   if (($_height > 0)); then
-    tput cuu "$_height" 2>/dev/null || true
-    tput ed 2>/dev/null || true
+    { tput cuu "$_height" && tput ed; } >/dev/tty 2>&1 || true
   fi
-  printf '%s\n' "$rendered"
+  ui_tty "$rendered"
   _height=$lines
 }
 
@@ -296,6 +303,8 @@ ui_build_box() {
   local done=0 expected=0 running=0 activity='starting…'
   log="$(mktemp)"
   out="$(mktemp)"
+
+  ui_build_box_render "$done" "$expected" "$running" "$activity" height
 
   "$@" --log-format internal-json >"$out" 2>"$log" &
   pid=$!
