@@ -24,6 +24,7 @@ die() {
 }
 
 cleanup() {
+  reset_zram_swap
   if [[ -n ${SECRETS:-} && -d $SECRETS ]]; then
     rm -rf "$SECRETS"
   fi
@@ -471,12 +472,34 @@ swap_status_summary() {
   (IFS=', '; echo "${parts[*]}")
 }
 
+reset_zram_swap() {
+  local dev sys name
+
+  while IFS= read -r dev; do
+    [[ -n $dev ]] || continue
+    swapoff "$dev" 2>/dev/null || true
+  done < <(swapon --noheadings --show=NAME 2>/dev/null | grep -E 'zram[0-9]+$' || true)
+
+  for sys in /sys/block/zram*; do
+    [[ -e $sys/disksize ]] || continue
+    name=$(basename "$sys")
+    swapoff "/dev/$name" 2>/dev/null || true
+    if [[ -e $sys/reset ]]; then
+      echo 0 >"$sys/reset" 2>/dev/null || true
+    else
+      echo 0 >"$sys/disksize" 2>/dev/null || true
+    fi
+  done
+
+  if [[ -d /sys/module/zram ]]; then
+    rmmod zram 2>/dev/null || true
+  fi
+}
+
 enable_zram_swap() {
   local dev=/dev/zram0 mem_kb size_bytes
 
-  if swapon --noheadings --show=NAME 2>/dev/null | grep -qx 'zram0'; then
-    return 0
-  fi
+  reset_zram_swap
 
   modprobe zram num_devices=1 2>/dev/null || return 1
   [[ -e /sys/block/zram0/disksize ]] || return 1
