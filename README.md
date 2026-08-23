@@ -47,7 +47,6 @@ nmtui
 git clone https://github.com/gaavin/dotfiles.git
 cd dotfiles
 sudo ./nixos/install.sh
-reboot
 ```
 
 > [!CAUTION]

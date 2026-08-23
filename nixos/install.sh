@@ -401,7 +401,7 @@ ui_build_box_render() {
   activity="$(ui_build_truncate "$activity" "$width")"
   if ((expected > 0)); then
     percent="$(ui_build_percent "$done" "$expected")"
-    label="${percent}/100"
+    label="${percent}%"
     bar="$(ui_build_bar "$percent")"
   else
     label='evaluating…'
@@ -1207,10 +1207,8 @@ EOF
 }
 
 finish() {
-  local msg="↻ reboot."
-  if [[ $HOST == air ]]; then
-    msg="↻ reboot, then hold power for the Apple boot picker if you need macOS."
-  fi
+  local choice header
+
   gum style \
     --border rounded \
     --border-foreground "$C_SUCCESS" \
@@ -1220,8 +1218,27 @@ finish() {
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
     --margin "$UI_MARGIN_SECTION" \
-    "✔ Done." \
-    "$(ui_faint "$msg")"
+    "✔ Done."
+
+  if [[ ${INSTALL_YES:-} == 1 ]]; then
+    return 0
+  fi
+
+  header="Installation complete — what next?"
+  if [[ $HOST == air ]]; then
+    header="$header
+$(ui_faint "Hold power at boot for the Apple boot picker if you need macOS.")"
+  fi
+
+  choice="$(
+    gum choose --height 2 --header "$header" \
+      "↻ Reboot into NixOS" \
+      "✕ Exit to shell"
+  )" || exit 0
+
+  case $choice in
+    *Reboot*) reboot ;;
+  esac
 }
 
 if [[ $EUID -ne 0 ]]; then
