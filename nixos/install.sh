@@ -198,6 +198,17 @@ ui_spin() {
   gum spin --spinner dot --title "◌ $title" --show-error -- "$@"
 }
 
+ui_nix_progress() {
+  local title=$1
+  shift
+  gum style \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --foreground "$C_ACCENT" \
+    "$title"
+  "$@"
+}
+
 ui_box() {
   gum style \
     --border rounded \
@@ -546,8 +557,8 @@ disko_run() {
   if [[ $HOST == air && $1 == *destroy* ]]; then
     die "refusing Disko destroy on air"
   fi
-  ui_spin "Formatting and mounting..." \
-    nix "${NIX_EXTRA[@]}" run github:nix-community/disko/latest -- \
+  ui_nix_progress "Formatting and mounting..." \
+    nix "${NIX_EXTRA[@]}" --log-format bar-with-logs run github:nix-community/disko/latest -- \
     --mode "$1" \
     "${@:2}" \
     --flake "path:$SCRIPT_DIR#$HOST"
