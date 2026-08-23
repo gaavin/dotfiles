@@ -48,19 +48,27 @@ theme() {
   export GUM_LOG_LEVEL="info"
 }
 
+host_subtitle() {
+  local host=$1 arch
+  arch="$(uname -m)-linux"
+  case $host in
+    air) printf '%s · %s · Apple Silicon' "$host" "$arch" ;;
+    *) printf '%s · %s' "$host" "$arch" ;;
+  esac
+}
+
 ui_banner() {
   local subtitle=$1
-  gum style \
+  {
+    gum style --bold --foreground 39 "NixOS"
+    gum style --faint --foreground 252 "$subtitle"
+  } | gum style \
     --border rounded \
     --border-foreground 39 \
-    --foreground 39 \
-    --bold \
     --align center \
     --width 48 \
     --padding "1 2" \
-    --margin "1 0" \
-    "NixOS" \
-    "$(gum style --foreground 252 --faint "$subtitle")"
+    --margin "1 0"
 }
 
 ui_ok() {
@@ -89,6 +97,7 @@ ui_box() {
     --border-foreground 245 \
     --padding "0 1" \
     --foreground 252 \
+    --width 48 \
     "$1"
 }
 
@@ -332,23 +341,25 @@ EOF
 finish() {
   echo
   if [[ $HOST == air ]]; then
-    gum style \
+    {
+      gum style --bold --foreground 42 "Done."
+      gum style --foreground 252 "reboot, then hold power for the Apple boot picker if you need macOS."
+    } | gum style \
       --border rounded \
       --border-foreground 42 \
-      --foreground 42 \
+      --align center \
       --padding "1 2" \
-      --width 48 \
-      "Done." \
-      "$(gum style --foreground 252 "reboot, then hold power for the Apple boot picker if you need macOS.")"
+      --width 48
   else
-    gum style \
+    {
+      gum style --bold --foreground 42 "Done."
+      gum style --foreground 252 "reboot."
+    } | gum style \
       --border rounded \
       --border-foreground 42 \
-      --foreground 42 \
+      --align center \
       --padding "1 2" \
-      --width 48 \
-      "Done." \
-      "$(gum style --foreground 252 "reboot.")"
+      --width 48
   fi
 }
 
@@ -382,7 +393,7 @@ else
   HOST=$detected
 fi
 
-ui_banner "$HOST"
+ui_banner "$(host_subtitle "$HOST")"
 
 SECRETS="$(mktemp -d /run/nixos-install.XXXXXX)"
 chmod 700 "$SECRETS"
@@ -395,7 +406,7 @@ fi
 STEP_N=0
 
 if [[ $HOST == air ]]; then
-  gum format -- "## Plan
+  gum format -- "## Installer
 - Passwords
 - Create LUKS partition
 - Encrypt disk
@@ -404,7 +415,7 @@ if [[ $HOST == air ]]; then
 - Install NixOS
 - Set passwords"
 else
-  gum format -- "## Plan
+  gum format -- "## Installer
 - Passwords
 - Partition disk
 - Install NixOS
