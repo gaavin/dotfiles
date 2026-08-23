@@ -38,6 +38,12 @@ nix_flake() {
 UI_WIDTH=64
 UI_PAD_H=2
 NIXOS_VERSION="26.11 unstable"
+ZRAM_ALGORITHM=lz4
+ZRAM_MEMORY_PERCENT=100
+ZRAM_SWAP_PRIORITY=100
+SWAP_ZRAM_KIND=zram
+SWAP_DISK_KIND=swap
+SWAP_DISK_DETAIL=partition
 C_ACCENT=39
 C_SUCCESS=42
 C_WARN=214
@@ -210,19 +216,17 @@ disk_short() {
 
 fmt_size() {
   local bytes=$1
-  if [[ $bytes =~ ^[0-9]+$ ]]; then
-    if command -v numfmt >/dev/null 2>&1; then
-      numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null && return
-    fi
-    awk -v b="$bytes" 'BEGIN {
-      split("B KiB MiB GiB TiB", u, " ")
-      i = 1
-      while (b >= 1024 && i < 5) { b /= 1024; i++ }
-      printf "%.1f%s", b, u[i]
-    }'
-  else
+  if [[ ! $bytes =~ ^[0-9]+$ ]]; then
     echo "$bytes"
+    return
   fi
+  awk -v b="$bytes" 'BEGIN {
+    split("B KiB MiB GiB TiB", u, " ")
+    i = 1
+    while (b >= 1024 && i < 5) { b /= 1024; i++ }
+    if (i == 1) printf "%.0f%s", b, u[i]
+    else printf "%.1f%s", b, u[i]
+  }'
 }
 
 swapon_table() {
@@ -580,17 +584,17 @@ zram_compression() {
   local algo sys
 
   [[ -n $dev ]] || {
-    echo lz4
+    echo "$ZRAM_ALGORITHM"
     return
   }
 
   sys="/sys/block/$dev/comp_algorithm"
   [[ -f $sys ]] || {
-    echo lz4
+    echo "$ZRAM_ALGORITHM"
     return
   }
   algo=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$sys")
-  echo "${algo:-lz4}"
+  echo "${algo:-$ZRAM_ALGORITHM}"
 }
 
 swap_size_for() {
@@ -631,9 +635,23 @@ swap_size_for() {
   echo "unknown"
 }
 
+swap_chart_row() {
+  local icon=$1 size=$2 kind=$3 detail=$4 color=$5 size_w=$6 kind_w=$7 detail_w=$8
+  printf '%s\n' "$(
+    ui_ansi "38;5;${color}" "$(
+      printf '  %s  %*s  %-*s  %-*s' "$icon" "$size_w" "$size" "$kind_w" "$kind" "$detail_w" "$detail"
+    )"
+  )"
+}
+
 collect_swap_lines() {
   local name type size_bytes base algo size_h
-  local -a zram_lines=() disk_lines=()
+  local -a icons=() sizes=() kinds=() details=() colors=()
+  local size_w=0 kind_w detail_w row i
+
+  kind_w=${#SWAP_DISK_KIND}
+  (( ${#SWAP_ZRAM_KIND} > kind_w )) && kind_w=${#SWAP_ZRAM_KIND}
+  detail_w=${#SWAP_DISK_DETAIL}
 
   while read -r name type size_bytes _ _; do
     [[ -n $name ]] || continue
@@ -641,14 +659,29 @@ collect_swap_lines() {
     size_h="$(swap_size_for "$name" "$size_bytes")"
     if [[ $base == zram* ]]; then
       algo="$(zram_compression "$base")"
-      zram_lines+=("$(ui_ansi "38;5;${C_VIOLET}" "  ⚡ ${size_h}  zram ${algo}")")
+      [[ ${#algo} -gt $detail_w ]] && detail_w=${#algo}
+      icons+=("⚡")
+      sizes+=("$size_h")
+      kinds+=("$SWAP_ZRAM_KIND")
+      details+=("$algo")
+      colors+=("$C_VIOLET")
     else
-      disk_lines+=("$(ui_ansi "38;5;${C_SUCCESS}" "  💾 ${size_h}  swap partition")")
+      icons+=("💾")
+      sizes+=("$size_h")
+      kinds+=("$SWAP_DISK_KIND")
+      details+=("$SWAP_DISK_DETAIL")
+      colors+=("$C_SUCCESS")
     fi
   done < <(swapon_table)
 
-  ((${#zram_lines[@]})) && printf '%s\n' "${zram_lines[@]}"
-  ((${#disk_lines[@]})) && printf '%s\n' "${disk_lines[@]}"
+  for size_h in "${sizes[@]}"; do
+    (( ${#size_h} > size_w )) && size_w=${#size_h}
+  done
+
+  for i in "${!icons[@]}"; do
+    swap_chart_row "${icons[$i]}" "${sizes[$i]}" "${kinds[$i]}" "${details[$i]}" \
+      "${colors[$i]}" "$size_w" "$kind_w" "$detail_w"
+  done
 }
 
 ui_swap_box() {
@@ -698,15 +731,15 @@ enable_zram_swap() {
   modprobe zram num_devices=1 2>/dev/null || return 1
   [[ -e /sys/block/zram0/disksize ]] || return 1
 
-  echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null ||
+  echo "$ZRAM_ALGORITHM" > /sys/block/zram0/comp_algorithm 2>/dev/null ||
     echo lzo > /sys/block/zram0/comp_algorithm 2>/dev/null || true
 
   mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-  size_bytes=$((mem_kb * 1024))
+  size_bytes=$((mem_kb * 1024 * ZRAM_MEMORY_PERCENT / 100))
   echo "$size_bytes" > /sys/block/zram0/disksize
 
   mkswap "$dev" >/dev/null 2>&1 || return 1
-  swapon -p 100 "$dev" 2>/dev/null || swapon "$dev" 2>/dev/null || return 1
+  swapon -p "$ZRAM_SWAP_PRIORITY" "$dev" 2>/dev/null || swapon "$dev" 2>/dev/null || return 1
 }
 
 activate_target_swap() {
