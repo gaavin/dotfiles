@@ -12,22 +12,6 @@
 > [!WARNING]
 > **This project was primarily written by an LLM (AI). Review the code yourself before running it. Use at your own risk.**
 
----
-
-```
-mina nvme0n1                          air nvme0n1
-├── ESP   2G    vfat   /efi           ├── iBoot
-└── LUKS                              ├── macOS
-    ├── root  xfs  /                  ├── Asahi stub
-    └── swap  8G                      ├── ESP     vfat   /efi
-                                      ├── LUKS
-                                      │   ├── root  xfs  /
-                                      │   └── swap  8G
-                                      └── Recovery
-```
-
----
-
 ## Install
 
 Boot a NixOS installer, clone this repo, run the script.
