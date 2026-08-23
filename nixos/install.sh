@@ -298,7 +298,7 @@ disk_entry_desc() {
   if [[ $title == "$name" && -n $label && $label != "-" ]]; then
     title="$label"
   fi
-  if [[ $type == part && $fstype == crypto_LUKS && $title == "$name" ]]; then
+  if [[ $type == part && $fstype == crypto_LUKS && ( -z $partlabel || $partlabel == "-" ) && $title == "$name" ]]; then
     title="nixos"
   fi
 
@@ -320,7 +320,7 @@ disk_entry_desc() {
 disk_build_parent_map() {
   local -n out=$1
   local -n typemap=$2
-  local line crypt_name= name pk
+  local line crypt_name= luks_part= name pk
 
   while IFS= read -r line; do
     [[ -z $line ]] && continue
@@ -330,7 +330,13 @@ disk_build_parent_map() {
     out[$NAME]=${PKNAME:-}
     typemap[$NAME]=${TYPE:-}
     [[ ${TYPE:-} == crypt ]] && crypt_name=$NAME
+    [[ ${TYPE:-} == part && ${FSTYPE:-} == crypto_LUKS ]] && luks_part=$NAME
   done < <(disk_lsblk)
+
+  for name in "${!out[@]}"; do
+    [[ ${typemap[$name]} == crypt && -z ${out[$name]} && -n $luks_part ]] &&
+      out[$name]=$luks_part
+  done
 
   for name in "${!out[@]}"; do
     [[ ${typemap[$name]} == lvm && $name == *-* && -z ${out[$name]} ]] &&
@@ -338,38 +344,35 @@ disk_build_parent_map() {
   done
 
   for name in "${!out[@]}"; do
-    [[ ${typemap[$name]} == lvm && $name != *-* && -z ${out[$name]} && -n $crypt_name ]] &&
-      out[$name]=$crypt_name
+    [[ ${typemap[$name]} != lvm || $name != *-* ]] && continue
+    pk=${out[$name]}
+    [[ -n $pk && -z ${out[$pk]:-} && -n $crypt_name ]] && out[$name]=$crypt_name
   done
 
   for name in "${!out[@]}"; do
-    pk=${out[$name]}
-    [[ -n $pk && -z ${out[$pk]:-} && ${typemap[$pk]:-} == lvm && $pk != *-* && -n $crypt_name ]] &&
-      out[$pk]=$crypt_name
+    [[ ${typemap[$name]} == lvm && $name != *-* && -z ${out[$name]} && -n $crypt_name ]] &&
+      out[$name]=$crypt_name
   done
 }
 
-disk_display_indent() {
-  local name=$1 type=$2
-  local -n parents=$3
+disk_tree_depth() {
+  local name=$1
+  local -n parents=$2
   local depth=0 pk="${parents[$name]:-}"
 
-  while [[ -n $pk && $pk != "$(disk_short)" ]]; do
+  while [[ -n $pk ]]; do
     depth=$((depth + 1))
+    [[ $pk == "$(disk_short)" ]] && break
     pk="${parents[$pk]:-}"
   done
 
-  case $type in
-    lvm)
-      if [[ $name == *-* ]]; then
-        disk_diff_indent 1
-        return
-      fi
-      ;;
-  esac
+  echo "$depth"
+}
 
-  if (( depth >= 2 )); then
-    disk_diff_indent 1
+disk_display_indent() {
+  local depth=$1
+  if (( depth > 0 )); then
+    disk_diff_indent $((depth - 1))
   else
     disk_diff_indent 0
   fi
@@ -389,7 +392,7 @@ disk_diff_header() {
 }
 
 mina_disk_diff() {
-  local line removed=0 indent spec
+  local line removed=0 depth indent spec
   local -A pkmap=()
   local -A devtypes=()
 
@@ -409,7 +412,8 @@ mina_disk_diff() {
       esac
       [[ ${TYPE:-} == lvm && $NAME != *-* ]] && continue
       removed=1
-      indent="$(disk_display_indent "$NAME" "$TYPE" pkmap)"
+      depth="$(disk_tree_depth "$NAME" pkmap)"
+      indent="$(disk_display_indent "$depth")"
       spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
       ui_diff_del "${indent}${spec}"
     done < <(disk_lsblk)
@@ -420,9 +424,10 @@ mina_disk_diff() {
 
     ui_diff_ctx ""
     ui_diff_add "💿 ESP  2G  vfat  /efi"
-    ui_diff_add "🔒 nixos  LUKS  cryptroot"
-    ui_diff_add "  📦 swap  8G"
-    ui_diff_add "  📦 root  xfs  /"
+    ui_diff_add "💿 nixos  LUKS"
+    ui_diff_add "  🔒 cryptroot"
+    ui_diff_add "    📦 swap  8G"
+    ui_diff_add "    📦 root  xfs  /"
   }
 }
 
@@ -454,7 +459,7 @@ air_disk_diff() {
       eval "$line"
       [[ ${TYPE:-} == disk ]] && continue
       [[ ${TYPE:-} == part ]] || continue
-      indent="$(disk_display_indent "$NAME" "$TYPE" pkmap)"
+      indent="$(disk_display_indent "$(disk_tree_depth "$NAME" pkmap)")"
       spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
       role="$(part_role_air "$PARTLABEL" "$FSTYPE" "$PARTTYPENAME")"
       case $role in
