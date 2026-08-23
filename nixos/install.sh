@@ -400,8 +400,12 @@ ui_cpu_tick() {
   CPU_PREV_IDLE=$idle_sum
 }
 
+ui_box_label() {
+  ui_ansi "38;5;${C_MUTED}" "▸ $1"
+}
+
 ui_cpu_sparkline() {
-  local usage chars='▁▂▃▄▅▆▇█' spark='' idx
+  local usage chars='_.:-=+*#' spark='' idx
 
   for usage in "${CPU_SAMPLES[@]}"; do
     idx=$((usage * 7 / 100))
@@ -416,17 +420,17 @@ ui_cpu_box_render() {
 
   spark="$(ui_cpu_sparkline)"
   pct=${CPU_USAGE:-0}
-  width=$((UI_WIDTH - UI_PAD_H * 2 - 8))
+  width=$((UI_WIDTH - UI_PAD_H * 2 - 10))
   if ((${#spark} < width)); then
-    spark+="$(printf '%*s' "$((width - ${#spark}))" '' | tr ' ' '▁')"
+    spark+="$(printf '%*s' "$((width - ${#spark}))" '' | tr ' ' '_')"
   elif ((${#spark} > width)); then
     spark="${spark: -width}"
   fi
 
   if ((${#CPU_SAMPLES[@]} == 0)); then
-    body="$(ui_faint "$spark")"
+    body="$(ui_faint "  $spark")"
   else
-    body="$(ui_ansi "38;5;${C_VIOLET}" "$(printf '%2s%%' "$pct")") $(ui_faint "$spark")"
+    body="$(ui_ansi "38;5;${C_VIOLET}" "$(printf '  %2s%%' "$pct")") $(ui_faint "$spark")"
   fi
 
   if [[ -z ${UI_SWAP_RENDERED:-} ]]; then
@@ -442,12 +446,16 @@ ui_cpu_box_render() {
     --padding "0 $UI_PAD_H" \
     --margin "$margin" \
     --foreground "$C_TEXT" \
-    "$(ui_ansi "38;5;${C_MUTED}" "▤ cpu")" \
+    "$(ui_box_label cpu)" \
     "$body")"
 }
 
 ui_live_stack_refresh() {
   local build_rendered=${1:-}
+
+  if [[ $(swap_active_bytes) -gt 0 ]]; then
+    ui_swap_box_render || true
+  fi
   ui_cpu_tick
   ui_cpu_box_render
   ui_live_stack_paint "$(ui_live_stack_combine "$build_rendered")"
@@ -492,7 +500,7 @@ ui_build_box_render() {
     --padding "0 $UI_PAD_H" \
     --margin "$margin" \
     --foreground "$C_TEXT" \
-    "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
+    "$(ui_box_label build)" \
     "$body")"
 
   ui_live_stack_refresh "$rendered"
@@ -792,7 +800,7 @@ ui_disk_diff_box() {
     --padding "0 $UI_PAD_H" \
     --margin "$UI_MARGIN_TIGHT" \
     --foreground "$C_TEXT" \
-    "$(ui_ansi "38;5;${C_MUTED}" "▤ storage")" \
+    "$(ui_box_label storage)" \
     "$1")"
   ui_tty_write "${rendered}"$'\n'
 }
@@ -995,7 +1003,7 @@ swap_chart_row() {
 }
 
 collect_swap_lines() {
-  local name type size_bytes base algo size_h
+  local name type size_bytes used_bytes base algo size_h used_h size_label
   local -a icons=() sizes=() kinds=() details=() colors=()
   local size_w=0 kind_w detail_w row i
 
@@ -1005,21 +1013,27 @@ collect_swap_lines() {
   fi
   detail_w=${#SWAP_DISK_DETAIL}
 
-  while read -r name type size_bytes _ _; do
+  while read -r name type size_bytes used_bytes _ _; do
     [[ -n $name ]] || continue
     base="${name##*/}"
     size_h="$(swap_size_for "$name" "$size_bytes")"
+    if [[ $used_bytes =~ ^[0-9]+$ ]]; then
+      used_h="$(fmt_size "$used_bytes")"
+      size_label="${used_h}/${size_h}"
+    else
+      size_label="$size_h"
+    fi
     if [[ $base == zram* ]]; then
       algo="$(zram_compression "$base")"
       [[ ${#algo} -gt $detail_w ]] && detail_w=${#algo}
       icons+=("⚡")
-      sizes+=("$size_h")
+      sizes+=("$size_label")
       kinds+=("$SWAP_ZRAM_KIND")
       details+=("$algo")
       colors+=("$C_VIOLET")
     else
       icons+=("💾")
-      sizes+=("$size_h")
+      sizes+=("$size_label")
       kinds+=("$SWAP_DISK_KIND")
       details+=("$SWAP_DISK_DETAIL")
       colors+=("$C_SUCCESS")
@@ -1038,7 +1052,7 @@ collect_swap_lines() {
   done
 }
 
-ui_swap_box() {
+ui_swap_box_render() {
   local body
   body="$(collect_swap_lines)"
   [[ -n $body ]] || return 1
@@ -1049,8 +1063,12 @@ ui_swap_box() {
     --padding "0 $UI_PAD_H" \
     --margin "$UI_MARGIN_LIVE_TOP" \
     --foreground "$C_TEXT" \
-    "$(ui_ansi "38;5;${C_MUTED}" "▤ swap")" \
+    "$(ui_box_label swap)" \
     "$body")"
+}
+
+ui_swap_box() {
+  ui_swap_box_render || return 1
   ui_live_stack_refresh ""
 }
 
