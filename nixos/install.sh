@@ -894,6 +894,20 @@ disk_entry_desc() {
   printf '%s %s' "$icon" "$spec"
 }
 
+# Keep in sync with hosts/mina/default.nix (ESP) and configuration.nix (root).
+disk_planned_mount_opts() {
+  case $1 in
+    /efi) echo "umask=0077" ;;
+    /) echo "relatime,lazytime" ;;
+  esac
+}
+
+disk_mount_opts_suffix() {
+  local mount=$1 opts
+  opts="$(disk_planned_mount_opts "$mount")"
+  [[ -n $opts ]] && printf '  (%s)' "$opts"
+}
+
 disk_build_parent_map() {
   local -n out=$1
   local -n typemap=$2
@@ -1000,11 +1014,11 @@ mina_disk_diff() {
     fi
 
     ui_diff_ctx ""
-    ui_diff_add "💿 ESP  2G  vfat  /efi"
+    ui_diff_add "💿 ESP  2G  vfat  /efi$(disk_mount_opts_suffix /efi)"
     ui_diff_add "💿 nixos  LUKS"
     ui_diff_add "  🔒 cryptroot"
     ui_diff_add "    📦 swap  8G"
-    ui_diff_add "    📦 root  xfs  /"
+    ui_diff_add "    📦 root  xfs  /$(disk_mount_opts_suffix /)"
   }
 }
 
@@ -1048,7 +1062,7 @@ air_disk_diff() {
     ui_diff_ctx ""
     ui_diff_add "🔒 nixos  LUKS  cryptroot  (free space)"
     ui_diff_add "  📦 swap  8G"
-    ui_diff_add "  📦 root  xfs  /"
+    ui_diff_add "  📦 root  xfs  /$(disk_mount_opts_suffix /)"
   }
 }
 
