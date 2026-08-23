@@ -251,6 +251,36 @@ ui_tty() {
   fi
 }
 
+ui_tty_write() {
+  if [[ -e /dev/tty ]]; then
+    printf '%b' "$1" >/dev/tty
+  else
+    printf '%b' "$1" >&2
+  fi
+}
+
+ui_box_redraw() {
+  local rendered=$1
+  local -n _height=$2
+  local lines clear=$ _height i
+
+  lines="$(printf '%b\n' "$rendered" | wc -l)"
+  clear=$lines
+  if (($_height > clear)); then
+    clear=$_height
+  fi
+
+  if (($_height > 0)) && [[ -e /dev/tty ]]; then
+    for ((i = 0; i < clear; i++)); do
+      tput cuu1 >/dev/tty 2>&1 || break
+      tput el >/dev/tty 2>&1 || true
+    done
+  fi
+
+  ui_tty_write "${rendered}"$'\n'
+  _height=$lines
+}
+
 ui_build_truncate() {
   local text=$1 max=$2
   text="${text//[$'\t\r\n']/ }"
@@ -365,7 +395,7 @@ ui_build_box_poll() {
 ui_build_box_render() {
   local done=$1 expected=$2 running=$3 activity=$4 tick=$5
   local -n _height=$6
-  local bar body rendered lines width percent label
+  local bar body rendered width percent label
 
   width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
   activity="$(ui_build_truncate "$activity" "$width")"
@@ -381,6 +411,8 @@ ui_build_box_render() {
   body+=$'\n'"$(ui_ansi "38;5;${C_VIOLET}" "$bar") $(ui_faint "$label")"
   if ((running > 0)); then
     body+=$'\n'"$(ui_faint "$running active")"
+  else
+    body+=$'\n'"$(ui_faint " ")"
   fi
 
   rendered="$(gum style \
@@ -393,16 +425,7 @@ ui_build_box_render() {
     "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
     "$body")"
 
-  lines="$(printf '%s\n' "$rendered" | wc -l)"
-  if (($_height > 0)); then
-    { tput cuu "$_height" && tput ed; } >/dev/tty 2>&1 || true
-  fi
-  if [[ -e /dev/tty ]]; then
-    printf '%s' "$rendered" >/dev/tty
-  else
-    printf '%s' "$rendered" >&2
-  fi
-  _height=$lines
+  ui_box_redraw "$rendered" _height
 }
 
 ui_build_show_errors() {
@@ -449,9 +472,6 @@ ui_build_box() {
     activity='done'
   fi
   ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
-  if [[ -e /dev/tty ]]; then
-    printf '\n' >/dev/tty
-  fi
 
   if ((status != 0)); then
     ui_build_show_errors "$log"
