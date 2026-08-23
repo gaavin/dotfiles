@@ -375,11 +375,9 @@ ui_build_box() {
 
   ui_build_box_render lines
 
-  local -a run=( "$@" )
-  if command -v stdbuf >/dev/null 2>&1; then
-    run=( stdbuf -oL -eL "${run[@]}" )
-  fi
-  "${run[@]}" >"$log" 2>&1 &
+  # Do not wrap with stdbuf: it sets LD_PRELOAD=libstdbuf.so, which nixos-install
+  # children inherit and cannot load against the target /nix/store (harmless ERROR spam).
+  "$@" >"$log" 2>&1 &
   pid=$!
   BUILD_PID=$pid
 
