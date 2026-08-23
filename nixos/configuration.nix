@@ -1,8 +1,6 @@
 { pkgs, lib, ... }:
 
 {
-  imports = lib.optional (builtins.pathExists ./install-passwords.nix) ./install-passwords.nix;
-
   boot = {
     initrd.systemd.enable = true;
     initrd.services.lvm.enable = true;
@@ -47,10 +45,16 @@
   console.keyMap = "us";
 
   users.mutableUsers = true;
+  users.users.root.hashedPasswordFile =
+    lib.mkIf (builtins.pathExists /run/nixos-install-passwords/root.hash)
+      "/run/nixos-install-passwords/root.hash";
   users.users.max = {
     isNormalUser = true;
     description = "Max Power";
     extraGroups = [ "wheel" ];
+    hashedPasswordFile =
+      lib.mkIf (builtins.pathExists /run/nixos-install-passwords/max.hash)
+        "/run/nixos-install-passwords/max.hash";
   };
 
   networking = {
