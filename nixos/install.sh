@@ -2,7 +2,6 @@
 set -euo pipefail
 
 DISK=/dev/nvme0n1
-SWAP_SIZE=8G
 MAPPER=cryptroot
 LUKS_PASSFILE=/tmp/dotfiles-luks
 REPO_URL=https://github.com/gaavin/dotfiles.git
@@ -12,10 +11,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SECRETS=""
 HOST=""
-VG=""
+STEP_N=0
+STEP_TOTAL=0
 
 die() {
-  echo "$1" >&2
+  if command -v gum >/dev/null 2>&1; then
+    gum log --level error "$1"
+  else
+    echo "$1" >&2
+  fi
   exit 1
 }
 
@@ -30,32 +34,77 @@ nix_flake() {
   command nix "${NIX_EXTRA[@]}" "$@"
 }
 
-git_cmd() {
-  if command -v git >/dev/null 2>&1; then
-    command git "$@"
-  else
-    nix_flake shell nixpkgs#git --command git "$@"
-  fi
+theme() {
+  export GUM_INPUT_CURSOR_FOREGROUND="39"
+  export GUM_INPUT_PROMPT_FOREGROUND="39"
+  export GUM_INPUT_HEADER_FOREGROUND="39"
+  export GUM_INPUT_WIDTH="48"
+  export GUM_INPUT_CHAR_LIMIT="512"
+  export GUM_CONFIRM_PROMPT_FOREGROUND="39"
+  export GUM_CONFIRM_SELECTED_FOREGROUND="15"
+  export GUM_CONFIRM_SELECTED_BACKGROUND="39"
+  export GUM_SPIN_SPINNER="dot"
+  export GUM_SPIN_TITLE_FOREGROUND="39"
+  export GUM_LOG_LEVEL="info"
 }
 
-read_tty() {
-  local prompt=$1 silent=${3:-} line
-  if [[ $silent == silent ]]; then
-    read -r -s -p "$prompt" line </dev/tty
-    echo
-  else
-    read -r -p "$prompt" line </dev/tty
-  fi
-  printf -v "$2" '%s' "$line"
+ui_banner() {
+  local subtitle=$1
+  gum style \
+    --border rounded \
+    --border-foreground 39 \
+    --foreground 39 \
+    --bold \
+    --align center \
+    --width 48 \
+    --padding "1 2" \
+    --margin "1 0" \
+    "NixOS" \
+    "$(gum style --foreground 252 --faint "$subtitle")"
+}
+
+ui_ok() {
+  gum log --level info "$1"
+}
+
+ui_warn() {
+  gum log --level warn "$1"
+}
+
+ui_step() {
+  STEP_N=$((STEP_N + 1))
+  echo
+  gum style --foreground 39 --bold "$STEP_N/$STEP_TOTAL  $1"
+}
+
+ui_spin() {
+  local title=$1
+  shift
+  gum spin --spinner dot --title "$title" --show-error -- "$@"
+}
+
+ui_box() {
+  gum style \
+    --border rounded \
+    --border-foreground 245 \
+    --padding "0 1" \
+    --foreground 252 \
+    "$1"
 }
 
 ask_password() {
-  local dest=$1 pass pass2
+  local dest=$1 header=$2 pass pass2
   while true; do
-    read_tty "Password: " pass silent
-    read_tty "Confirm: " pass2 silent
-    [[ -n $pass ]] || { echo "empty password"; continue; }
-    [[ $pass == "$pass2" ]] || { echo "passwords do not match"; continue; }
+    pass="$(gum input --password --header "$header" --placeholder "password" --prompt "▸ " --char-limit 0)" || exit 1
+    if [[ -z $pass ]]; then
+      ui_warn "Password cannot be empty"
+      continue
+    fi
+    pass2="$(gum input --password --header "$header" --placeholder "confirm" --prompt "▸ " --char-limit 0)" || exit 1
+    if [[ $pass != "$pass2" ]]; then
+      ui_warn "Passwords do not match"
+      continue
+    fi
     printf '%s' "$pass" >"$dest"
     chmod 600 "$dest"
     unset pass pass2
@@ -64,12 +113,13 @@ ask_password() {
 }
 
 confirm() {
-  local ok
   if [[ ${INSTALL_YES:-} == 1 ]]; then
     return
   fi
-  read_tty "Continue? [y/N] " ok
-  [[ $ok == y || $ok == Y ]] || exit 1
+  gum confirm --default=false --affirmative "Continue" --negative "Cancel" "$1" || {
+    ui_ok "Cancelled"
+    exit 1
+  }
 }
 
 detect_host() {
@@ -86,37 +136,56 @@ copy_repo() {
   mkdir -p /mnt/home/max
   rm -rf /mnt/home/max/dotfiles
   if [[ -f $REPO_ROOT/nixos/flake.nix ]]; then
-    cp -a "$REPO_ROOT" /mnt/home/max/dotfiles
+    ui_spin "Copying configuration..." cp -a "$REPO_ROOT" /mnt/home/max/dotfiles
+  elif command -v git >/dev/null 2>&1; then
+    ui_spin "Cloning configuration..." git clone "$REPO_URL" /mnt/home/max/dotfiles
   else
-    git_cmd clone "$REPO_URL" /mnt/home/max/dotfiles
+    ui_spin "Cloning configuration..." \
+      nix "${NIX_EXTRA[@]}" shell nixpkgs#git --command git clone "$REPO_URL" /mnt/home/max/dotfiles
   fi
 }
 
-# LUKS2 cryptroot -> LVM VG=$HOST -> 8G swap + XFS root. Disko does this for mina.
 luks_format_open() {
   local part=$1
   if ! cryptsetup luksFormat --type luks2 --sector-size 4096 --batch-mode --key-file "$SECRETS/luks" "$part"; then
-    echo "LUKS 4096-byte sectors not accepted, retrying with defaults"
+    ui_warn "LUKS 4096-byte sectors not accepted, retrying with defaults"
     cryptsetup luksFormat --type luks2 --batch-mode --key-file "$SECRETS/luks" "$part"
   fi
   cryptsetup open --key-file "$SECRETS/luks" "$part" "$MAPPER"
   rm -f "$SECRETS/luks"
 }
 
-lvm_root_and_swap() {
-  pvcreate -ff -y /dev/mapper/$MAPPER
-  vgcreate "$VG" /dev/mapper/$MAPPER
-  lvcreate -y -L "$SWAP_SIZE" -n swap "$VG"
-  lvcreate -y -l 100%FREE -n root "$VG"
-  udevadm settle
-  mkswap -L swap /dev/mapper/${VG}-swap
-  mkfs.xfs -f -L nixos /dev/mapper/${VG}-root
+disko_run() {
+  if [[ $HOST == air && $1 == *destroy* ]]; then
+    die "refusing Disko destroy on air"
+  fi
+  ui_spin "Formatting and mounting..." \
+    nix "${NIX_EXTRA[@]}" run github:nix-community/disko/latest -- \
+    --mode "$1" \
+    "${@:2}" \
+    --flake "path:$SCRIPT_DIR#$HOST"
 }
 
-mount_lvm() {
-  swapon /dev/mapper/${VG}-swap
-  mount /dev/mapper/${VG}-root /mnt
-  mkdir -p /mnt/efi /mnt/home/max
+air_part_state() {
+  lsblk -n -b -r -o TYPE,PARTUUID,START,SIZE,FSTYPE,PARTLABEL "$DISK" |
+    awk '$1 == "part" { print $2, $3, $4, $5, $6 }'
+}
+
+air_assert_preserved() {
+  local before=$1 after=$2 line
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    if ! grep -Fxq "$line" <<<"$after"; then
+      die "existing partition changed: $line"
+    fi
+  done <<<"$before"
+}
+
+air_assert_esp() {
+  local esp_uuid=$1
+  local esp=/dev/disk/by-partuuid/$esp_uuid
+  [[ -b $esp ]] || die "ESP not found: $esp_uuid"
+  [[ $(lsblk -n -o FSTYPE "$esp") == vfat ]] || die "ESP is not vfat: $esp_uuid"
 }
 
 set_passwords() {
@@ -128,20 +197,22 @@ set_passwords() {
   mkdir -p /mnt/root
   cp "$SECRETS/chpasswd" /mnt/root/chpasswd
   chmod 600 /mnt/root/chpasswd
-  nixos-enter --root /mnt -c 'chpasswd < /root/chpasswd && chown -R max:users /home/max'
+  ui_spin "Setting user passwords..." \
+    nixos-enter --root /mnt -c 'chpasswd < /root/chpasswd && chown -R max:users /home/max'
   rm -f /mnt/root/chpasswd
 }
 
 install_system() {
   local flake=/mnt/home/max/dotfiles/nixos
   systemctl restart systemd-timesyncd || true
-  echo
+  ui_step "Install NixOS"
   if [[ $HOST == air ]]; then
-    echo "Installing NixOS (linux-asahi will compile; swap is on)."
+    ui_ok "linux-asahi will compile; swap is on"
   else
-    echo "Installing NixOS (swap is on)."
+    ui_ok "swap is on"
   fi
   nixos-install --no-root-password --no-channel-copy --root /mnt --flake "path:$flake#$HOST"
+  ui_step "Set passwords"
   set_passwords
 }
 
@@ -149,16 +220,11 @@ install_mina() {
   command -v nixos-install >/dev/null || die "nixos-install not found"
   [[ -b $DISK ]] || die "$DISK not found"
 
-  echo
-  lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT "$DISK" || true
-  echo
-  echo "This WIPES $DISK."
-  confirm
+  ui_step "Partition $DISK"
+  ui_box "$(lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT "$DISK" 2>/dev/null || true)"
+  confirm "This WIPES $DISK."
 
-  nix_flake run github:nix-community/disko/latest -- \
-    --mode destroy,format,mount \
-    --yes-wipe-all-disks \
-    --flake "path:$SCRIPT_DIR#mina"
+  disko_run destroy,format,mount --yes-wipe-all-disks
 
   mountpoint -q /mnt || die "/mnt not mounted"
   copy_repo
@@ -166,24 +232,25 @@ install_mina() {
 }
 
 install_air() {
-  local esp_uuid part luks_uuid fw candidate
+  local esp_uuid esp part fw candidate before after nixos_dev esp_dev
   command -v nixos-install >/dev/null || die "nixos-install not found"
-  command -v cryptsetup >/dev/null && command -v sgdisk >/dev/null && command -v pvcreate >/dev/null ||
-    die "missing cryptsetup/sgdisk/lvm"
+  command -v cryptsetup >/dev/null && command -v sgdisk >/dev/null ||
+    die "missing cryptsetup/sgdisk"
   [[ -b $DISK ]] || die "$DISK not found"
   [[ ! -e /dev/disk/by-partlabel/nixos ]] || die "/dev/disk/by-partlabel/nixos already exists; aborting"
 
   esp_uuid="$(tr -d '\0' < /proc/device-tree/chosen/asahi,efi-system-partition)"
-  [[ -b /dev/disk/by-partuuid/$esp_uuid ]] || die "ESP not found: $esp_uuid"
+  esp=/dev/disk/by-partuuid/$esp_uuid
+  air_assert_esp "$esp_uuid"
+  esp_dev="$(readlink -f "$esp")"
 
-  echo
-  sgdisk -p "$DISK"
-  echo
-  echo "This creates a LUKS partition in the free space on $DISK."
-  echo "iBoot, macOS, the ESP, and Recovery are left alone."
-  confirm
+  ui_step "Create LUKS partition"
+  ui_box "$(sgdisk -p "$DISK")"
+  confirm "Create a LUKS partition in the free space on $DISK. iBoot, macOS, the ESP, and Recovery are left alone."
 
-  sgdisk "$DISK" -n 0:0:0 -t 0:8309 -c 0:nixos
+  before="$(air_part_state)"
+  # 0:0:0 = first free number, first free start, end of that gap — existing slices stay
+  ui_spin "Creating partition..." sgdisk "$DISK" -n 0:0:0 -t 0:8309 -c 0:nixos
   partprobe "$DISK"
   udevadm settle
 
@@ -194,17 +261,37 @@ install_air() {
     udevadm settle || true
   done
   [[ -b $part ]] || die "new partition not found"
+  nixos_dev="$(readlink -f "$part")"
+  [[ $nixos_dev != "$esp_dev" ]] || die "refusing to format the ESP"
 
+  after="$(air_part_state)"
+  air_assert_preserved "$before" "$after"
+  air_assert_esp "$esp_uuid"
+  if [[ $(grep -c . <<<"$after") -ne $(($(grep -c . <<<"$before") + 1)) ]]; then
+    die "expected exactly one new partition"
+  fi
+
+  ui_step "Encrypt disk"
   luks_format_open "$part"
-  lvm_root_and_swap
-  mount_lvm
-  mount /dev/disk/by-partuuid/"$esp_uuid" /mnt/efi
+  [[ $nixos_dev == "$(readlink -f "$part")" ]] || die "nixos partition moved"
+  air_assert_preserved "$before" "$(air_part_state)"
+  air_assert_esp "$esp_uuid"
+
+  ui_step "Format and mount"
+  disko_run format,mount
+  mountpoint -q /mnt || die "/mnt not mounted"
+  air_assert_preserved "$before" "$(air_part_state)"
+  air_assert_esp "$esp_uuid"
+  mkdir -p /mnt/efi
+  ui_spin "Mounting original ESP..." mount "$esp" /mnt/efi
   mountpoint -q /mnt/efi || die "/mnt/efi not mounted"
+  [[ $(readlink -f "$(findmnt -n -o SOURCE /mnt/efi)") == "$esp_dev" ]] || die "/mnt/efi is not the original ESP"
   for _ in {1..25}; do
     [[ -f /mnt/efi/vendorfw/firmware.cpio ]] && break
     sleep 0.2
   done
 
+  ui_step "Copy firmware"
   copy_repo
   mkdir -p /mnt/home/max/dotfiles/nixos/hosts/air/firmware
   fw=""
@@ -215,9 +302,8 @@ install_air() {
     fi
   done
   [[ -n $fw ]] || die "firmware.cpio not found on the ESP"
-  cp "$fw" /mnt/home/max/dotfiles/nixos/hosts/air/firmware/
+  ui_spin "Copying firmware..." cp "$fw" /mnt/home/max/dotfiles/nixos/hosts/air/firmware/
 
-  luks_uuid="$(cryptsetup luksUUID "$part")"
   cat >/mnt/home/max/dotfiles/nixos/hosts/air/hardware.nix <<EOF
 {
   lib,
@@ -232,39 +318,61 @@ install_air() {
 
   nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
 
-  boot.initrd.services.lvm.enable = true;
-
-  boot.initrd.luks.devices.cryptroot = {
-    device = "/dev/disk/by-uuid/${luks_uuid}";
-    allowDiscards = true;
-  };
-
-  fileSystems."/" = {
-    device = "/dev/mapper/${VG}-root";
-    fsType = "xfs";
-  };
-
   fileSystems."/efi" = {
     device = "/dev/disk/by-partuuid/${esp_uuid}";
     fsType = "vfat";
     options = [ "umask=0077" ];
   };
-
-  swapDevices = [
-    { device = "/dev/mapper/${VG}-swap"; }
-  ];
 }
 EOF
 
   install_system
 }
 
+finish() {
+  echo
+  if [[ $HOST == air ]]; then
+    gum style \
+      --border rounded \
+      --border-foreground 42 \
+      --foreground 42 \
+      --padding "1 2" \
+      --width 48 \
+      "Done." \
+      "$(gum style --foreground 252 "reboot, then hold power for the Apple boot picker if you need macOS.")"
+  else
+    gum style \
+      --border rounded \
+      --border-foreground 42 \
+      --foreground 42 \
+      --padding "1 2" \
+      --width 48 \
+      "Done." \
+      "$(gum style --foreground 252 "reboot.")"
+  fi
+}
+
 if [[ $EUID -ne 0 ]]; then
-  exec sudo env INSTALL_YES="${INSTALL_YES:-}" "$0" "$@"
+  exec sudo env \
+    INSTALL_YES="${INSTALL_YES:-}" \
+    TERM="${TERM:-}" \
+    COLORTERM="${COLORTERM:-}" \
+    "$0" "$@"
 fi
 
-export NIX_CONFIG="experimental-features = nix-command flakes"
+export NIX_CONFIG="experimental-features = nix-command flakes
+log-format = bar-with-logs
+"
 
+if ! command -v gum >/dev/null 2>&1; then
+  exec nix_flake shell nixpkgs#gum --command env \
+    INSTALL_YES="${INSTALL_YES:-}" \
+    TERM="${TERM:-}" \
+    COLORTERM="${COLORTERM:-}" \
+    "$0" "$@"
+fi
+
+theme
 trap cleanup EXIT
 
 detected="$(detect_host)"
@@ -275,32 +383,47 @@ if [[ $# -gt 0 ]]; then
 else
   HOST=$detected
 fi
-VG=$HOST
+
+ui_banner "$HOST"
 
 SECRETS="$(mktemp -d /run/nixos-install.XXXXXX)"
 chmod 700 "$SECRETS"
 
-echo "$HOST"
-echo
-echo "Disk encryption password:"
-ask_password "$SECRETS/luks"
+if [[ $HOST == air ]]; then
+  STEP_TOTAL=7
+else
+  STEP_TOTAL=4
+fi
+STEP_N=0
+
+if [[ $HOST == air ]]; then
+  gum format -- "## Plan
+- Passwords
+- Create LUKS partition
+- Encrypt disk
+- Format and mount
+- Copy firmware
+- Install NixOS
+- Set passwords"
+else
+  gum format -- "## Plan
+- Passwords
+- Partition disk
+- Install NixOS
+- Set passwords"
+fi
+
+ui_step "Passwords"
+ask_password "$SECRETS/luks" "Disk encryption password"
 cp "$SECRETS/luks" "$LUKS_PASSFILE"
 chmod 600 "$LUKS_PASSFILE"
-echo
-echo "root password:"
-ask_password "$SECRETS/root"
-echo
-echo "max password:"
-ask_password "$SECRETS/max"
+ask_password "$SECRETS/root" "root password"
+ask_password "$SECRETS/max" "max password"
+ui_ok "Passwords saved"
 
 case $HOST in
   mina) install_mina ;;
   air) install_air ;;
 esac
 
-echo
-if [[ $HOST == air ]]; then
-  echo "Done. reboot, then hold power for the Apple boot picker if you need macOS."
-else
-  echo "Done. reboot."
-fi
+finish

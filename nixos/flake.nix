@@ -142,6 +142,7 @@
         hostname = "air";
         system = "aarch64-linux";
         extraModules = [
+          disko.nixosModules.disko
           nixos-apple-silicon.nixosModules.apple-silicon-support
         ];
       };
