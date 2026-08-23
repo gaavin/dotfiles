@@ -439,6 +439,67 @@ air_assert_esp() {
   [[ $(lsblk -n -o FSTYPE "$esp") == vfat ]] || die "ESP is not vfat: $esp_uuid"
 }
 
+swap_active_bytes() {
+  swapon --noheadings --bytes 2>/dev/null | awk '{s+=$3} END {print s+0}'
+}
+
+swap_size_summary() {
+  swapon --noheadings --bytes 2>/dev/null |
+    awk '{print $3}' |
+    while read -r bytes; do
+      fmt_size "$bytes"
+    done |
+    paste -sd' + ' -
+}
+
+activate_target_swap() {
+  local dev swapfile=/mnt/.install-swap activated=0
+
+  vgchange -ay 2>/dev/null || true
+  udevadm settle 2>/dev/null || true
+
+  for dev in /dev/mapper/mina-swap /dev/mapper/air-swap; do
+    [[ -b $dev ]] || continue
+    if swapon "$dev" 2>/dev/null; then
+      activated=1
+    fi
+  done
+
+  while IFS= read -r dev; do
+    [[ -n $dev && -b $dev ]] || continue
+    if swapon "$dev" 2>/dev/null; then
+      activated=1
+    fi
+  done < <(lsblk -pn -o NAME,FSTYPE | awk '$2 == "swap" {print $1}')
+
+  [[ $activated -eq 1 || $(swap_active_bytes) -gt 0 ]] && return 0
+
+  mountpoint -q /mnt || return 1
+  if [[ ! -f $swapfile ]]; then
+    ui_spin "Creating temporary swap file..." \
+      bash -c "fallocate -l 8G '$swapfile' && chmod 600 '$swapfile' && mkswap '$swapfile' && swapon '$swapfile'"
+  else
+    swapon "$swapfile" 2>/dev/null || return 1
+  fi
+}
+
+ensure_swap() {
+  if activate_target_swap && [[ $(swap_active_bytes) -gt 0 ]]; then
+    ui_ok "⚙ swap on ($(swap_size_summary))"
+    return 0
+  fi
+  ui_warn "⚙ swap is off — install may run out of memory"
+  return 1
+}
+
+install_swap_cleanup() {
+  local swapfile=/mnt/.install-swap
+  if [[ -f $swapfile ]]; then
+    swapoff "$swapfile" 2>/dev/null || true
+    rm -f "$swapfile"
+  fi
+}
+
 set_passwords() {
   {
     printf 'root:%s\n' "$(cat "$SECRETS/root")"
@@ -458,11 +519,11 @@ install_system() {
   systemctl restart systemd-timesyncd || true
   ui_step "Install NixOS"
   if [[ $HOST == air ]]; then
-    ui_ok "⚙ linux-asahi will compile · swap is on"
-  else
-    ui_ok "⚙ swap is on"
+    ui_ok "⚙ linux-asahi will compile from source"
   fi
+  ensure_swap
   nixos-install --no-root-password --no-channel-copy --root /mnt --flake "path:$flake#$HOST"
+  install_swap_cleanup
   set_passwords
 }
 
