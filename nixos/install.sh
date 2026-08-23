@@ -578,6 +578,66 @@ swapon_table() {
     swapon --noheadings --raw --show=NAME,TYPE,SIZE,USED,PRIO 2>/dev/null
 }
 
+parse_size_to_bytes() {
+  local raw=$1
+  if [[ $raw =~ ^[0-9]+$ ]]; then
+    echo "$raw"
+    return
+  fi
+  if command -v numfmt >/dev/null 2>&1; then
+    numfmt --from=iec-i "$raw" 2>/dev/null && return
+  fi
+  awk -v s="$raw" 'BEGIN {
+    if (match(s, /^([0-9]+(\.[0-9]+)?)([KMGTP]?i?B?)$/, m)) {
+      v = m[1] + 0
+      u = m[3]
+      if (u ~ /^K/) v *= 1024
+      else if (u ~ /^M/) v *= 1024^2
+      else if (u ~ /^G/) v *= 1024^3
+      else if (u ~ /^T/) v *= 1024^4
+      else if (u ~ /^P/) v *= 1024^5
+      printf "%.0f", v
+    }
+  }'
+}
+
+swap_used_bytes() {
+  local name=$1 from_swapon=$2
+  local base="${name##*/}" dev used_kb parsed orig
+
+  if [[ $from_swapon =~ ^[0-9]+$ && $from_swapon -gt 0 ]]; then
+    echo "$from_swapon"
+    return
+  fi
+
+  if [[ -n $from_swapon && $from_swapon != "-" ]]; then
+    parsed="$(parse_size_to_bytes "$from_swapon" 2>/dev/null || true)"
+    if [[ $parsed =~ ^[0-9]+$ && $parsed -gt 0 ]]; then
+      echo "$parsed"
+      return
+    fi
+  fi
+
+  for dev in "$name" "/dev/$base"; do
+    while read -r fname _ _ used_kb _; do
+      [[ $fname == "$dev" ]] || continue
+      [[ $used_kb =~ ^[0-9]+$ && $used_kb -gt 0 ]] || continue
+      echo $((used_kb * 1024))
+      return
+    done < /proc/swaps
+  done
+
+  if [[ $base == zram* && -r /sys/block/$base/mm_stat ]]; then
+    read -r orig _ <<<"$(< /sys/block/$base/mm_stat)"
+    if [[ $orig =~ ^[0-9]+$ && $orig -gt 0 ]]; then
+      echo "$orig"
+      return
+    fi
+  fi
+
+  echo 0
+}
+
 disk_size_human() {
   fmt_size "$(disk_size_bytes)"
 }
@@ -1093,6 +1153,7 @@ collect_swap_lines() {
     [[ -n $name ]] || continue
     base="${name##*/}"
     size_h="$(swap_size_for "$name" "$size_bytes")"
+    used_bytes="$(swap_used_bytes "$name" "$used_bytes")"
     if [[ $used_bytes =~ ^[0-9]+$ ]]; then
       used_h="$(fmt_size "$used_bytes")"
       size_label="${used_h}/${size_h}"
