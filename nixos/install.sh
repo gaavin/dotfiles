@@ -2,9 +2,9 @@
 set -euo pipefail
 
 DISK=/dev/nvme0n1
-VG=air
 SWAP_SIZE=8G
 MAPPER=cryptroot
+LUKS_PASSFILE=/tmp/dotfiles-luks
 REPO_URL=https://github.com/gaavin/dotfiles.git
 NIX_EXTRA=(--extra-experimental-features "nix-command flakes")
 
@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SECRETS=""
 HOST=""
+VG=""
 
 die() {
   echo "$1" >&2
@@ -22,7 +23,7 @@ cleanup() {
   if [[ -n ${SECRETS:-} && -d $SECRETS ]]; then
     rm -rf "$SECRETS"
   fi
-  rm -f /mnt/root/chpasswd
+  rm -f "$LUKS_PASSFILE" /mnt/root/chpasswd
 }
 
 nix_flake() {
@@ -91,6 +92,33 @@ copy_repo() {
   fi
 }
 
+# LUKS2 cryptroot -> LVM VG=$HOST -> 8G swap + XFS root. Disko does this for mina.
+luks_format_open() {
+  local part=$1
+  if ! cryptsetup luksFormat --type luks2 --sector-size 4096 --batch-mode --key-file "$SECRETS/luks" "$part"; then
+    echo "LUKS 4096-byte sectors not accepted, retrying with defaults"
+    cryptsetup luksFormat --type luks2 --batch-mode --key-file "$SECRETS/luks" "$part"
+  fi
+  cryptsetup open --key-file "$SECRETS/luks" "$part" "$MAPPER"
+  rm -f "$SECRETS/luks"
+}
+
+lvm_root_and_swap() {
+  pvcreate -ff -y /dev/mapper/$MAPPER
+  vgcreate "$VG" /dev/mapper/$MAPPER
+  lvcreate -y -L "$SWAP_SIZE" -n swap "$VG"
+  lvcreate -y -l 100%FREE -n root "$VG"
+  udevadm settle
+  mkswap -L swap /dev/mapper/${VG}-swap
+  mkfs.xfs -f -L nixos /dev/mapper/${VG}-root
+}
+
+mount_lvm() {
+  swapon /dev/mapper/${VG}-swap
+  mount /dev/mapper/${VG}-root /mnt
+  mkdir -p /mnt/efi /mnt/home/max
+}
+
 set_passwords() {
   {
     printf 'root:%s\n' "$(cat "$SECRETS/root")"
@@ -111,7 +139,7 @@ install_system() {
   if [[ $HOST == air ]]; then
     echo "Installing NixOS (linux-asahi will compile; swap is on)."
   else
-    echo "Installing NixOS..."
+    echo "Installing NixOS (swap is on)."
   fi
   nixos-install --no-root-password --no-channel-copy --root /mnt --flake "path:$flake#$HOST"
   set_passwords
@@ -167,25 +195,9 @@ install_air() {
   done
   [[ -b $part ]] || die "new partition not found"
 
-  if ! cryptsetup luksFormat --type luks2 --sector-size 4096 --batch-mode --key-file "$SECRETS/luks" "$part"; then
-    echo "LUKS 4096-byte sectors not accepted, retrying with defaults"
-    cryptsetup luksFormat --type luks2 --batch-mode --key-file "$SECRETS/luks" "$part"
-  fi
-  cryptsetup open --key-file "$SECRETS/luks" "$part" "$MAPPER"
-  rm -f "$SECRETS/luks"
-
-  pvcreate -ff -y /dev/mapper/$MAPPER
-  vgcreate "$VG" /dev/mapper/$MAPPER
-  lvcreate -y -L "$SWAP_SIZE" -n swap "$VG"
-  lvcreate -y -l 100%FREE -n root "$VG"
-  udevadm settle
-
-  mkswap -L swap /dev/mapper/${VG}-swap
-  mkfs.xfs -f -L nixos /dev/mapper/${VG}-root
-
-  swapon /dev/mapper/${VG}-swap
-  mount /dev/mapper/${VG}-root /mnt
-  mkdir -p /mnt/efi /mnt/home/max
+  luks_format_open "$part"
+  lvm_root_and_swap
+  mount_lvm
   mount /dev/disk/by-partuuid/"$esp_uuid" /mnt/efi
   mountpoint -q /mnt/efi || die "/mnt/efi not mounted"
   for _ in {1..25}; do
@@ -263,17 +275,18 @@ if [[ $# -gt 0 ]]; then
 else
   HOST=$detected
 fi
+VG=$HOST
 
 SECRETS="$(mktemp -d /run/nixos-install.XXXXXX)"
 chmod 700 "$SECRETS"
 
 echo "$HOST"
 echo
-if [[ $HOST == air ]]; then
-  echo "Disk encryption password:"
-  ask_password "$SECRETS/luks"
-  echo
-fi
+echo "Disk encryption password:"
+ask_password "$SECRETS/luks"
+cp "$SECRETS/luks" "$LUKS_PASSFILE"
+chmod 600 "$LUKS_PASSFILE"
+echo
 echo "root password:"
 ask_password "$SECRETS/root"
 echo

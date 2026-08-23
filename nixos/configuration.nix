@@ -3,6 +3,7 @@
 {
   boot = {
     initrd.systemd.enable = true;
+    initrd.services.lvm.enable = true;
     kernelParams = [
       "quiet"
       "boot.shell_on_fail"

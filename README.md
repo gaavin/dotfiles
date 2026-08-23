@@ -21,9 +21,9 @@
 ```
 mina nvme0n1                          air nvme0n1
 ├── ESP   2G    vfat   /efi           ├── iBoot
-└── root  rest  xfs    /              ├── macOS
-                                      ├── Asahi stub
-                                      ├── ESP     vfat   /efi
+└── LUKS                              ├── macOS
+    ├── root  xfs  /                  ├── Asahi stub
+    └── swap  8G                      ├── ESP     vfat   /efi
                                       ├── LUKS
                                       │   ├── root  xfs  /
                                       │   └── swap  8G
@@ -50,7 +50,7 @@ reboot
 > **mina:** Disko wipes `/dev/nvme0n1`.
 > **air:** Do not use a stock NixOS ISO. Do not run Disko. Leave `iBoot` and `Recovery` alone — touching them bricks the Mac until you restore from another computer with [idevicerestore](https://github.com/libimobiledevice/idevicerestore).
 
-Log in as `max`. On air, unlock the disk first. Hold power for the Apple boot picker; Option (Alt) + Always Use sets the default OS.
+Unlock the disk, then log in as `max`. On air, hold power for the Apple boot picker; Option (Alt) + Always Use sets the default OS.
 
 ### Air, from macOS
 

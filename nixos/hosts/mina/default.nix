@@ -27,13 +27,44 @@
               ];
             };
           };
-          root = {
+          nixos = {
             size = "100%";
+            type = "8309";
             content = {
-              type = "filesystem";
-              format = "xfs";
-              mountpoint = "/";
+              type = "luks";
+              name = "cryptroot";
+              extraFormatArgs = [
+                "--type=luks2"
+              ];
+              settings = {
+                allowDiscards = true;
+              };
+              # install.sh writes this before Disko formats; not used at boot
+              passwordFile = "/tmp/dotfiles-luks";
+              content = {
+                type = "lvm_pv";
+                vg = "mina";
+              };
             };
+          };
+        };
+      };
+    };
+    lvm_vg.mina = {
+      type = "lvm_vg";
+      lvs = {
+        swap = {
+          size = "8G";
+          content = {
+            type = "swap";
+          };
+        };
+        root = {
+          size = "100%";
+          content = {
+            type = "filesystem";
+            format = "xfs";
+            mountpoint = "/";
           };
         };
       };
