@@ -22,6 +22,7 @@ cleanup() {
   if [[ -n ${SECRETS:-} && -d $SECRETS ]]; then
     rm -rf "$SECRETS"
   fi
+  rm -f /mnt/root/chpasswd
 }
 
 nix_flake() {
@@ -71,7 +72,7 @@ confirm() {
 }
 
 detect_host() {
-  if [[ -e /proc/device-tree/chosen/asahi,efi-system-partition ]]; then
+  if [[ -f /proc/device-tree/chosen/asahi,efi-system-partition ]]; then
     echo air
   elif [[ $(uname -m) == x86_64 ]]; then
     echo mina
@@ -99,15 +100,19 @@ set_passwords() {
   mkdir -p /mnt/root
   cp "$SECRETS/chpasswd" /mnt/root/chpasswd
   chmod 600 /mnt/root/chpasswd
-  nixos-enter --root /mnt -c 'chpasswd < /root/chpasswd; shred -u /root/chpasswd || rm -f /root/chpasswd'
-  chown -R 1000:1000 /mnt/home/max
+  nixos-enter --root /mnt -c 'chpasswd < /root/chpasswd && chown -R max:users /home/max'
+  rm -f /mnt/root/chpasswd
 }
 
 install_system() {
   local flake=/mnt/home/max/dotfiles/nixos
   systemctl restart systemd-timesyncd || true
   echo
-  echo "Installing NixOS..."
+  if [[ $HOST == air ]]; then
+    echo "Installing NixOS (linux-asahi will compile; swap is on)."
+  else
+    echo "Installing NixOS..."
+  fi
   nixos-install --no-root-password --no-channel-copy --root /mnt --flake "path:$flake#$HOST"
   set_passwords
 }
@@ -133,7 +138,7 @@ install_mina() {
 }
 
 install_air() {
-  local esp_uuid part luks_uuid
+  local esp_uuid part luks_uuid fw candidate
   command -v nixos-install >/dev/null || die "nixos-install not found"
   command -v cryptsetup >/dev/null && command -v sgdisk >/dev/null && command -v pvcreate >/dev/null ||
     die "missing cryptsetup/sgdisk/lvm"
@@ -155,6 +160,11 @@ install_air() {
   udevadm settle
 
   part=/dev/disk/by-partlabel/nixos
+  for _ in {1..25}; do
+    [[ -b $part ]] && break
+    sleep 0.2
+    udevadm settle || true
+  done
   [[ -b $part ]] || die "new partition not found"
 
   if ! cryptsetup luksFormat --type luks2 --sector-size 4096 --batch-mode --key-file "$SECRETS/luks" "$part"; then
@@ -178,11 +188,22 @@ install_air() {
   mkdir -p /mnt/efi /mnt/home/max
   mount /dev/disk/by-partuuid/"$esp_uuid" /mnt/efi
   mountpoint -q /mnt/efi || die "/mnt/efi not mounted"
+  for _ in {1..25}; do
+    [[ -f /mnt/efi/vendorfw/firmware.cpio ]] && break
+    sleep 0.2
+  done
 
   copy_repo
   mkdir -p /mnt/home/max/dotfiles/nixos/hosts/air/firmware
-  [[ -f /mnt/efi/vendorfw/firmware.cpio ]] || die "firmware.cpio missing from /mnt/efi"
-  cp /mnt/efi/vendorfw/firmware.cpio /mnt/home/max/dotfiles/nixos/hosts/air/firmware/
+  fw=""
+  for candidate in /mnt/efi/vendorfw/firmware.cpio /efi/vendorfw/firmware.cpio /boot/vendorfw/firmware.cpio; do
+    if [[ -f $candidate ]]; then
+      fw=$candidate
+      break
+    fi
+  done
+  [[ -n $fw ]] || die "firmware.cpio not found on the ESP"
+  cp "$fw" /mnt/home/max/dotfiles/nixos/hosts/air/firmware/
 
   luks_uuid="$(cryptsetup luksUUID "$part")"
   cat >/mnt/home/max/dotfiles/nixos/hosts/air/hardware.nix <<EOF
@@ -223,7 +244,6 @@ install_air() {
 }
 EOF
 
-  echo "Installing NixOS (linux-asahi will compile; swap is on)."
   install_system
 }
 

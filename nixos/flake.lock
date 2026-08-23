@@ -222,11 +222,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787448471,
-        "narHash": "sha256-SZetdxijIcWE6TFL3gxqSguKGrcSWt3zKHNDj+9Y8yo=",
+        "lastModified": 1787449366,
+        "narHash": "sha256-nhCIodR8qkJQbdbuv1SkGBDX6o40usIx8e/W3MfnwrQ=",
         "owner": "gaavin",
         "repo": "nix-spotify-aarch64",
-        "rev": "f03f31d9c83a8b948fa4018869950c85a6c33c56",
+        "rev": "731bb62fb5e65febe11401d017beee2232ace81d",
         "type": "github"
       },
       "original": {

@@ -41,13 +41,6 @@ sudo ./nixos/install.sh
 reboot
 ```
 
-If `git` is missing:
-
-```bash
-nix --extra-experimental-features 'nix-command flakes' \
-  shell nixpkgs#git --command git clone https://github.com/gaavin/dotfiles.git
-```
-
 > [!CAUTION]
 > **mina:** Disko wipes `/dev/nvme0n1`.
 > **air:** Do not use a stock NixOS ISO. Do not run Disko. Leave `iBoot` and `Recovery` alone — touching them bricks the Mac until you restore from another computer with [idevicerestore](https://github.com/libimobiledevice/idevicerestore).
@@ -94,8 +87,6 @@ Plug in the USB and power on. Then run **Install** above.
 ```bash
 rebuild
 ```
-
-`rebuild` is a command, not a shell alias. Open a new terminal after the first switch (or run `unalias rebuild`) so the old alias is not used.
 
 ```bash
 nix flake update --flake ~/dotfiles/nixos && sudo nixos-rebuild switch --flake path:$HOME/dotfiles/nixos#$(hostname)
