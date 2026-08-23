@@ -99,8 +99,8 @@
       defaultCompatTool = pkgs.proton-cachyos_x86_64_v3;
       displayRatesAsBits = false;
       apps = {
-        "Counter-Strike 2" = {
-          id = 730;
+        "730" = {
+          name = "Counter-Strike 2";
           args = [
             "-vulkan"
             "-novid"
