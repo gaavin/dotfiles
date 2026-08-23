@@ -18,8 +18,13 @@ BUILD_PID=""
 SLEEP_INHIBIT_PID=""
 INSTALL_ABORTED=0
 UI_SWAP_RENDERED=""
+UI_CPU_RENDERED=""
 UI_STACK_HEIGHT=0
 UI_STACK_LAST=""
+CPU_USAGE=0
+CPU_PREV_TOTAL=""
+CPU_PREV_IDLE=""
+CPU_SAMPLES=()
 
 die() {
   if command -v gum >/dev/null 2>&1; then
@@ -94,6 +99,7 @@ UI_MARGIN_BEFORE="1 0 0 0"
 UI_MARGIN_AFTER="0 0 1 0"
 UI_MARGIN_STACK_GAP="0 0 0 0"
 UI_MARGIN_LIVE_TOP="1 0 0 0"
+UI_CPU_GRAPH_SAMPLES=36
 UI_BUILD_LINES=6
 NIXOS_VERSION="26.11 unstable"
 ZRAM_ALGORITHM=lz4
@@ -351,12 +357,100 @@ ui_live_stack_paint() {
 }
 
 ui_live_stack_combine() {
-  local build_rendered=$1
-  if [[ -n ${UI_SWAP_RENDERED:-} ]]; then
-    printf '%s\n%s' "$UI_SWAP_RENDERED" "$build_rendered"
+  local build_rendered=${1:-}
+  local -a parts=()
+
+  [[ -n ${UI_SWAP_RENDERED:-} ]] && parts+=("$UI_SWAP_RENDERED")
+  [[ -n ${UI_CPU_RENDERED:-} ]] && parts+=("$UI_CPU_RENDERED")
+  [[ -n $build_rendered ]] && parts+=("$build_rendered")
+
+  if ((${#parts[@]} == 0)); then
+    printf ''
+  elif ((${#parts[@]} == 1)); then
+    printf '%s' "${parts[0]}"
   else
-    printf '%s' "$build_rendered"
+    local IFS=$'\n'
+    printf '%s' "${parts[*]}"
   fi
+}
+
+ui_cpu_tick() {
+  local _ user nice system idle iowait total idle_sum delta_total delta_idle usage
+
+  read -r _ user nice system idle iowait _ _ _ _ _ < <(grep '^cpu ' /proc/stat)
+  total=$((user + nice + system + idle + iowait))
+  idle_sum=$((idle + iowait))
+
+  if [[ -n ${CPU_PREV_TOTAL:-} ]]; then
+    delta_total=$((total - CPU_PREV_TOTAL))
+    delta_idle=$((idle_sum - CPU_PREV_IDLE))
+    if ((delta_total > 0)); then
+      usage=$((100 - (delta_idle * 100 / delta_total)))
+      ((usage < 0)) && usage=0
+      ((usage > 100)) && usage=100
+      CPU_USAGE=$usage
+      CPU_SAMPLES+=("$usage")
+      if ((${#CPU_SAMPLES[@]} > UI_CPU_GRAPH_SAMPLES)); then
+        CPU_SAMPLES=("${CPU_SAMPLES[@]:1}")
+      fi
+    fi
+  fi
+
+  CPU_PREV_TOTAL=$total
+  CPU_PREV_IDLE=$idle_sum
+}
+
+ui_cpu_sparkline() {
+  local usage chars='▁▂▃▄▅▆▇█' spark='' idx
+
+  for usage in "${CPU_SAMPLES[@]}"; do
+    idx=$((usage * 7 / 100))
+    ((idx > 7)) && idx=7
+    spark+="${chars:idx:1}"
+  done
+  printf '%s' "$spark"
+}
+
+ui_cpu_box_render() {
+  local spark pct margin body width
+
+  spark="$(ui_cpu_sparkline)"
+  pct=${CPU_USAGE:-0}
+  width=$((UI_WIDTH - UI_PAD_H * 2 - 8))
+  if ((${#spark} < width)); then
+    spark+="$(printf '%*s' "$((width - ${#spark}))" '' | tr ' ' '▁')"
+  elif ((${#spark} > width)); then
+    spark="${spark: -width}"
+  fi
+
+  if ((${#CPU_SAMPLES[@]} == 0)); then
+    body="$(ui_faint "$spark")"
+  else
+    body="$(ui_ansi "38;5;${C_VIOLET}" "$(printf '%2s%%' "$pct")") $(ui_faint "$spark")"
+  fi
+
+  if [[ -z ${UI_SWAP_RENDERED:-} ]]; then
+    margin=$UI_MARGIN_LIVE_TOP
+  else
+    margin=$UI_MARGIN_STACK_GAP
+  fi
+
+  UI_CPU_RENDERED="$(gum style \
+    --border rounded \
+    --border-foreground "$C_MUTED" \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --margin "$margin" \
+    --foreground "$C_TEXT" \
+    "$(ui_ansi "38;5;${C_MUTED}" "▤ cpu")" \
+    "$body")"
+}
+
+ui_live_stack_refresh() {
+  local build_rendered=${1:-}
+  ui_cpu_tick
+  ui_cpu_box_render
+  ui_live_stack_paint "$(ui_live_stack_combine "$build_rendered")"
 }
 
 ui_build_read_lines() {
@@ -401,7 +495,7 @@ ui_build_box_render() {
     "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
     "$body")"
 
-  ui_live_stack_paint "$(ui_live_stack_combine "$rendered")"
+  ui_live_stack_refresh "$rendered"
 }
 
 ui_build_show_errors() {
@@ -413,8 +507,12 @@ ui_build_show_errors() {
 ui_build_box() {
   local log status=0 pid
   local -a lines=()
-  local fingerprint="" prev=""
   log="$(mktemp)"
+
+  CPU_SAMPLES=()
+  CPU_PREV_TOTAL=""
+  CPU_PREV_IDLE=""
+  CPU_USAGE=0
 
   ui_build_box_render lines
 
@@ -426,11 +524,7 @@ ui_build_box() {
 
   while kill -0 "$pid" 2>/dev/null; do
     ui_build_read_lines "$log" lines
-    fingerprint="$(printf '%s\n' "${lines[@]}")"
-    if [[ $fingerprint != "$prev" ]]; then
-      ui_build_box_render lines
-      prev=$fingerprint
-    fi
+    ui_build_box_render lines
     sleep 0.2
   done
 
@@ -957,7 +1051,7 @@ ui_swap_box() {
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ swap")" \
     "$body")"
-  ui_live_stack_paint "$UI_SWAP_RENDERED"
+  ui_live_stack_refresh ""
 }
 
 reset_zram_swap() {
