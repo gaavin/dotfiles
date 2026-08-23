@@ -452,6 +452,27 @@ swap_size_summary() {
     paste -sd' + ' -
 }
 
+enable_zram_swap() {
+  local dev=/dev/zram0 mem_kb size_bytes
+
+  if swapon --noheadings --show=NAME 2>/dev/null | grep -qx 'zram0'; then
+    return 0
+  fi
+
+  modprobe zram num_devices=1 2>/dev/null || return 1
+  [[ -e /sys/block/zram0/disksize ]] || return 1
+
+  echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null ||
+    echo lzo > /sys/block/zram0/comp_algorithm 2>/dev/null || true
+
+  mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+  size_bytes=$((mem_kb * 1024))
+  echo "$size_bytes" > /sys/block/zram0/disksize
+
+  mkswap "$dev" >/dev/null 2>&1 || return 1
+  swapon -p 100 "$dev" 2>/dev/null || swapon "$dev" 2>/dev/null || return 1
+}
+
 activate_target_swap() {
   local dev swapfile=/mnt/.install-swap activated=0
 
@@ -484,7 +505,10 @@ activate_target_swap() {
 }
 
 ensure_swap() {
-  if activate_target_swap && [[ $(swap_active_bytes) -gt 0 ]]; then
+  enable_zram_swap || true
+  activate_target_swap || true
+
+  if [[ $(swap_active_bytes) -gt 0 ]]; then
     ui_ok "⚙ swap on ($(swap_size_summary))"
     return 0
   fi
