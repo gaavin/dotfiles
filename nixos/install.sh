@@ -17,6 +17,7 @@ BUILD_PID=""
 INSTALL_ABORTED=0
 UI_SWAP_RENDERED=""
 UI_STACK_HEIGHT=0
+UI_STACK_LAST=""
 
 die() {
   if command -v gum >/dev/null 2>&1; then
@@ -287,25 +288,36 @@ ui_box_line_count() {
   awk 'END {print NR}' <<< "$text"
 }
 
-# Redraw swap/build on /dev/tty. Only clears UI_STACK_HEIGHT lines — the last
-# paint — so growing the stack (e.g. adding build below swap) never erases
-# static content above (storage box, step headers).
+# Redraw swap/build on /dev/tty in one write. Never clear line-by-line with
+# separate tput calls — that leaves blank intermediate frames that screencasts
+# and the eye read as flicker. Skip paint when content is unchanged.
 ui_live_stack_paint() {
   local rendered=$1
-  local new_lines clear_lines i
+  local new_lines clear_lines
+  local seq=""
+
+  [[ $rendered == "${UI_STACK_LAST}" ]] && return 0
 
   new_lines="$(ui_box_line_count "$rendered")"
   clear_lines=$UI_STACK_HEIGHT
 
-  if ((clear_lines > 0)) && [[ -e /dev/tty ]]; then
-    for ((i = 0; i < clear_lines; i++)); do
-      tput cuu1 >/dev/tty 2>&1 || break
-      tput el >/dev/tty 2>&1 || true
-    done
+  # Hide cursor for the paint, move to stack top, erase downward, write body.
+  seq=$'\033[?25l'
+  if ((clear_lines > 0)); then
+    seq+=$'\033['"${clear_lines}"$'A\033[0J'
+  fi
+  seq+="${rendered}"$'\n'
+  seq+=$'\033[?25h'
+
+  if [[ -e /dev/tty ]]; then
+    # %s only: do not reinterpret escapes inside gum output.
+    printf '%s' "$seq" >/dev/tty 2>/dev/null || printf '%s' "$seq" >&2
+  else
+    printf '%s' "$seq" >&2
   fi
 
-  ui_tty_write "${rendered}"$'\n'
   UI_STACK_HEIGHT=$new_lines
+  UI_STACK_LAST=$rendered
 }
 
 ui_live_stack_combine() {
@@ -371,6 +383,7 @@ ui_build_show_errors() {
 ui_build_box() {
   local log status=0 pid
   local -a lines=()
+  local fingerprint="" prev=""
   log="$(mktemp)"
 
   ui_build_box_render lines
@@ -383,8 +396,12 @@ ui_build_box() {
 
   while kill -0 "$pid" 2>/dev/null; do
     ui_build_read_lines "$log" lines
-    ui_build_box_render lines
-    sleep 0.12
+    fingerprint="$(printf '%s\n' "${lines[@]}")"
+    if [[ $fingerprint != "$prev" ]]; then
+      ui_build_box_render lines
+      prev=$fingerprint
+    fi
+    sleep 0.2
   done
 
   wait "$pid" || status=$?
