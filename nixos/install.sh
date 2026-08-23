@@ -221,7 +221,9 @@ ui_build_bar() {
   local done=$1 expected=$2 width=28 filled=0 bar='' i
   if ((expected > 0)); then
     filled=$((done * width / expected))
-    ((filled > width)) && filled=$width
+    if ((filled > width)); then
+      filled=$width
+    fi
   fi
   for ((i = 0; i < width; i++)); do
     if ((i < filled)); then
@@ -776,7 +778,9 @@ collect_swap_lines() {
   local size_w=0 kind_w detail_w row i
 
   kind_w=${#SWAP_DISK_KIND}
-  (( ${#SWAP_ZRAM_KIND} > kind_w )) && kind_w=${#SWAP_ZRAM_KIND}
+  if ((${#SWAP_ZRAM_KIND} > kind_w)); then
+    kind_w=${#SWAP_ZRAM_KIND}
+  fi
   detail_w=${#SWAP_DISK_DETAIL}
 
   while read -r name type size_bytes _ _; do
@@ -801,7 +805,9 @@ collect_swap_lines() {
   done < <(swapon_table)
 
   for size_h in "${sizes[@]}"; do
-    (( ${#size_h} > size_w )) && size_w=${#size_h}
+    if ((${#size_h} > size_w)); then
+      size_w=${#size_h}
+    fi
   done
 
   for i in "${!icons[@]}"; do
@@ -925,7 +931,11 @@ install_system() {
     ui_ok "⚙ linux-asahi will compile from source"
   fi
   ensure_swap
-  system="$(ui_build_box nix "${NIX_EXTRA[@]}" build "path:$flake#$HOST" --print-out-paths)"
+  system="$(
+    ui_build_box nix "${NIX_EXTRA[@]}" build \
+      "path:$flake#nixosConfigurations.$HOST.config.system.build.toplevel" \
+      --print-out-paths
+  )" || die "failed to build system"
   ui_spin "Installing system..." \
     nixos-install --system "$system" --no-root-password --no-channel-copy --root /mnt
   set_passwords
