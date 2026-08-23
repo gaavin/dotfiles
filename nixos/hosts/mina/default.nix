@@ -111,7 +111,7 @@
     };
   };
 
-  services.logind.settings = {
+  services.logind.settings.Login = {
     IdleAction = "ignore";
   };
 
