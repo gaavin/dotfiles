@@ -32,9 +32,11 @@ cleanup() {
     wait "$BUILD_PID" 2>/dev/null || true
   fi
   BUILD_PID=""
-  reset_zram_swap
   if [[ ${INSTALL_ABORTED:-0} -eq 1 ]]; then
+    abort_cleanup
     ui_abort
+  else
+    reset_zram_swap
   fi
   if [[ -n ${SECRETS:-} && -d $SECRETS ]]; then
     rm -rf "$SECRETS"
@@ -1173,22 +1175,55 @@ live_store_avail() {
   df -B1 --output=avail /nix 2>/dev/null | tail -1 | tr -d ' '
 }
 
-prepare_live_environment() {
-  local avail min_free=$((2 * 1024 * 1024 * 1024))
-
+reclaim_live_store() {
   pkill -TERM nixos-install 2>/dev/null || true
+  pkill -TERM -f 'nix.*(build|copy)' 2>/dev/null || true
   sleep 0.5
 
   rm -rf /nix/var/nix/builds/* 2>/dev/null || true
   rm -rf /tmp/nix-* 2>/dev/null || true
 
   if command -v nix-collect-garbage >/dev/null 2>&1; then
-    ui_spin "Reclaiming space on live system..." \
-      bash -c 'nix-collect-garbage -d >/dev/null 2>&1 || true'
+    nix-collect-garbage -d >/dev/null 2>&1 || true
   elif command -v nix >/dev/null 2>&1; then
-    ui_spin "Reclaiming space on live system..." \
-      bash -c 'nix store gc >/dev/null 2>&1 || true'
+    nix store gc >/dev/null 2>&1 || true
   fi
+}
+
+deactivate_all_swap() {
+  local dev sys name
+
+  while IFS= read -r dev; do
+    [[ -n $dev ]] || continue
+    swapoff "$dev" 2>/dev/null || true
+  done < <(swapon --noheadings --show=NAME 2>/dev/null || true)
+
+  for sys in /sys/block/zram*; do
+    [[ -e $sys/disksize ]] || continue
+    if [[ -e $sys/reset ]]; then
+      echo 1 >"$sys/reset" 2>/dev/null || echo 0 >"$sys/reset" 2>/dev/null || true
+    else
+      echo 0 >"$sys/disksize" 2>/dev/null || true
+    fi
+  done
+
+  if [[ -d /sys/module/zram ]]; then
+    rmmod zram 2>/dev/null || true
+  fi
+}
+
+abort_cleanup() {
+  reclaim_live_store
+  deactivate_all_swap
+  if mountpoint -q /mnt/efi 2>/dev/null; then
+    umount /mnt/efi 2>/dev/null || true
+  fi
+}
+
+prepare_live_environment() {
+  local avail min_free=$((2 * 1024 * 1024 * 1024))
+
+  ui_spin "Reclaiming space on live system..." reclaim_live_store
 
   avail=$(live_store_avail)
   avail=${avail:-0}
