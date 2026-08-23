@@ -17,7 +17,7 @@
 Boot a NixOS installer, clone this repo, run the script.
 
 <p align="center">
-  <img src="assets/nixos-installer.mp4" alt="NixOS installer TUI on mina" width="720">
+  <img src="assets/nixos-installer.gif" alt="NixOS installer TUI on mina" width="720">
 </p>
 
 ```bash
