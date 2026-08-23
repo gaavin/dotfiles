@@ -12,10 +12,6 @@
 > [!WARNING]
 > **This project was primarily written by an LLM (AI). Review the code yourself before running it. Use at your own risk.**
 
-<p align="center">
-  <img src="assets/setup.png" alt="mina and air running NixOS Plasma" width="720">
-</p>
-
 ---
 
 ```
@@ -97,3 +93,7 @@ Updates the flake and runs `nixos-rebuild switch` for the current hostname. On a
 ```bash
 rebuild
 ```
+
+<p align="center">
+  <img src="assets/setup.png" alt="mina and air running NixOS Plasma" width="720">
+</p>
