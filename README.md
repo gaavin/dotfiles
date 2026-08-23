@@ -12,6 +12,10 @@
 > [!WARNING]
 > **This project was primarily written by an LLM (AI). Review the code yourself before running it. Use at your own risk.**
 
+<p align="center">
+  <img src="assets/setup.png" alt="mina and air running NixOS Plasma" width="720">
+</p>
+
 ---
 
 ```
