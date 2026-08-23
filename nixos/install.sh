@@ -60,7 +60,7 @@ start_sleep_inhibit() {
   [[ -n ${SLEEP_INHIBIT_PID:-} ]] && return 0
   command -v systemd-inhibit >/dev/null 2>&1 || return 0
   systemd-inhibit \
-    --what=idle:sleep:shutdown:handle-lid-switch:handle-lid-switch-docked \
+    --what=idle:sleep:shutdown:handle-lid-switch:handle-suspend-key:handle-hibernate-key:handle-power-key \
     --who="nixos-install.sh" \
     --why="NixOS installation in progress" \
     --mode=block \
