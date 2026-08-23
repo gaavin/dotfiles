@@ -317,9 +317,41 @@ disk_entry_desc() {
   printf '%s %s' "$icon" "$spec"
 }
 
-disk_device_depth() {
-  local name=$1
-  local -n parents=$2
+disk_build_parent_map() {
+  local -n out=$1
+  local -n typemap=$2
+  local line crypt_name= name pk
+
+  while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
+    eval "$line"
+    [[ -n ${NAME:-} ]] || continue
+    out[$NAME]=${PKNAME:-}
+    typemap[$NAME]=${TYPE:-}
+    [[ ${TYPE:-} == crypt ]] && crypt_name=$NAME
+  done < <(disk_lsblk)
+
+  for name in "${!out[@]}"; do
+    [[ ${typemap[$name]} == lvm && $name == *-* && -z ${out[$name]} ]] &&
+      out[$name]="${name%-*}"
+  done
+
+  for name in "${!out[@]}"; do
+    [[ ${typemap[$name]} == lvm && $name != *-* && -z ${out[$name]} && -n $crypt_name ]] &&
+      out[$name]=$crypt_name
+  done
+
+  for name in "${!out[@]}"; do
+    pk=${out[$name]}
+    [[ -n $pk && -z ${out[$pk]:-} && ${typemap[$pk]:-} == lvm && $pk != *-* && -n $crypt_name ]] &&
+      out[$pk]=$crypt_name
+  done
+}
+
+disk_display_indent() {
+  local name=$1 type=$2
+  local -n parents=$3
   local depth=0 pk="${parents[$name]:-}"
 
   while [[ -n $pk && $pk != "$(disk_short)" ]]; do
@@ -327,7 +359,20 @@ disk_device_depth() {
     pk="${parents[$pk]:-}"
   done
 
-  echo "$depth"
+  case $type in
+    lvm)
+      if [[ $name == *-* ]]; then
+        disk_diff_indent 1
+        return
+      fi
+      ;;
+  esac
+
+  if (( depth >= 2 )); then
+    disk_diff_indent 1
+  else
+    disk_diff_indent 0
+  fi
 }
 
 disk_diff_indent() {
@@ -344,15 +389,11 @@ disk_diff_header() {
 }
 
 mina_disk_diff() {
-  local line removed=0 depth indent spec
+  local line removed=0 indent spec
   local -A pkmap=()
+  local -A devtypes=()
 
-  while IFS= read -r line; do
-    [[ -z $line ]] && continue
-    NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
-    eval "$line"
-    [[ -n ${NAME:-} ]] && pkmap[$NAME]=${PKNAME:-}
-  done < <(disk_lsblk)
+  disk_build_parent_map pkmap devtypes
 
   {
     disk_diff_header
@@ -366,9 +407,9 @@ mina_disk_diff() {
         part | crypt | lvm) ;;
         *) continue ;;
       esac
+      [[ ${TYPE:-} == lvm && $NAME != *-* ]] && continue
       removed=1
-      depth="$(disk_device_depth "$NAME" pkmap)"
-      indent="$(disk_diff_indent "$depth")"
+      indent="$(disk_display_indent "$NAME" "$TYPE" pkmap)"
       spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
       ui_diff_del "${indent}${spec}"
     done < <(disk_lsblk)
@@ -398,15 +439,11 @@ ui_disk_diff_box() {
 }
 
 air_disk_diff() {
-  local line role depth indent spec
+  local line role indent spec
   local -A pkmap=()
+  local -A devtypes=()
 
-  while IFS= read -r line; do
-    [[ -z $line ]] && continue
-    NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
-    eval "$line"
-    [[ -n ${NAME:-} ]] && pkmap[$NAME]=${PKNAME:-}
-  done < <(disk_lsblk)
+  disk_build_parent_map pkmap devtypes
 
   {
     disk_diff_header
@@ -417,8 +454,7 @@ air_disk_diff() {
       eval "$line"
       [[ ${TYPE:-} == disk ]] && continue
       [[ ${TYPE:-} == part ]] || continue
-      depth="$(disk_device_depth "$NAME" pkmap)"
-      indent="$(disk_diff_indent "$depth")"
+      indent="$(disk_display_indent "$NAME" "$TYPE" pkmap)"
       spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
       role="$(part_role_air "$PARTLABEL" "$FSTYPE" "$PARTTYPENAME")"
       case $role in
