@@ -69,7 +69,7 @@ Plug in the USB and power on. Then run **Install** above.
 
 ## Rebuild
 
-Updates the flake and runs `nixos-rebuild switch` for the current hostname. On air, also syncs firmware from `/efi`.
+Updates the flake and runs `nixos-rebuild switch` for the current hostname. On air, also syncs firmware from `/efi` on asahi machines.
 
 ```bash
 rebuild
