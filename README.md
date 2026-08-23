@@ -34,8 +34,6 @@ sudo ./nixos/install.sh
 
 ### Air, from macOS
 
-Needs macOS 12.3+, an admin account, and a USB stick (≥512MB) you can erase. Upstream: [nixos-apple-silicon UEFI guide](https://github.com/nix-community/nixos-apple-silicon/blob/main/docs/uefi-standalone.md). Recreate an old Asahi/UEFI stub; old m1n1 often will not boot the current ISO.
-
 ```bash
 curl https://alx.sh | sh
 ```
