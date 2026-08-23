@@ -1,6 +1,8 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
 
 {
+  imports = lib.optional (builtins.pathExists ./install-passwords.nix) ./install-passwords.nix;
+
   boot = {
     initrd.systemd.enable = true;
     initrd.services.lvm.enable = true;
@@ -41,6 +43,10 @@
   i18n.defaultLocale = "en_CA.UTF-8";
   time.timeZone = "America/St_Johns";
 
+  # Keep greeter + TTY on the same layout so typed passwords match what was set at install.
+  console.keyMap = "us";
+
+  users.mutableUsers = true;
   users.users.max = {
     isNormalUser = true;
     description = "Max Power";
@@ -73,8 +79,17 @@
   };
 
   services = {
+    xserver.xkb = {
+      layout = "us";
+      variant = "";
+    };
     desktopManager.plasma6.enable = true;
-    displayManager.plasma-login-manager.enable = true;
+    # SDDM + Wayland is the reliable Plasma 6 path; plasma-login-manager has
+    # repeatedly shown "Login failed" / empty-session auth failures on unstable.
+    displayManager.sddm = {
+      enable = true;
+      wayland.enable = true;
+    };
 
     resolved = {
       enable = true;

@@ -1079,18 +1079,55 @@ ensure_swap() {
   return 1
 }
 
+hash_password() {
+  local passfile=$1
+  if command -v mkpasswd >/dev/null 2>&1; then
+    mkpasswd -m yescrypt -s <"$passfile"
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl passwd -6 -stdin <"$passfile"
+  else
+    nix "${NIX_EXTRA[@]}" shell nixpkgs#mkpasswd --command mkpasswd -m yescrypt -s <"$passfile"
+  fi
+}
+
+# Bake passwords into the target flake so first boot activation sets them.
+# Post-install chpasswd alone is easy to lose / leave accounts locked with
+# nixos-install --no-root-password.
+write_install_passwords() {
+  local flake=$1
+  local root_hash max_hash
+  root_hash="$(hash_password "$SECRETS/root")"
+  max_hash="$(hash_password "$SECRETS/max")"
+  [[ -n $root_hash && -n $max_hash ]] || die "failed to hash install passwords"
+  {
+    echo '{'
+    printf '  users.users.root.initialHashedPassword = "%s";\n' "$root_hash"
+    printf '  users.users.max.initialHashedPassword = "%s";\n' "$max_hash"
+    echo '}'
+  } >"$flake/install-passwords.nix"
+  chmod 600 "$flake/install-passwords.nix"
+}
+
 set_passwords() {
+  local status
   {
     printf 'root:%s\n' "$(cat "$SECRETS/root")"
     printf 'max:%s\n' "$(cat "$SECRETS/max")"
   } >"$SECRETS/chpasswd"
   chmod 600 "$SECRETS/chpasswd"
-  mkdir -p /mnt/root
-  cp "$SECRETS/chpasswd" /mnt/root/chpasswd
-  chmod 600 /mnt/root/chpasswd
-  ui_spin "Setting user passwords..." \
-    nixos-enter --root /mnt -c 'chpasswd < /root/chpasswd && chown -R max:users /home/max'
-  rm -f /mnt/root/chpasswd
+
+  apply_chpasswd() {
+    # Host-side redirect — avoids chroot path quirks for the secret file.
+    nixos-enter --root /mnt -- chpasswd <"$SECRETS/chpasswd"
+    nixos-enter --root /mnt -- chown -R max:users /home/max
+  }
+  ui_spin "Setting user passwords..." apply_chpasswd
+
+  status="$(nixos-enter --root /mnt -- passwd -S max 2>/dev/null || true)"
+  # passwd -S: "max P ..." = password set; L/NP = locked or empty.
+  if ! [[ $status =~ [[:space:]]P[[:space:]] ]]; then
+    die "max password is not set after install (passwd -S: ${status:-unknown})"
+  fi
 }
 
 install_system() {
@@ -1102,6 +1139,7 @@ install_system() {
   fi
   prepare_live_environment
   ensure_swap
+  write_install_passwords "$flake"
   ui_build_box nixos-install --no-root-password --no-channel-copy --root /mnt \
     --flake "path:$flake#$HOST" || die "failed to install system"
   set_passwords
