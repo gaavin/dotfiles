@@ -93,6 +93,11 @@ in
         pointSize = 10;
       };
       kwin.effects.shakeCursor.enable = false;
+      powerdevil = lib.mkIf (osConfig.networking.hostName == "air") {
+        AC.keyboardBrightness = 25;
+        battery.keyboardBrightness = 25;
+        lowBattery.keyboardBrightness = 25;
+      };
       input.mice = [
         {
           enable = true;
