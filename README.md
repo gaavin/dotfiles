@@ -20,6 +20,9 @@ Boot a NixOS installer, clone this repo, run the script.
   <img src="assets/nixos-installer.gif" alt="NixOS installer TUI on mina" width="400">
 </p>
 
+> [!CAUTION]
+> **Destructive** This script will wipe any existing partitions on the preconfigured disks.
+
 ```bash
 # if you need to connect to wifi
 nmtui
@@ -28,9 +31,6 @@ git clone https://github.com/gaavin/dotfiles.git
 cd dotfiles
 sudo ./nixos/install.sh
 ```
-
-> [!CAUTION]
-> **Destructive** This script will wipe any existing partitions on the preconfigured disks.
 
 ### Air, from macOS
 
