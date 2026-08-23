@@ -86,7 +86,7 @@ in
         theme = "breeze-dark";
         colorScheme = "BreezeDark";
         iconTheme = "breeze-dark";
-        wallpaper = ../assets/wallpaper.jpg;
+        wallpaper = ./wallpaper.jpg;
       };
       fonts.fixedWidth = {
         family = "JetBrainsMono Nerd Font";
