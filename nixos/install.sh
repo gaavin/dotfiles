@@ -460,27 +460,59 @@ zram_compression() {
   echo "${algo:-lz4}"
 }
 
-swap_status_summary() {
-  local parts=() name size_bytes size_h base algo sys
+swap_size_for() {
+  local name=$1
+  local base="${name##*/}"
+  local size_bytes=$2
+  local sys
 
-  while IFS= read -r name size_bytes _; do
+  if [[ $base == zram* ]]; then
+    sys="/sys/block/$base/disksize"
+    if [[ -z $size_bytes || ! $size_bytes =~ ^[0-9]+$ || $size_bytes -eq 0 ]] && [[ -f $sys ]]; then
+      size_bytes=$(<"$sys")
+    fi
+  fi
+
+  if [[ -n $size_bytes && $size_bytes =~ ^[0-9]+$ && $size_bytes -gt 0 ]]; then
+    fmt_size "$size_bytes"
+  else
+    echo "?"
+  fi
+}
+
+collect_swap_lines() {
+  local name type size_bytes base algo size_h
+  local -a zram_lines=() disk_lines=()
+
+  while IFS= read -r name type size_bytes _ _; do
     [[ -n $name ]] || continue
     base="${name##*/}"
+    size_h="$(swap_size_for "$name" "$size_bytes")"
     if [[ $base == zram* ]]; then
-      sys="/sys/block/$base/disksize"
-      if [[ -z $size_bytes || $size_bytes -eq 0 ]] && [[ -f $sys ]]; then
-        size_bytes=$(<"$sys")
-      fi
-      size_h="$(fmt_size "$size_bytes")"
       algo="$(zram_compression "$base")"
-      parts+=("${size_h} zram ${algo}")
+      zram_lines+=("$(ui_ansi "38;5;${C_VIOLET}" "  ⚡ ${size_h}  zram ${algo}")")
     else
-      size_h="$(fmt_size "$size_bytes")"
-      parts+=("${size_h} swap partition")
+      disk_lines+=("$(ui_ansi "38;5;${C_SUCCESS}" "  💾 ${size_h}  swap partition")")
     fi
-  done < <(swapon --noheadings --bytes --show=NAME,SIZE 2>/dev/null)
+  done < <(swapon --noheadings --bytes 2>/dev/null)
 
-  (IFS=', '; echo "${parts[*]}")
+  ((${#zram_lines[@]})) && printf '%s\n' "${zram_lines[@]}"
+  ((${#disk_lines[@]})) && printf '%s\n' "${disk_lines[@]}"
+}
+
+ui_swap_box() {
+  local body
+  body="$(collect_swap_lines)"
+  [[ -n $body ]] || return 1
+  gum style \
+    --border rounded \
+    --border-foreground "$C_MUTED" \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --margin "1 0 0 0" \
+    --foreground "$C_TEXT" \
+    "$(ui_ansi "38;5;${C_MUTED}" "▤ swap")" \
+    "$body"
 }
 
 reset_zram_swap() {
@@ -554,7 +586,7 @@ ensure_swap() {
   activate_target_swap || true
 
   if [[ $(swap_active_bytes) -gt 0 ]]; then
-    ui_ok "⚙ swap on ($(swap_status_summary))"
+    ui_swap_box
     return 0
   fi
   ui_warn "⚙ swap is off — install may run out of memory"
