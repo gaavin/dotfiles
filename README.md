@@ -21,7 +21,7 @@ Boot a NixOS installer, clone this repo, run the script.
 </p>
 
 > [!CAUTION]
-> **Destructive** This script will wipe any existing partitions on the preconfigured disks (/dev/nvme0n1) (except for mac related partitions).
+> **Destructive** This script will wipe any (except for mac related partitions) existing partitions on the preconfigured disks (/dev/nvme0n1).
 
 ```bash
 # if you need to connect to wifi
