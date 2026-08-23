@@ -34,7 +34,10 @@ nix_flake() {
   command nix "${NIX_EXTRA[@]}" "$@"
 }
 
-UI_WIDTH=52
+UI_WIDTH=50
+UI_PAD_H=2
+UI_PAD_V=1
+NIXOS_VERSION="26.11 unstable"
 
 theme() {
   export GUM_INPUT_CURSOR_FOREGROUND="39"
@@ -58,6 +61,10 @@ host_arch() {
   esac
 }
 
+ui_faint() {
+  printf '\033[2m%s\033[0m' "$1"
+}
+
 ui_banner() {
   local host=$1 label
   label="$host · $(host_arch)"
@@ -66,31 +73,62 @@ ui_banner() {
     --border-foreground 39 \
     --bold \
     --foreground 39 \
+    --align center \
     --width "$UI_WIDTH" \
-    --padding "1 2" \
-    --margin "1 0" \
+    --padding "$UI_PAD_V $UI_PAD_H" \
+    --margin "1 0 0 0" \
     "NixOS" \
-    "$(gum style --faint --foreground 252 "$label")"
+    "$(ui_faint "Version $NIXOS_VERSION")" \
+    "$(ui_faint "$label")"
+}
+
+ui_heading() {
+  gum style \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --margin "1 0 0 0" \
+    --bold \
+    --foreground 39 \
+    "$1"
+}
+
+ui_body() {
+  gum style \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --foreground 252 \
+    "$@"
 }
 
 ui_installer() {
-  gum format -- "## Installer
-$1"
-  echo
+  local body=$1 line
+  ui_heading "Installer"
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    line="${line#- }"
+    ui_body "  • $line"
+  done <<< "$body"
 }
 
 ui_ok() {
-  gum log --level info "$1"
+  gum style \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --foreground 42 \
+    "✓ $1"
 }
 
 ui_warn() {
-  gum log --level warn "$1"
+  gum style \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --foreground 214 \
+    "⚠ $1"
 }
 
 ui_step() {
   STEP_N=$((STEP_N + 1))
-  echo
-  gum style --foreground 39 --bold "$STEP_N/$STEP_TOTAL  $1"
+  ui_heading "$STEP_N/$STEP_TOTAL  $1"
 }
 
 ui_spin() {
@@ -103,7 +141,9 @@ ui_box() {
   gum style \
     --border rounded \
     --border-foreground 245 \
-    --padding "0 1" \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --margin "1 0 0 0" \
     --foreground 252 \
     "$1"
 }
@@ -345,7 +385,6 @@ EOF
 }
 
 finish() {
-  echo
   local msg="reboot."
   if [[ $HOST == air ]]; then
     msg="reboot, then hold power for the Apple boot picker if you need macOS."
@@ -353,11 +392,14 @@ finish() {
   gum style \
     --border rounded \
     --border-foreground 42 \
+    --bold \
     --foreground 42 \
+    --align center \
     --width "$UI_WIDTH" \
-    --padding "1 2" \
+    --padding "$UI_PAD_V $UI_PAD_H" \
+    --margin "1 0 0 0" \
     "Done." \
-    "$(gum style --faint --foreground 252 "$msg")"
+    "$(ui_faint "$msg")"
 }
 
 if [[ $EUID -ne 0 ]]; then
