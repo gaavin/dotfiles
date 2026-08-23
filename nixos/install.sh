@@ -35,10 +35,8 @@ nix_flake() {
   command nix "${NIX_EXTRA[@]}" "$@"
 }
 
-UI_WIDTH=50
-UI_DISK_WIDTH=64
+UI_WIDTH=64
 UI_PAD_H=2
-UI_PAD_V=1
 NIXOS_VERSION="26.11 unstable"
 C_ACCENT=39
 C_SUCCESS=42
@@ -122,7 +120,7 @@ ui_banner() {
     --foreground "$C_ACCENT" \
     --align center \
     --width "$UI_WIDTH" \
-    --padding "$UI_PAD_V $UI_PAD_H" \
+    --padding "0 $UI_PAD_H" \
     --margin "1 0 0 0" \
     "❄ NixOS" \
     "$(ui_ansi "2;38;5;${C_VIOLET}" "◈ Version $NIXOS_VERSION")" \
@@ -287,7 +285,7 @@ ui_disk_diff_box() {
   gum style \
     --border rounded \
     --border-foreground "$C_MUTED" \
-    --width "$UI_DISK_WIDTH" \
+    --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
     --margin "1 0 0 0" \
     --foreground "$C_TEXT" \
@@ -445,7 +443,15 @@ swap_active_bytes() {
 }
 
 zram_compression() {
-  local dev=$1 algo sys="/sys/block/$dev/comp_algorithm"
+  local dev=$1
+  local algo sys
+
+  [[ -n $dev ]] || {
+    echo lz4
+    return
+  }
+
+  sys="/sys/block/$dev/comp_algorithm"
   [[ -f $sys ]] || {
     echo lz4
     return
@@ -706,7 +712,7 @@ finish() {
     --foreground "$C_SUCCESS" \
     --align center \
     --width "$UI_WIDTH" \
-    --padding "$UI_PAD_V $UI_PAD_H" \
+    --padding "0 $UI_PAD_H" \
     --margin "1 0 0 0" \
     "✔ Done." \
     "$(ui_faint "$msg")"
