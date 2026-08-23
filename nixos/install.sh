@@ -443,13 +443,34 @@ swap_active_bytes() {
   swapon --noheadings --bytes 2>/dev/null | awk '{s+=$3} END {print s+0}'
 }
 
-swap_size_summary() {
-  swapon --noheadings --bytes 2>/dev/null |
-    awk '{print $3}' |
-    while read -r bytes; do
-      fmt_size "$bytes"
-    done |
-    paste -sd' + ' -
+zram_compression() {
+  local dev=$1 algo sys="/sys/block/$dev/comp_algorithm"
+  [[ -f $sys ]] || {
+    echo lz4
+    return
+  }
+  algo=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$sys")
+  echo "${algo:-lz4}"
+}
+
+swap_status_summary() {
+  local parts=() name size_bytes size_h base algo
+
+  while IFS= read -r name size_bytes _; do
+    [[ -n $name ]] || continue
+    base="${name##*/}"
+    size_h="$(fmt_size "$size_bytes")"
+    if [[ $base == zram* ]]; then
+      algo="$(zram_compression "$base")"
+      parts+=("${size_h} zram ${algo}")
+    elif [[ $name == *install-swap* ]]; then
+      parts+=("${size_h} temporary swap file on disk")
+    else
+      parts+=("${size_h} swap partition on disk")
+    fi
+  done < <(swapon --noheadings --bytes --show=NAME,SIZE 2>/dev/null)
+
+  (IFS=', '; echo "${parts[*]}")
 }
 
 enable_zram_swap() {
@@ -509,7 +530,7 @@ ensure_swap() {
   activate_target_swap || true
 
   if [[ $(swap_active_bytes) -gt 0 ]]; then
-    ui_ok "⚙ swap on ($(swap_size_summary))"
+    ui_ok "⚙ swap on ($(swap_status_summary))"
     return 0
   fi
   ui_warn "⚙ swap is off — install may run out of memory"
