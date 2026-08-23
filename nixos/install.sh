@@ -198,15 +198,130 @@ ui_spin() {
   gum spin --spinner dot --title "◌ $title" --show-error -- "$@"
 }
 
-ui_nix_progress() {
-  local title=$1
-  shift
-  gum style \
+ui_build_truncate() {
+  local text=$1 max=$2
+  text="${text//[$'\t\r\n']/ }"
+  if ((${#text} > max)); then
+    printf '%s…' "${text:0:max-1}"
+  else
+    printf '%s' "$text"
+  fi
+}
+
+ui_build_json_num() {
+  sed -n "s/.*\"$2\":\\([0-9]*\\).*/\\1/p" <<<"$1" | head -1
+}
+
+ui_build_json_text() {
+  sed -n 's/.*"text":"\(.*\)","type".*/\1/p' <<<"$1" |
+    sed 's/\\"/"/g; s/\\n/ /g; s/\\u001b\[[0-9;]*m//g'
+}
+
+ui_build_bar() {
+  local done=$1 expected=$2 width=28 filled=0 bar='' i
+  if ((expected > 0)); then
+    filled=$((done * width / expected))
+    ((filled > width)) && filled=$width
+  fi
+  for ((i = 0; i < width; i++)); do
+    if ((i < filled)); then
+      bar+='█'
+    else
+      bar+='░'
+    fi
+  done
+  printf '%s' "$bar"
+}
+
+ui_build_box_poll() {
+  local log=$1
+  local -n _done=$2 _expected=$3 _running=$4 _activity=$5
+  local line num text
+
+  [[ -f $log ]] || return 0
+
+  while IFS= read -r line; do
+    [[ $line == @nix\ * ]] || continue
+    line="${line#@nix }"
+    if [[ $line == *'"action":"progress"'* ]]; then
+      num="$(ui_build_json_num "$line" done)"
+      [[ -n $num ]] && _done=$num
+      num="$(ui_build_json_num "$line" expected)"
+      [[ -n $num ]] && _expected=$num
+      num="$(ui_build_json_num "$line" running)"
+      [[ -n $num ]] && _running=$num
+    elif [[ $line == *'"action":"start"'* ]]; then
+      text="$(ui_build_json_text "$line")"
+      [[ -n $text ]] && _activity="$text"
+    fi
+  done <"$log"
+}
+
+ui_build_box_render() {
+  local done=$1 expected=$2 running=$3 activity=$4
+  local -n _height=$5
+  local bar body rendered lines width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
+
+  bar="$(ui_build_bar "$done" "$expected")"
+  activity="$(ui_build_truncate "$activity" "$width")"
+  body="$(ui_ansi "38;5;201" "$bar") $(ui_faint "${done}/${expected}")"
+  if ((running > 0)); then
+    body+=$'\n'"$(ui_faint "$running active")"
+  fi
+  body+=$'\n'"$activity"
+
+  rendered="$(gum style \
+    --border rounded \
+    --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --foreground "$C_ACCENT" \
-    "$title"
-  "$@"
+    --margin "1 0 0 0" \
+    --foreground "$C_TEXT" \
+    "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
+    "$body")"
+
+  lines="$(printf '%s\n' "$rendered" | wc -l)"
+  if (($_height > 0)); then
+    tput cuu "$_height" 2>/dev/null || true
+    tput ed 2>/dev/null || true
+  fi
+  printf '%s\n' "$rendered"
+  _height=$lines
+}
+
+ui_build_box() {
+  local log out status=0 height=0 pid
+  local done=0 expected=0 running=0 activity='starting…'
+  log="$(mktemp)"
+  out="$(mktemp)"
+
+  "$@" --log-format internal-json >"$out" 2>"$log" &
+  pid=$!
+
+  while kill -0 "$pid" 2>/dev/null; do
+    ui_build_box_poll "$log" done expected running activity
+    ui_build_box_render "$done" "$expected" "$running" "$activity" height
+    sleep 0.15
+  done
+
+  wait "$pid" || status=$?
+
+  ui_build_box_poll "$log" done expected running activity
+  if ((status != 0)); then
+    activity='build failed'
+  elif ((expected > 0 && done >= expected)); then
+    activity='done'
+  fi
+  ui_build_box_render "$done" "$expected" "$running" "$activity" height
+
+  if ((status != 0)); then
+    grep -E '^error:|^warning:' "$log" 2>/dev/null | tail -5 >&2 || true
+    rm -f "$log" "$out"
+    return "$status"
+  fi
+
+  tail -1 "$out"
+  rm -f "$log" "$out"
 }
 
 ui_box() {
@@ -557,8 +672,8 @@ disko_run() {
   if [[ $HOST == air && $1 == *destroy* ]]; then
     die "refusing Disko destroy on air"
   fi
-  ui_nix_progress "Formatting and mounting..." \
-    nix "${NIX_EXTRA[@]}" --log-format bar-with-logs run github:nix-community/disko/latest -- \
+  ui_spin "Formatting and mounting..." \
+    nix "${NIX_EXTRA[@]}" run github:nix-community/disko/latest -- \
     --mode "$1" \
     "${@:2}" \
     --flake "path:$SCRIPT_DIR#$HOST"
@@ -803,14 +918,16 @@ set_passwords() {
 }
 
 install_system() {
-  local flake=/mnt/home/max/dotfiles/nixos
+  local flake=/mnt/home/max/dotfiles/nixos system
   systemctl restart systemd-timesyncd || true
   ui_step "Install NixOS"
   if [[ $HOST == air ]]; then
     ui_ok "⚙ linux-asahi will compile from source"
   fi
   ensure_swap
-  nixos-install --no-root-password --no-channel-copy --root /mnt --flake "path:$flake#$HOST"
+  system="$(ui_build_box nix "${NIX_EXTRA[@]}" build "path:$flake#$HOST" --print-out-paths)"
+  ui_spin "Installing system..." \
+    nixos-install --system "$system" --no-root-password --no-channel-copy --root /mnt
   set_passwords
 }
 
