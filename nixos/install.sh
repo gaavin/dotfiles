@@ -44,7 +44,9 @@ nix_flake() {
 
 UI_WIDTH=64
 UI_PAD_H=2
-UI_MARGIN="1 0 1 0"
+UI_MARGIN_SECTION="1 0 0 0"
+UI_MARGIN_TIGHT="0 0 0 0"
+UI_MARGIN_BOX="1 0 1 0"
 NIXOS_VERSION="26.11 unstable"
 ZRAM_ALGORITHM=lz4
 ZRAM_MEMORY_PERCENT=100
@@ -136,7 +138,7 @@ ui_banner() {
     --align center \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN" \
+    --margin "$UI_MARGIN_SECTION" \
     "❄ NixOS" \
     "$(ui_ansi "2;38;5;${C_VIOLET}" "◈ Version $NIXOS_VERSION")" \
     "$(ui_faint "$label")"
@@ -146,7 +148,7 @@ ui_heading() {
   gum style \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN" \
+    --margin "$UI_MARGIN_SECTION" \
     --bold \
     --foreground "$C_ACCENT" \
     "◆ $1"
@@ -188,13 +190,17 @@ ui_line() {
   gum style \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN" \
+    --margin "$UI_MARGIN_TIGHT" \
     "$@"
 }
 
 ui_step() {
   STEP_N=$((STEP_N + 1))
-  ui_line "$(ui_ansi "1;38;5;${C_ACCENT}" "▸ $STEP_N/$STEP_TOTAL") $(ui_ansi "1;38;5;${C_TEXT}" "$1")"
+  gum style \
+    --width "$UI_WIDTH" \
+    --padding "0 $UI_PAD_H" \
+    --margin "$UI_MARGIN_SECTION" \
+    "$(ui_ansi "1;38;5;${C_ACCENT}" "▸ $STEP_N/$STEP_TOTAL") $(ui_ansi "1;38;5;${C_TEXT}" "$1")"
 }
 
 ui_spin() {
@@ -260,7 +266,11 @@ ui_build_json_num() {
 }
 
 ui_build_json_fields105() {
-  sed -n 's/.*"fields":\[\([0-9]*\),\([0-9]*\),\([0-9]*\),\([0-9]*\)\].*/\1 \2 \3 \4/p' <<<"$1" | head -1
+  sed -n 's/.*"fields"[[:space:]]*:[[:space:]]*\[\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)[[:space:]]*\].*/\1 \2 \3 \4/p' <<<"$1" | head -1
+}
+
+ui_build_json_fields106() {
+  sed -n 's/.*"fields"[[:space:]]*:[[:space:]]*\[\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)[[:space:]]*\].*/\1 \2/p' <<<"$1" | head -1
 }
 
 ui_build_json_text() {
@@ -310,8 +320,8 @@ ui_build_bar_indeterminate() {
 
 ui_build_box_poll() {
   local log=$1
-  local -n _offset=$2 _done=$3 _expected=$4 _running=$5 _activity=$6 _builds_id=$7
-  local chunk line text d e r f id new_bytes
+  local -n _offset=$2 _done=$3 _expected=$4 _running=$5 _activity=$6
+  local chunk line text d e r f atype exp new_bytes
 
   [[ -f $log ]] || return 0
   new_bytes=$(wc -c <"$log")
@@ -323,23 +333,23 @@ ui_build_box_poll() {
   while IFS= read -r line; do
     [[ $line == @nix\ * ]] || continue
     line="${line#@nix }"
-    if [[ $line == *'"action":"start"'* && $line == *'"parent":0'* ]]; then
-      if [[ $line == *'"type":104'* ]]; then
-        id="$(ui_build_json_num "$line" id)"
-        [[ -n $id ]] && _builds_id=$id
-      fi
-    elif [[ $line == *'"action":"result"'* && $line == *'"type":105'* ]]; then
+    if [[ $line == *'"action":"result"'* && $line == *'"type":105'* ]]; then
       read -r d e r f <<<"$(ui_build_json_fields105 "$line")"
-      [[ -n $e && $e -gt 0 ]] || continue
-      id="$(ui_build_json_num "$line" id)"
-      if [[ -n $_builds_id && $id == "$_builds_id" ]]; then
-        _done=${d:-0}
+      [[ -n $e ]] || continue
+      d=${d:-0}
+      r=${r:-0}
+      if ((e > 0 && (e > _expected || (e == _expected && d >= _done)))); then
+        _done=$d
         _expected=$e
-        _running=${r:-0}
-      elif ((e > _expected || (e == _expected && d > _done))); then
-        _done=${d:-0}
-        _expected=$e
-        _running=${r:-0}
+        _running=$r
+      elif ((e > 0 && d > _done && e == _expected)); then
+        _done=$d
+        _running=$r
+      fi
+    elif [[ $line == *'"action":"result"'* && $line == *'"type":106'* ]]; then
+      read -r atype exp <<<"$(ui_build_json_fields106 "$line")"
+      if [[ -n $exp && $exp -gt _expected ]]; then
+        _expected=$exp
       fi
     elif [[ $line == *'"action":"start"'* ]]; then
       text="$(ui_build_json_text "$line")"
@@ -378,7 +388,7 @@ ui_build_box_render() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN" \
+    --margin "$UI_MARGIN_TIGHT" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ build")" \
     "$body")"
@@ -387,7 +397,11 @@ ui_build_box_render() {
   if (($_height > 0)); then
     { tput cuu "$_height" && tput ed; } >/dev/tty 2>&1 || true
   fi
-  ui_tty "$rendered"
+  if [[ -e /dev/tty ]]; then
+    printf '%s' "$rendered" >/dev/tty
+  else
+    printf '%s' "$rendered" >&2
+  fi
   _height=$lines
 }
 
@@ -402,20 +416,24 @@ ui_build_show_errors() {
 }
 
 ui_build_box() {
-  local log out status=0 height=0 pid tick=0 builds_id=0 offset=0
+  local log out status=0 height=0 pid tick=0 offset=0
   local done=0 expected=0 running=0 activity='starting…'
   log="$(mktemp)"
   out="$(mktemp)"
 
   ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
 
-  "$@" --log-format internal-json >"$out" 2>"$log" &
+  local -a run=( "$@" --log-format internal-json )
+  if command -v stdbuf >/dev/null 2>&1; then
+    run=( stdbuf -oL -eL "${run[@]}" )
+  fi
+  "${run[@]}" >"$out" 2>"$log" &
   pid=$!
   BUILD_PID=$pid
   BUILD_LOG_OFFSET=0
 
   while kill -0 "$pid" 2>/dev/null; do
-    ui_build_box_poll "$log" offset done expected running activity builds_id
+    ui_build_box_poll "$log" offset done expected running activity
     ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
     tick=$((tick + 1))
     sleep 0.25
@@ -424,13 +442,16 @@ ui_build_box() {
   wait "$pid" || status=$?
   BUILD_PID=""
 
-  ui_build_box_poll "$log" offset done expected running activity builds_id
+  ui_build_box_poll "$log" offset done expected running activity
   if ((status != 0)); then
     activity='build failed'
   elif ((expected > 0 && done >= expected)); then
     activity='done'
   fi
   ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
+  if [[ -e /dev/tty ]]; then
+    printf '\n' >/dev/tty
+  fi
 
   if ((status != 0)); then
     ui_build_show_errors "$log"
@@ -448,7 +469,7 @@ ui_box() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN" \
+    --margin "$UI_MARGIN_BOX" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ storage")" \
     "$1"
@@ -685,7 +706,7 @@ ui_disk_diff_box() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN" \
+    --margin "$UI_MARGIN_TIGHT" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ storage")" \
     "$1"
@@ -941,7 +962,7 @@ ui_swap_box() {
     --border-foreground "$C_MUTED" \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN" \
+    --margin "$UI_MARGIN_TIGHT" \
     --foreground "$C_TEXT" \
     "$(ui_ansi "38;5;${C_MUTED}" "▤ swap")" \
     "$body"
@@ -1178,7 +1199,7 @@ finish() {
     --align center \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN" \
+    --margin "$UI_MARGIN_SECTION" \
     "✔ Done." \
     "$(ui_faint "$msg")"
 }
