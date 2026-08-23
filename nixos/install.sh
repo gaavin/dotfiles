@@ -48,20 +48,20 @@ theme() {
   export GUM_LOG_LEVEL="info"
 }
 
-host_subtitle() {
-  local host=$1 arch
-  arch="$(uname -m)-linux"
-  case $host in
-    air) printf '%s · %s · Apple Silicon' "$host" "$arch" ;;
-    *) printf '%s · %s' "$host" "$arch" ;;
+host_arch() {
+  case $(uname -m) in
+    x86_64) echo "x86_64-linux" ;;
+    aarch64) echo "aarch64-linux" ;;
+    *) echo "$(uname -m)-linux" ;;
   esac
 }
 
 ui_banner() {
-  local subtitle=$1
+  local host=$1 label
+  label="$host · $(host_arch)"
   {
-    gum style --bold --foreground 39 "NixOS"
-    gum style --faint --foreground 252 "$subtitle"
+    gum style --bold --align center --width 44 --foreground 39 "NixOS"
+    gum style --faint --align center --width 44 --foreground 252 "$label"
   } | gum style \
     --border rounded \
     --border-foreground 39 \
@@ -69,6 +69,12 @@ ui_banner() {
     --width 48 \
     --padding "1 2" \
     --margin "1 0"
+}
+
+ui_installer() {
+  local body=$1
+  gum format -- "## Installer
+$body" | gum style --align center --width 52 --margin "0 0 1 0"
 }
 
 ui_ok() {
@@ -97,7 +103,6 @@ ui_box() {
     --border-foreground 245 \
     --padding "0 1" \
     --foreground 252 \
-    --width 48 \
     "$1"
 }
 
@@ -221,7 +226,6 @@ install_system() {
     ui_ok "swap is on"
   fi
   nixos-install --no-root-password --no-channel-copy --root /mnt --flake "path:$flake#$HOST"
-  ui_step "Set passwords"
   set_passwords
 }
 
@@ -229,7 +233,7 @@ install_mina() {
   command -v nixos-install >/dev/null || die "nixos-install not found"
   [[ -b $DISK ]] || die "$DISK not found"
 
-  ui_step "Partition $DISK"
+  ui_step "Set up the disks (destructive)"
   ui_box "$(lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT "$DISK" 2>/dev/null || true)"
   confirm "This WIPES $DISK."
 
@@ -342,24 +346,25 @@ finish() {
   echo
   if [[ $HOST == air ]]; then
     {
-      gum style --bold --foreground 42 "Done."
-      gum style --foreground 252 "reboot, then hold power for the Apple boot picker if you need macOS."
+      gum style --align center --width 44 --foreground 42 "Done."
+      gum style --faint --align center --width 44 --foreground 252 \
+        "reboot, then hold power for the Apple boot picker if you need macOS."
     } | gum style \
       --border rounded \
       --border-foreground 42 \
       --align center \
-      --padding "1 2" \
-      --width 48
+      --width 48 \
+      --padding "1 2"
   else
     {
-      gum style --bold --foreground 42 "Done."
-      gum style --foreground 252 "reboot."
+      gum style --align center --width 44 --foreground 42 "Done."
+      gum style --faint --align center --width 44 --foreground 252 "reboot."
     } | gum style \
       --border rounded \
       --border-foreground 42 \
       --align center \
-      --padding "1 2" \
-      --width 48
+      --width 48 \
+      --padding "1 2"
   fi
 }
 
@@ -393,33 +398,29 @@ else
   HOST=$detected
 fi
 
-ui_banner "$(host_subtitle "$HOST")"
+ui_banner "$HOST"
 
 SECRETS="$(mktemp -d /run/nixos-install.XXXXXX)"
 chmod 700 "$SECRETS"
 
 if [[ $HOST == air ]]; then
-  STEP_TOTAL=7
+  STEP_TOTAL=6
 else
-  STEP_TOTAL=4
+  STEP_TOTAL=3
 fi
 STEP_N=0
 
 if [[ $HOST == air ]]; then
-  gum format -- "## Installer
-- Passwords
+  ui_installer "- Passwords
 - Create LUKS partition
 - Encrypt disk
 - Format and mount
 - Copy firmware
-- Install NixOS
-- Set passwords"
+- Install NixOS"
 else
-  gum format -- "## Installer
-- Passwords
-- Partition disk
-- Install NixOS
-- Set passwords"
+  ui_installer "- Passwords
+- Set up the disks (destructive)
+- Install NixOS"
 fi
 
 ui_step "Passwords"
