@@ -61,7 +61,6 @@ C_DANGER=196
 C_MUTED=245
 C_TEXT=252
 C_VIOLET=141
-C_SPIN=201
 
 theme() {
   export GUM_INPUT_CURSOR_FOREGROUND="$C_ACCENT"
@@ -215,7 +214,7 @@ ui_spin() {
   pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
-    line="${pad}$(ui_ansi "38;5;${C_SPIN}" "${frames[i]}") $(ui_ansi "38;5;${C_ACCENT}" "$title")"
+    line="${pad}$(ui_ansi "38;5;${C_VIOLET}" "${frames[i]}") $(ui_ansi "38;5;${C_ACCENT}" "$title")"
     if [[ -e /dev/tty ]]; then
       printf '\r\033[K%s' "$line" >/dev/tty
     else
@@ -378,7 +377,7 @@ ui_build_box_render() {
     bar="$(ui_build_bar_indeterminate "$tick")"
   fi
   body="$activity"
-  body+=$'\n'"$(ui_ansi "38;5;${C_SPIN}" "$bar") $(ui_faint "$label")"
+  body+=$'\n'"$(ui_ansi "38;5;${C_VIOLET}" "$bar") $(ui_faint "$label")"
   if ((running > 0)); then
     body+=$'\n'"$(ui_faint "$running active")"
   fi
