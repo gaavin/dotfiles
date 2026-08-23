@@ -15,6 +15,7 @@ HOST=""
 STEP_N=0
 STEP_TOTAL=0
 BUILD_PID=""
+SLEEP_INHIBIT_PID=""
 INSTALL_ABORTED=0
 UI_SWAP_RENDERED=""
 UI_STACK_HEIGHT=0
@@ -51,6 +52,28 @@ cleanup() {
     rm -rf /mnt/run/nixos-install-passwords
   fi
   rm -f "$LUKS_PASSFILE" /mnt/root/chpasswd
+  stop_sleep_inhibit
+}
+
+# Like macOS caffeinate: block sleep/suspend/idle while installing.
+start_sleep_inhibit() {
+  [[ -n ${SLEEP_INHIBIT_PID:-} ]] && return 0
+  command -v systemd-inhibit >/dev/null 2>&1 || return 0
+  systemd-inhibit \
+    --what=idle:sleep:shutdown:handle-lid-switch:handle-lid-switch-docked \
+    --who="nixos-install.sh" \
+    --why="NixOS installation in progress" \
+    --mode=block \
+    sleep infinity &
+  SLEEP_INHIBIT_PID=$!
+}
+
+stop_sleep_inhibit() {
+  if [[ -n ${SLEEP_INHIBIT_PID:-} ]] && kill -0 "$SLEEP_INHIBIT_PID" 2>/dev/null; then
+    kill "$SLEEP_INHIBIT_PID" 2>/dev/null || true
+    wait "$SLEEP_INHIBIT_PID" 2>/dev/null || true
+  fi
+  SLEEP_INHIBIT_PID=""
 }
 
 on_interrupt() {
@@ -1323,6 +1346,7 @@ fi
 theme
 trap on_interrupt INT
 trap cleanup EXIT
+start_sleep_inhibit
 
 detected="$(detect_host)"
 if [[ $# -gt 0 ]]; then
