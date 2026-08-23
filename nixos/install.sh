@@ -47,6 +47,7 @@ UI_PAD_H=2
 UI_MARGIN_SECTION="1 0 0 0"
 UI_MARGIN_TIGHT="0 0 0 0"
 UI_MARGIN_BOX="1 0 1 0"
+UI_BUILD_LINES=4
 NIXOS_VERSION="26.11 unstable"
 ZRAM_ALGORITHM=lz4
 ZRAM_MEMORY_PERCENT=100
@@ -304,8 +305,75 @@ ui_build_json_fields106() {
 }
 
 ui_build_json_text() {
-  sed -n 's/.*"text":"\(.*\)","type".*/\1/p' <<<"$1" |
+  sed -n 's/.*"text":"\(.*\)","\(level\|type\)".*/\1/p' <<<"$1" |
     sed 's/\\"/"/g; s/\\n/ /g; s/\\u001b\[[0-9;]*m//g'
+}
+
+ui_build_json_msg() {
+  sed -n 's/.*"msg":"\(.*\)","\(level\|raw_msg\|type\)".*/\1/p' <<<"$1" |
+    sed 's/\\"/"/g; s/\\n/ /g; s/\\u001b\[[0-9;]*m//g'
+}
+
+ui_build_store_name() {
+  sed -n 's|.*/nix/store/[a-z0-9]\{32\}-\([^/'\'']*\).*|\1|p' <<<"$1" | head -1
+}
+
+ui_build_format_line() {
+  local text=$1 max=$2 name flake
+
+  if [[ $text =~ evaluating[[:space:]]+derivation[[:space:]]+\'([^\']+) ]]; then
+    flake="${BASH_REMATCH[1]}"
+    flake="${flake#flake:}"
+    flake="${flake#path:}"
+    text="evaluating ${flake}"
+  elif [[ $text =~ building[[:space:]]+\'/nix/store/ ]]; then
+    name="$(ui_build_store_name "$text")"
+    text="building ${name:-${text#building }}"
+  elif [[ $text =~ copying[[:space:]]+path[[:space:]]+\'/nix/store/ ]]; then
+    name="$(ui_build_store_name "$text")"
+    text="copying ${name:-${text#copying path }}"
+  elif [[ $text =~ fetching[[:space:]]+Git[[:space:]]+repository[[:space:]]+\'([^\']+) ]]; then
+    text="fetching ${BASH_REMATCH[1]}"
+  elif [[ $text =~ querying[[:space:]]+info[[:space:]]+about ]]; then
+    name="$(ui_build_store_name "$text")"
+    if [[ -n $name ]]; then
+      text="querying ${name}"
+    else
+      text='querying paths'
+    fi
+  fi
+
+  ui_build_truncate "$text" "$max"
+}
+
+ui_build_push_activity() {
+  local -n _acts=$1
+  local line=$2
+
+  [[ -n $line ]] || return 0
+  if ((${#_acts[@]} > 0 && "${_acts[-1]}" == "$line")); then
+    return 0
+  fi
+  _acts+=("$line")
+  if ((${#_acts[@]} > UI_BUILD_LINES)); then
+    _acts=("${_acts[@]:1}")
+  fi
+}
+
+ui_build_activity_block() {
+  local -n _acts=$1
+  local i start
+  local -a lines=()
+
+  start=$((${#_acts[@]} > UI_BUILD_LINES ? ${#_acts[@]} - UI_BUILD_LINES : 0))
+  for ((i = start; i < start + UI_BUILD_LINES; i++)); do
+    if ((i < ${#_acts[@]})); then
+      lines+=("${_acts[i]}")
+    else
+      lines+=("$(ui_faint " ")")
+    fi
+  done
+  (IFS=$'\n'; printf '%s' "${lines[*]}")
 }
 
 ui_build_percent() {
@@ -350,8 +418,8 @@ ui_build_bar_indeterminate() {
 
 ui_build_box_poll() {
   local log=$1
-  local -n _offset=$2 _done=$3 _expected=$4 _running=$5 _activity=$6
-  local chunk line text d e r f atype exp new_bytes
+  local -n _offset=$2 _done=$3 _expected=$4 _running=$5 _activities=$6
+  local chunk line text msg d e r f atype exp new_bytes width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
 
   [[ -f $log ]] || return 0
   new_bytes=$(wc -c <"$log")
@@ -383,36 +451,41 @@ ui_build_box_poll() {
       fi
     elif [[ $line == *'"action":"start"'* ]]; then
       text="$(ui_build_json_text "$line")"
-      [[ -n $text ]] && _activity="$text"
-    elif [[ $line == *'"action":"msg"'* && $line == *error:* ]]; then
-      text="$(sed -n 's/.*"msg":"\([^"]*error:[^"]*\)".*/\1/p' <<<"$line" |
-        sed 's/\\"/"/g; s/\\u001b\[[0-9;]*m//g')"
-      [[ -n $text ]] && _activity="$text"
+      if [[ -n $text ]]; then
+        ui_build_push_activity _activities "$(ui_build_format_line "$text" "$width")"
+      fi
+    elif [[ $line == *'"action":"msg"'* ]]; then
+      msg="$(ui_build_json_msg "$line")"
+      [[ -n $msg ]] || continue
+      if [[ $msg == *error:* ]]; then
+        ui_build_push_activity _activities "$(ui_build_format_line "$msg" "$width")"
+      elif [[ $msg == copying\ * || $msg == building\ * || $msg == *substituting* ]]; then
+        ui_build_push_activity _activities "$(ui_build_format_line "$msg" "$width")"
+      fi
     fi
   done <<<"$chunk"
 }
 
 ui_build_box_render() {
-  local done=$1 expected=$2 running=$3 activity=$4 tick=$5
-  local bar body rendered width percent label
+  local done=$1 expected=$2 running=$3 tick=$4
+  local -n _activities=$5
+  local bar body rendered width percent label stats
 
   width=$((UI_WIDTH - UI_PAD_H * 2 - 4))
-  activity="$(ui_build_truncate "$activity" "$width")"
   if ((expected > 0)); then
     percent="$(ui_build_percent "$done" "$expected")"
     label="${percent}%"
     bar="$(ui_build_bar "$percent")"
+    stats="$(ui_faint "${done}/${expected} done · ${running} active")"
   else
     label='evaluating…'
     bar="$(ui_build_bar_indeterminate "$tick")"
+    stats="$(ui_faint "evaluating flake")"
   fi
-  body="$activity"
+
+  body="$(ui_build_activity_block _activities)"
   body+=$'\n'"$(ui_ansi "38;5;${C_VIOLET}" "$bar") $(ui_faint "$label")"
-  if ((running > 0)); then
-    body+=$'\n'"$(ui_faint "$running active")"
-  else
-    body+=$'\n'"$(ui_faint " ")"
-  fi
+  body+=$'\n'"$stats"
 
   rendered="$(gum style \
     --border rounded \
@@ -439,11 +512,12 @@ ui_build_show_errors() {
 
 ui_build_box() {
   local log out status=0 height=0 pid tick=0 offset=0
-  local done=0 expected=0 running=0 activity='starting…'
+  local done=0 expected=0 running=0
+  local -a activities=('starting…')
   log="$(mktemp)"
   out="$(mktemp)"
 
-  ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
+  ui_build_box_render "$done" "$expected" "$running" "$tick" activities height
 
   local -a run=( "$@" --log-format internal-json )
   if command -v stdbuf >/dev/null 2>&1; then
@@ -455,22 +529,25 @@ ui_build_box() {
   BUILD_LOG_OFFSET=0
 
   while kill -0 "$pid" 2>/dev/null; do
-    ui_build_box_poll "$log" offset done expected running activity
-    ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
+    ui_build_box_poll "$log" offset done expected running activities
+    ui_build_box_render "$done" "$expected" "$running" "$tick" activities height
     tick=$((tick + 1))
-    sleep 0.25
+    sleep 0.15
   done
 
   wait "$pid" || status=$?
   BUILD_PID=""
 
-  ui_build_box_poll "$log" offset done expected running activity
+  ui_build_box_poll "$log" offset done expected running activities
   if ((status != 0)); then
-    activity='build failed'
+    activities=('build failed')
   elif ((expected > 0 && done >= expected)); then
-    activity='done'
+    activities+=('done')
+    if ((${#activities[@]} > UI_BUILD_LINES)); then
+      activities=("${activities[@]:1}")
+    fi
   fi
-  ui_build_box_render "$done" "$expected" "$running" "$activity" "$tick" height
+  ui_build_box_render "$done" "$expected" "$running" "$tick" activities height
 
   if ((status != 0)); then
     ui_build_show_errors "$log"
