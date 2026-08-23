@@ -143,14 +143,18 @@ ui_banner() {
     "$(ui_faint "$label")"
 }
 
-ui_heading() {
+ui_section_line() {
+  local marker=$1
+  shift
   gum style \
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
     --margin "$UI_MARGIN_SECTION" \
-    --bold \
-    --foreground "$C_ACCENT" \
-    "◆ $1"
+    "$(ui_ansi "1;38;5;${C_ACCENT}" "$marker") $*"
+}
+
+ui_heading() {
+  ui_section_line "◆" "$(ui_ansi "1;38;5;${C_ACCENT}" "$1")"
 }
 
 ui_body() {
@@ -195,11 +199,8 @@ ui_line() {
 
 ui_step() {
   STEP_N=$((STEP_N + 1))
-  gum style \
-    --width "$UI_WIDTH" \
-    --padding "0 $UI_PAD_H" \
-    --margin "$UI_MARGIN_SECTION" \
-    "$(ui_ansi "1;38;5;${C_ACCENT}" "▸ $STEP_N/$STEP_TOTAL") $(ui_ansi "1;38;5;${C_TEXT}" "$1")"
+  ui_section_line "▸" \
+    "$(ui_ansi "1;38;5;${C_ACCENT}" "$STEP_N/$STEP_TOTAL") $(ui_ansi "1;38;5;${C_TEXT}" "$1")"
 }
 
 ui_spin() {
