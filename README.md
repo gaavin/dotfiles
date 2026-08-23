@@ -36,6 +36,10 @@ mina nvme0n1                          air nvme0n1
 
 Boot a NixOS installer, clone this repo, run the script.
 
+<p align="center">
+  <img src="assets/nixos-installer.png" alt="NixOS installer TUI on mina" width="720">
+</p>
+
 ```bash
 # if you need to connect to wifi
 nmtui
