@@ -11,7 +11,7 @@
 
 ## Install
 
-Create a fork of my repository in your own GitHub account, and then ask Grok to customize it to your system, software, and user preferences.
+Create a fork of my repository in your own GitHub account, and then ask Grok to customize it to your system, software, and user requirements.
 
 Boot a NixOS installer, clone your repo (mine is used in the README), run the script.
 
