@@ -41,7 +41,7 @@ sudo ./nixos/install.sh
 curl https://alx.sh | sh
 ```
 
-1. Admin password. **Do not** enable expert mode.
+1. Enter your password. **Do not** enable expert mode.
 2. Resize macOS: `r`. New size must be at least 20GB smaller (here 1GB = 1,000,000,000 bytes). Confirm. Wait (minutes), then press enter.
 3. Install into free space: `f` → **UEFI environment only** → name it `NixOS`. Password again. Wait until the default boot volume is set. Read the last screen, press enter — the Mac shuts down.
 4. Hold power until the boot picker appears. Choose **NixOS**.
