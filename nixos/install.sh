@@ -812,12 +812,14 @@ part_label_display() {
   fi
 }
 
-# Only the Asahi-chosen ESP is mounted at /efi. Everything else on the disk
-# (iBoot, APFS/macOS, Recovery, stubs) is left untouched.
+# Only the Asahi-chosen ESP is mounted at /efi. nixos-labelled slices are
+# previous Linux installs and will be removed. Everything else stays put.
 part_role_air() {
-  local partuuid=$1 esp_uuid=$2
+  local partuuid=$1 esp_uuid=$2 partlabel=$3
   if [[ -n $esp_uuid && -n $partuuid && $partuuid == "$esp_uuid" ]]; then
     echo esp
+  elif [[ ${partlabel:-} == nixos ]]; then
+    echo linux
   else
     echo preserved
   fi
@@ -1012,9 +1014,10 @@ air_disk_diff() {
       [[ ${TYPE:-} == part ]] || continue
       indent="$(disk_display_indent "$(disk_tree_depth "$NAME" pkmap)")"
       spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
-      role="$(part_role_air "${PARTUUID:-}" "$esp_uuid")"
+      role="$(part_role_air "${PARTUUID:-}" "$esp_uuid" "${PARTLABEL:-}")"
       case $role in
         esp) ui_diff_mod "${indent}${spec}  -> /efi (mount only, never format)" ;;
+        linux) ui_diff_del "${indent}${spec}  (remove previous install)" ;;
         preserved) ui_diff_ctx "${indent}${spec}" ;;
       esac
     done < <(disk_lsblk)
@@ -1250,6 +1253,59 @@ disko_run() {
 air_part_state() {
   lsblk -n -b -r -o TYPE,PARTUUID,START,SIZE,FSTYPE,PARTLABEL "$DISK" |
     awk '$1 == "part" { print $2, $3, $4, $5, $6 }'
+}
+
+air_part_state_preserved() {
+  lsblk -n -b -r -o TYPE,PARTUUID,START,SIZE,FSTYPE,PARTLABEL "$DISK" |
+    awk '$1 == "part" && $6 != "nixos" { print $2, $3, $4, $5, $6 }'
+}
+
+air_linux_part_numbers() {
+  lsblk -n -r -o TYPE,NAME,PARTLABEL "$DISK" |
+    awk '$1 == "part" && $3 == "nixos" { sub(/^.*p/, "", $2); print $2 }'
+}
+
+# Tear down a partial/failed install so the nixos GPT slice can be recreated.
+air_teardown_linux_stack() {
+  swapoff /dev/mapper/air-swap 2>/dev/null || true
+  swapoff /dev/disk/by-partlabel/nixos 2>/dev/null || true
+  if mountpoint -q /mnt/efi 2>/dev/null; then
+    umount /mnt/efi 2>/dev/null || true
+  fi
+  if mountpoint -q /mnt 2>/dev/null; then
+    umount /mnt 2>/dev/null || true
+  fi
+  vgchange -an air 2>/dev/null || true
+  cryptsetup close "$MAPPER" 2>/dev/null || true
+  restore_live_nix_store 2>/dev/null || true
+}
+
+air_remove_linux_partitions() {
+  local esp_dev=$1
+  local -a nums=()
+  local num dev preserved_before removed=0
+
+  mapfile -t nums < <(air_linux_part_numbers)
+  ((${#nums[@]} > 0)) || return 0
+
+  ui_ok "removing ${#nums[@]} previous Linux partition(s)"
+  preserved_before="$(air_part_state_preserved)"
+  air_teardown_linux_stack
+
+  for num in "${nums[@]}"; do
+    dev="$(readlink -f "${DISK}p${num}" 2>/dev/null || true)"
+    [[ -n $dev ]] || dev="$(readlink -f "${DISK}${num}" 2>/dev/null || true)"
+    [[ -n $dev ]] || die "could not resolve partition ${num} on $DISK"
+    [[ $dev != "$esp_dev" ]] || die "refusing to delete ESP partition"
+    ui_spin "Deleting partition ${num}..." sgdisk "$DISK" -d "$num"
+    removed=1
+  done
+
+  if ((removed)); then
+    partprobe "$DISK"
+    udevadm settle
+    air_assert_preserved "$preserved_before" "$(air_part_state_preserved)"
+  fi
 }
 
 air_assert_preserved() {
@@ -1697,7 +1753,6 @@ install_air() {
     die "missing cryptsetup/sgdisk"
   command -v parted >/dev/null || die "missing parted (needed to find free space)"
   [[ -b $DISK ]] || die "$DISK not found"
-  [[ ! -e /dev/disk/by-partlabel/nixos ]] || die "/dev/disk/by-partlabel/nixos already exists; aborting"
 
   esp_uuid="$(tr -d '\0' < /proc/device-tree/chosen/asahi,efi-system-partition)"
   esp=/dev/disk/by-partuuid/$esp_uuid
@@ -1713,13 +1768,19 @@ install_air() {
   if ! read -r free_start free_end free_bytes < <(air_largest_free_region); then
     die "no free space on $DISK - resize macOS in the Asahi installer first"
   fi
-  if ((free_bytes < AIR_MIN_FREE_BYTES)); then
-    die "largest free region is $(fmt_size "$free_bytes"); need at least $(fmt_size "$AIR_MIN_FREE_BYTES")"
-  fi
 
   ui_step "Create LUKS partition"
   ui_disk_diff_box "$(air_disk_diff "$esp_uuid")"
-  confirm "Create a LUKS partition in the largest free region on $DISK ($(fmt_size "$free_bytes")). iBoot, macOS, the ESP, and Recovery are left alone."
+  confirm "Create a LUKS partition in the largest free region on $DISK ($(fmt_size "$free_bytes")). Previous Linux installs are removed. iBoot, macOS, the ESP, and Recovery are left alone."
+
+  air_remove_linux_partitions "$esp_dev"
+
+  if ! read -r free_start free_end free_bytes < <(air_largest_free_region); then
+    die "no free space on $DISK after removing previous Linux install"
+  fi
+  if ((free_bytes < AIR_MIN_FREE_BYTES)); then
+    die "largest free region is $(fmt_size "$free_bytes"); need at least $(fmt_size "$AIR_MIN_FREE_BYTES")"
+  fi
 
   before="$(air_part_state)"
   # Only claim the largest free gap (sectors from parted). Never touch existing slices.
