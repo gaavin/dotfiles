@@ -13,7 +13,7 @@
 
 Create a fork of my repository in your own GitHub account, and then ask Grok to customize it to your system, software, and user preferences.
 
-Boot a NixOS installer, clone your repo (mine is used in the examples), run the script.
+Boot a NixOS installer, clone your repo (mine is used in the README), run the script.
 
 <p align="center">
   <img src="assets/nixos-installer.gif" alt="NixOS installer TUI on mina" width="400">
