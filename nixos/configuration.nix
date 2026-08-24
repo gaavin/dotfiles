@@ -1,4 +1,4 @@
-{ pkgs, lib, ... }:
+{ pkgs, lib, config, ... }:
 
 {
   boot = {
@@ -103,31 +103,36 @@
         Domains = [ "~." ];
       };
     };
-    pipewire = {
-      enable = true;
-      pulse.enable = true;
-      extraConfig.pipewire."92-low-latency" = {
-        "context.properties" = {
-          "default.clock.rate" = 48000;
-          "default.clock.quantum" = 128;
-          "default.clock.min-quantum" = 128;
-          "default.clock.max-quantum" = 128;
+    pipewire = lib.mkMerge [
+      {
+        enable = true;
+        pulse.enable = true;
+      }
+      # air uses hardware.asahi.setupAsahiSound (asahi-audio DSP + speakersafetyd).
+      (lib.mkIf (config.networking.hostName != "air") {
+        extraConfig.pipewire."92-low-latency" = {
+          "context.properties" = {
+            "default.clock.rate" = 48000;
+            "default.clock.quantum" = 128;
+            "default.clock.min-quantum" = 128;
+            "default.clock.max-quantum" = 128;
+          };
         };
-      };
-      extraConfig.pipewire-pulse."92-low-latency" = {
-        "pulse.properties" = {
-          "pulse.min.req" = "128/48000";
-          "pulse.default.req" = "128/48000";
-          "pulse.max.req" = "128/48000";
-          "pulse.min.quantum" = "128/48000";
-          "pulse.max.quantum" = "128/48000";
+        extraConfig.pipewire-pulse."92-low-latency" = {
+          "pulse.properties" = {
+            "pulse.min.req" = "128/48000";
+            "pulse.default.req" = "128/48000";
+            "pulse.max.req" = "128/48000";
+            "pulse.min.quantum" = "128/48000";
+            "pulse.max.quantum" = "128/48000";
+          };
+          "stream.properties" = {
+            "node.latency" = "128/48000";
+            "resample.quality" = 1;
+          };
         };
-        "stream.properties" = {
-          "node.latency" = "128/48000";
-          "resample.quality" = 1;
-        };
-      };
-    };
+      })
+    ];
   };
 
   security.rtkit.enable = true;

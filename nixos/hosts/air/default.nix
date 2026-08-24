@@ -59,7 +59,20 @@
 
   hardware.asahi = {
     enable = true;
+    setupAsahiSound = true;
     peripheralFirmwareDirectory = ./firmware;
+  };
+
+  hardware.bluetooth = {
+    enable = true;
+    powerOnBoot = true;
+  };
+
+  services.power-profiles-daemon.enable = true;
+
+  services.logind.settings.Login = {
+    IdleAction = "suspend";
+    IdleActionSec = "30min";
   };
 
   boot = {
