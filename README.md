@@ -23,7 +23,7 @@ Boot a NixOS installer, clone this repo, run the script.
 > [!CAUTION]
 > **Destructive** The script creates a LUKS partition in the largest free GPT gap. iBoot, macOS, the shared ESP, and Recovery are left alone; the Asahi ESP is mounted at `/efi`, never formatted. Partitions that do not belong to macos will be destroyed to make room for NixOS.
 
-> **😪😪😪** First install is large (Plasma + `linux-asahi` from source; no Asahi binary cache). The live ISO only has a RAM-backed `/nix` store, so the installer formats the target disk first, then moves the writable nix store and build temp onto `/mnt` before fetching inputs or compiling. Expect a long build; sleep is inhibited for the whole run.
+> **😪😪😪** First install will take a long time to build. On Apple Silicon devices, most packages will need to be built from source. Sleep is inhibited for the whole run.
 
 
 ```bash
