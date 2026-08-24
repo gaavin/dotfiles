@@ -80,7 +80,7 @@ new file mode 100644
 index 000000000000..111111111111
 --- /dev/null
 +++ b/drivers/gpu/drm/asahi/gpu_sysfs.rs
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,100 @@
 +// SPDX-License-Identifier: GPL-2.0-only OR MIT
 +
 +//! Sysfs hook for firmware-reported AGX GPU utilization.
