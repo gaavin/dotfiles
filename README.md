@@ -24,7 +24,7 @@ Boot a NixOS installer, clone your repo (mine is used in the README), run the sc
 > [!CAUTION]
 > **Destructive** The script creates a LUKS partition in the largest free GPT gap. iBoot, macOS, the shared ESP, and Recovery are left alone; the Asahi ESP is mounted at `/efi`, never formatted. Partitions that do not belong to macos *will be destroyed* to make room for NixOS.
 
-> **😪😪😪** First install will take a long time to build. On Apple Silicon devices, most packages will need to be built from source. Sleep is inhibited for the whole run.
+> **😪😪😪** First install will take a long time to build. On Apple Silicon devices, most packages will need to be built from source. Some packages have patches that will require compilation. Sleep is inhibited for the whole run.
 
 
 ```bash
