@@ -1,32 +1,150 @@
-diff --git a/drivers/gpu/drm/asahi/asahi.rs b/drivers/gpu/drm/asahi/asahi.rs
---- a/drivers/gpu/drm/asahi/asahi.rs
-+++ b/drivers/gpu/drm/asahi/asahi.rs
-@@ -16,6 +16,7 @@
- mod fw;
- mod gem;
- mod gpu;
+diff -Naur a/drivers/gpu/drm/asahi/asahi_main.rs b/drivers/gpu/drm/asahi/asahi_main.rs
+--- a/drivers/gpu/drm/asahi/asahi_main.rs	1969-12-31 20:30:00.000000000 -0330
++++ b/drivers/gpu/drm/asahi/asahi_main.rs	2026-08-24 10:50:40.219942340 -0230
+@@ -0,0 +1,62 @@
++// SPDX-License-Identifier: GPL-2.0-only OR MIT
++#![recursion_limit = "2048"]
++
++//! Driver for the Apple AGX GPUs found in Apple Silicon SoCs.
++
++mod alloc;
++mod buffer;
++mod channel;
++#[cfg(CONFIG_DEV_COREDUMP)]
++mod crashdump;
++mod debug;
++mod driver;
++mod event;
++mod file;
++mod float;
++mod fw;
++mod gem;
++mod gpu;
 +mod gpu_sysfs;
- mod hw;
- mod initdata;
- mod mem;
-diff --git a/drivers/gpu/drm/asahi/channel.rs b/drivers/gpu/drm/asahi/channel.rs
---- a/drivers/gpu/drm/asahi/channel.rs
-+++ b/drivers/gpu/drm/asahi/channel.rs
-@@ -23,7 +23,8 @@
++mod hw;
++mod initdata;
++mod mem;
++mod microseq;
++mod mmu;
++mod object;
++mod pgtable;
++mod queue;
++mod regs;
++mod slotalloc;
++mod util;
++#[cfg(CONFIG_DRM_ASAHI_MAPLE_TREE)]
++mod vm;
++mod workqueue;
++
++kernel::module_platform_driver! {
++    type: driver::AsahiDriver,
++    name: "asahi",
++    description: "AGX GPU driver for Apple silicon SoCs",
++    license: "Dual MIT/GPL",
++    params: {
++        debug_flags: u64 {
++            default: 0,
++            // permissions: 0o644,
++            description: "Debug flags",
++        },
++        fault_control: u32 {
++            default: 0xb,
++            // permissions: 0,
++            description: "Fault control (0x0: hard faults, 0xb: macOS default)",
++        },
++        initial_tvb_size: usize {
++            default: 0x8,
++            // permissions: 0o644,
++            description: "Initial TVB size in blocks",
++        },
++        robust_isolation: u32 {
++            default: 0,
++            // permissions: 0o644,
++            description: "Fully isolate GPU contexts (limits performance)",
++        },
++    },
++}
+diff -Naur a/drivers/gpu/drm/asahi/asahi.rs b/drivers/gpu/drm/asahi/asahi.rs
+--- a/drivers/gpu/drm/asahi/asahi.rs	1969-12-31 20:30:01.000000000 -0330
++++ b/drivers/gpu/drm/asahi/asahi.rs	1969-12-31 20:30:00.000000000 -0330
+@@ -1,61 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only OR MIT
+-#![recursion_limit = "2048"]
+-
+-//! Driver for the Apple AGX GPUs found in Apple Silicon SoCs.
+-
+-mod alloc;
+-mod buffer;
+-mod channel;
+-#[cfg(CONFIG_DEV_COREDUMP)]
+-mod crashdump;
+-mod debug;
+-mod driver;
+-mod event;
+-mod file;
+-mod float;
+-mod fw;
+-mod gem;
+-mod gpu;
+-mod hw;
+-mod initdata;
+-mod mem;
+-mod microseq;
+-mod mmu;
+-mod object;
+-mod pgtable;
+-mod queue;
+-mod regs;
+-mod slotalloc;
+-mod util;
+-#[cfg(CONFIG_DRM_ASAHI_MAPLE_TREE)]
+-mod vm;
+-mod workqueue;
+-
+-kernel::module_platform_driver! {
+-    type: driver::AsahiDriver,
+-    name: "asahi",
+-    description: "AGX GPU driver for Apple silicon SoCs",
+-    license: "Dual MIT/GPL",
+-    params: {
+-        debug_flags: u64 {
+-            default: 0,
+-            // permissions: 0o644,
+-            description: "Debug flags",
+-        },
+-        fault_control: u32 {
+-            default: 0xb,
+-            // permissions: 0,
+-            description: "Fault control (0x0: hard faults, 0xb: macOS default)",
+-        },
+-        initial_tvb_size: usize {
+-            default: 0x8,
+-            // permissions: 0o644,
+-            description: "Initial TVB size in blocks",
+-        },
+-        robust_isolation: u32 {
+-            default: 0,
+-            // permissions: 0o644,
+-            description: "Fully isolate GPU contexts (limits performance)",
+-        },
+-    },
+-}
+diff -Naur a/drivers/gpu/drm/asahi/channel.rs b/drivers/gpu/drm/asahi/channel.rs
+--- a/drivers/gpu/drm/asahi/channel.rs	1969-12-31 20:30:01.000000000 -0330
++++ b/drivers/gpu/drm/asahi/channel.rs	2026-08-24 10:50:41.904023514 -0230
+@@ -23,6 +23,7 @@
      buffer,
      event,
      gpu,
--    mem, //
-+    mem,
-+    gpu_sysfs, //
++    gpu_sysfs,
+     mem, //
  };
  use kernel::{
-     c_str,
-@@ -619,6 +620,16 @@
+@@ -619,6 +620,18 @@
                      // SAFETY: Since we have checked the tag to be in range,
                      // accessing the enum view is valid.
                      let msg = unsafe { msg.msg };
-+                    if let StatsMsg::Utilization {
++                    if let StatsMsg::ver::Utilization {
 +                        util1,
 +                        util2,
 +                        util3,
@@ -34,14 +152,16 @@ diff --git a/drivers/gpu/drm/asahi/channel.rs b/drivers/gpu/drm/asahi/channel.rs
 +                        ..
 +                    } = msg
 +                    {
-+                        gpu_sysfs::set_busy_percent(util1.max(util2).max(util3).max(util4).min(100));
++                        gpu_sysfs::set_busy_percent(
++                            util1.max(util2).max(util3).max(util4).min(100),
++                        );
 +                    }
                      cls_dev_dbg!(StatsCh, self.dev, "Stats: {:?}\n", msg);
                  }
                  _ => {
-diff --git a/drivers/gpu/drm/asahi/driver.rs b/drivers/gpu/drm/asahi/driver.rs
---- a/drivers/gpu/drm/asahi/driver.rs
-+++ b/drivers/gpu/drm/asahi/driver.rs
+diff -Naur a/drivers/gpu/drm/asahi/driver.rs b/drivers/gpu/drm/asahi/driver.rs
+--- a/drivers/gpu/drm/asahi/driver.rs	1969-12-31 20:30:01.000000000 -0330
++++ b/drivers/gpu/drm/asahi/driver.rs	2026-08-24 10:50:44.252136692 -0230
 @@ -25,6 +25,7 @@
      file,
      gem::AsahiObject,
@@ -50,42 +170,58 @@ diff --git a/drivers/gpu/drm/asahi/driver.rs b/drivers/gpu/drm/asahi/driver.rs
      hw,
      regs, //
  };
-@@ -44,7 +45,6 @@
- unsafe impl Sync for AsahiData {}
- 
- pub(crate) struct AsahiDriver {
--    #[expect(unused)]
-     drm: ARef<drm::Device<Self>>,
- }
- 
-@@ -232,6 +232,16 @@
+@@ -232,6 +233,14 @@
  
          drm::driver::Registration::new_foreign_owned(&drm, pdev.as_ref(), 0)?;
  
 +        if let Err(e) = gpu_sysfs::init(pdev.as_ref()) {
-+            dev_warn!(pdev.as_ref(), "Failed to expose GPU usage sysfs: {:?}\n", e);
++            dev_warn!(
++                pdev.as_ref(),
++                "Failed to expose GPU usage sysfs: {:?}\n",
++                e
++            );
 +        }
 +
          Ok(Self { drm })
      }
  }
+diff -Naur a/drivers/gpu/drm/asahi/gpu_sysfs.c b/drivers/gpu/drm/asahi/gpu_sysfs.c
+--- a/drivers/gpu/drm/asahi/gpu_sysfs.c	1969-12-31 20:30:00.000000000 -0330
++++ b/drivers/gpu/drm/asahi/gpu_sysfs.c	2026-08-24 10:51:31.082392905 -0230
+@@ -0,0 +1,26 @@
++// SPDX-License-Identifier: GPL-2.0-only OR MIT
 +
-+impl Drop for AsahiDriver {
-+    fn drop(&mut self) {
-+        gpu_sysfs::remove(self.drm.pdev.as_ref());
-+    }
++#include <linux/device.h>
++#include <linux/minmax.h>
++#include <linux/sysfs.h>
++#include <linux/types.h>
++
++static u32 gpu_busy_percent;
++
++void asahi_gpu_set_busy_percent(u32 percent)
++{
++	WRITE_ONCE(gpu_busy_percent, min_t(u32, percent, 100));
 +}
-diff --git a/drivers/gpu/drm/asahi/gpu_sysfs.rs b/drivers/gpu/drm/asahi/gpu_sysfs.rs
-new file mode 100644
-index 000000000000..111111111111
---- /dev/null
-+++ b/drivers/gpu/drm/asahi/gpu_sysfs.rs
-@@ -0,0 +1,100 @@
++
++static ssize_t gpu_busy_percent_show(struct device *dev __always_unused,
++				     struct device_attribute *attr __always_unused,
++				     char *buf)
++{
++	return sysfs_emit(buf, "%u\n", READ_ONCE(gpu_busy_percent));
++}
++static DEVICE_ATTR_RO(gpu_busy_percent);
++
++int asahi_gpu_sysfs_init(struct device *dev)
++{
++	return device_create_file(dev, &dev_attr_gpu_busy_percent);
++}
+diff -Naur a/drivers/gpu/drm/asahi/gpu_sysfs.rs b/drivers/gpu/drm/asahi/gpu_sysfs.rs
+--- a/drivers/gpu/drm/asahi/gpu_sysfs.rs	1969-12-31 20:30:00.000000000 -0330
++++ b/drivers/gpu/drm/asahi/gpu_sysfs.rs	2026-08-24 10:51:00.188904709 -0230
+@@ -0,0 +1,31 @@
 +// SPDX-License-Identifier: GPL-2.0-only OR MIT
 +
 +//! Sysfs hook for firmware-reported AGX GPU utilization.
-+
-+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 +
 +use kernel::{
 +    bindings,
@@ -95,89 +231,30 @@ index 000000000000..111111111111
 +    },
 +    error::to_result,
 +    prelude::*,
-+    str::AsCharPtr,
-+    sync::SetOnce,
 +};
 +
-+static GPU_BUSY_PERCENT: AtomicU32 = AtomicU32::new(0);
-+static GPU_BUSY_ATTR: SetOnce<bindings::device_attribute> = SetOnce::new();
-+static REGISTERED: AtomicBool = AtomicBool::new(false);
-+
-+fn write_u32_percent(buf: *mut u8, val: u32) -> usize {
-+    let val = val.min(100);
-+    let mut digits = [0u8; 3];
-+    let mut len = 0;
-+    let mut n = val;
-+    if n == 0 {
-+        digits[0] = b'0';
-+        len = 1;
-+    } else {
-+        while n > 0 {
-+            digits[len] = b'0' + (n % 10) as u8;
-+            n /= 10;
-+            len += 1;
-+        }
-+        digits[..len].reverse();
-+    }
-+    // SAFETY: Sysfs show callbacks receive at least `PAGE_SIZE` bytes.
-+    unsafe {
-+        core::ptr::copy_nonoverlapping(digits.as_ptr(), buf, len);
-+        *buf.add(len) = b'\n';
-+    }
-+    len + 1
-+}
-+
-+unsafe extern "C" fn gpu_busy_percent_show(
-+    _dev: *mut bindings::device,
-+    _attr: *mut bindings::device_attribute,
-+    buf: *mut kernel::ffi::c_char,
-+) -> isize {
-+    let val = GPU_BUSY_PERCENT.load(Ordering::Relaxed);
-+    write_u32_percent(buf.cast(), val) as isize
++unsafe extern "C" {
++    fn asahi_gpu_sysfs_init(dev: *mut bindings::device) -> kernel::ffi::c_int;
++    fn asahi_gpu_set_busy_percent(percent: u32);
 +}
 +
 +fn as_device_ptr<Ctx: DeviceContext>(dev: &Device<Ctx>) -> *mut bindings::device {
 +    core::ptr::from_ref(dev).cast::<bindings::device>().cast_mut()
 +}
 +
-+fn make_attr() -> bindings::device_attribute {
-+    bindings::device_attribute {
-+        attr: bindings::attribute {
-+            name: c"gpu_busy_percent".as_char_ptr().cast(),
-+            mode: 0o444,
-+        },
-+        show: Some(gpu_busy_percent_show),
-+        store: None,
-+    }
-+}
-+
 +pub(crate) fn init<Ctx: DeviceContext>(dev: &Device<Ctx>) -> Result {
-+    if REGISTERED.load(Ordering::Acquire) {
-+        return Ok(());
-+    }
-+
-+    GPU_BUSY_ATTR.populate(make_attr());
-+    let attr = GPU_BUSY_ATTR.as_ref().ok_or(EINVAL)?;
-+
-+    // SAFETY: `attr` lives in `GPU_BUSY_ATTR` for the module lifetime.
-+    to_result(unsafe { bindings::device_create_file(as_device_ptr(dev), attr) })?;
-+    REGISTERED.store(true, Ordering::Release);
-+    Ok(())
-+}
-+
-+pub(crate) fn remove<Ctx: DeviceContext>(dev: &Device<Ctx>) {
-+    if !REGISTERED.load(Ordering::Acquire) {
-+        return;
-+    }
-+
-+    if let Some(attr) = GPU_BUSY_ATTR.as_ref() {
-+        // SAFETY: Complements a prior successful `init` on the same device.
-+        unsafe { bindings::device_remove_file(as_device_ptr(dev), attr) };
-+    }
-+
-+    REGISTERED.store(false, Ordering::Release);
++    // SAFETY: `Device` is a transparent wrapper around `struct device`.
++    to_result(unsafe { asahi_gpu_sysfs_init(as_device_ptr(dev)) })
 +}
 +
 +pub(crate) fn set_busy_percent(percent: u32) {
-+    GPU_BUSY_PERCENT.store(percent.min(100), Ordering::Relaxed);
++    unsafe { asahi_gpu_set_busy_percent(percent) }
 +}
+diff -Naur a/drivers/gpu/drm/asahi/Makefile b/drivers/gpu/drm/asahi/Makefile
+--- a/drivers/gpu/drm/asahi/Makefile	1969-12-31 20:30:01.000000000 -0330
++++ b/drivers/gpu/drm/asahi/Makefile	2026-08-24 10:50:40.391950631 -0230
+@@ -1,3 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+ 
+ obj-$(CONFIG_DRM_ASAHI) += asahi.o
++asahi-y := asahi_main.o gpu_sysfs.o
