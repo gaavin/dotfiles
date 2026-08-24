@@ -11,6 +11,8 @@
 
 ## Install
 
+This repository is home to my NixOS setup, and aims to provide a flawless user experience.
+
 Create a fork of my repository in your own GitHub account, and then ask Grok to customize it to your system, software, and user requirements. Be sure to instruct Grok to update everything in your new dotfiles copy to reflect your own repository and changes.
 
 Boot a NixOS installer, clone your repo (mine is used in the README), run the script.
