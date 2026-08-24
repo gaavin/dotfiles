@@ -154,6 +154,11 @@
             ./patches/xdg-desktop-portal-gtk-fc-monitor.patch
           ];
         });
+        kdePackages.ksystemstats = prev.kdePackages.ksystemstats.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ [
+            ./patches/ksystemstats-asahi-gpu.patch
+          ];
+        });
       })
     ];
   };

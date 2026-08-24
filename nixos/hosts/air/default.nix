@@ -76,6 +76,12 @@
   };
 
   boot = {
+    kernelPatches = [
+      {
+        name = "asahi-gpu-busy-sysfs";
+        patch = ../../patches/asahi-gpu-busy-sysfs.patch;
+      }
+    ];
     extraModprobeConfig = ''
       options hid_apple iso_layout=0
     '';

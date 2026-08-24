@@ -1,0 +1,152 @@
+diff --git a/plugins/gpu/CMakeLists.txt b/plugins/gpu/CMakeLists.txt
+--- a/plugins/gpu/CMakeLists.txt	2026-08-24 00:37:30.684260239 -0230
++++ b/plugins/gpu/CMakeLists.txt	2026-08-24 00:39:01.116424547 -0230
+@@ -9,7 +9,7 @@
+ endif()
+ 
+ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+-    target_sources(ksystemstats_plugin_gpu PRIVATE LinuxAmdGpu.cpp LinuxIntelGpu.cpp LinuxNvidiaGpu.cpp LinuxBackend.cpp NvidiaGpu.cpp NvidiaSmiProcess.cpp)
++    target_sources(ksystemstats_plugin_gpu PRIVATE LinuxAmdGpu.cpp LinuxAsahiGpu.cpp LinuxIntelGpu.cpp LinuxNvidiaGpu.cpp LinuxBackend.cpp NvidiaGpu.cpp NvidiaSmiProcess.cpp)
+ 
+     add_executable(ksystemstats_intel_helper IntelHelper.cpp)
+     configure_file(IntelHelperLocation.h.cmake IntelHelperLocation.h)
+diff --git a/plugins/gpu/LinuxAsahiGpu.cpp b/plugins/gpu/LinuxAsahiGpu.cpp
+--- a/plugins/gpu/LinuxAsahiGpu.cpp	1969-12-31 20:30:00.000000000 -0330
++++ b/plugins/gpu/LinuxAsahiGpu.cpp	2026-08-24 00:38:31.376844882 -0230
+@@ -0,0 +1,50 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Max Power
++ * SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++ */
++
++#include "LinuxAsahiGpu.h"
++
++#include <libudev.h>
++
++#include <QStringBuilder>
++
++#include <systemstats/SysFsSensor.h>
++
++LinuxAsahiGpu::LinuxAsahiGpu(const QString &id, const QString &name, udev_device *device)
++    : GpuDevice(id, name)
++    , m_device(device)
++{
++    udev_device_ref(m_device);
++}
++
++LinuxAsahiGpu::~LinuxAsahiGpu()
++{
++    udev_device_unref(m_device);
++}
++
++void LinuxAsahiGpu::update()
++{
++    if (m_usageSensor) {
++        m_usageSensor->update();
++    }
++}
++
++void LinuxAsahiGpu::makeSensors()
++{
++    auto devicePath = QString::fromLocal8Bit(udev_device_get_syspath(m_device));
++
++    m_nameProperty = new KSysGuard::SensorProperty(QStringLiteral("name"), this);
++    m_totalVramProperty = new KSysGuard::SensorProperty(QStringLiteral("totalVram"), this);
++    m_usedVramProperty = new KSysGuard::SensorProperty(QStringLiteral("usedVram"), this);
++    m_coreFrequencyProperty = new KSysGuard::SensorProperty(QStringLiteral("coreFrequency"), QStringLiteral("coreFrequency"), 0, this);
++    m_memoryFrequencyProperty = new KSysGuard::SensorProperty(QStringLiteral("memoryFrequency"), QStringLiteral("memoryFrequency"), 0, this);
++    m_temperatureProperty = new KSysGuard::SensorProperty(QStringLiteral("temperature"), QStringLiteral("temperature"), 0, this);
++    m_powerProperty = new KSysGuard::SensorProperty(QStringLiteral("power"), QStringLiteral("power"), 0, this);
++
++    auto sensor = new KSysGuard::SysFsSensor(QStringLiteral("usage"), devicePath % QStringLiteral("/gpu_busy_percent"), 0, this);
++    m_usageProperty = sensor;
++    m_usageSensor = sensor;
++}
++
++#include "moc_LinuxAsahiGpu.cpp"
+diff --git a/plugins/gpu/LinuxAsahiGpu.h b/plugins/gpu/LinuxAsahiGpu.h
+--- a/plugins/gpu/LinuxAsahiGpu.h	1969-12-31 20:30:00.000000000 -0330
++++ b/plugins/gpu/LinuxAsahiGpu.h	2026-08-24 00:38:31.376618148 -0230
+@@ -0,0 +1,33 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Max Power
++ * SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++ */
++
++#pragma once
++
++#include "GpuDevice.h"
++
++struct udev_device;
++
++namespace KSysGuard
++{
++class SysFsSensor;
++}
++
++class LinuxAsahiGpu : public GpuDevice
++{
++    Q_OBJECT
++
++public:
++    LinuxAsahiGpu(const QString &id, const QString &name, udev_device *device);
++    ~LinuxAsahiGpu() override;
++
++    void update() override;
++
++protected:
++    void makeSensors() override;
++
++private:
++    udev_device *m_device;
++    KSysGuard::SysFsSensor *m_usageSensor = nullptr;
++};
+diff --git a/plugins/gpu/LinuxBackend.cpp b/plugins/gpu/LinuxBackend.cpp
+--- a/plugins/gpu/LinuxBackend.cpp	2026-08-24 00:37:29.785835523 -0230
++++ b/plugins/gpu/LinuxBackend.cpp	2026-08-24 00:39:01.112424818 -0230
+@@ -10,9 +10,12 @@
+ 
+ #include <libudev.h>
+ 
++#include <cstring>
++
+ #include <processcore/gpu_utils.h>
+ 
+ #include "LinuxAmdGpu.h"
++#include "LinuxAsahiGpu.h"
+ #include "LinuxIntelGpu.h"
+ #include "LinuxNvidiaGpu.h"
+ #include "debug.h"
+@@ -78,6 +81,32 @@
+     }
+ 
+     udev_enumerate_unref(enumerate);
++
++    enumerate = udev_enumerate_new(m_udev);
++    udev_enumerate_add_match_subsystem(enumerate, "drm");
++    udev_enumerate_add_match_sysname(enumerate, "card*");
++    udev_enumerate_scan_devices(enumerate);
++
++    devices = udev_enumerate_get_list_entry(enumerate);
++    for (auto entry = devices; entry; entry = udev_list_entry_get_next(entry)) {
++        auto drmDevice = udev_device_new_from_syspath(m_udev, udev_list_entry_get_name(entry));
++        auto parent = udev_device_get_parent(drmDevice);
++        const char *driver = parent ? udev_device_get_driver(parent) : nullptr;
++        if (!driver || strcmp(driver, "asahi") != 0) {
++            udev_device_unref(drmDevice);
++            continue;
++        }
++
++        auto gpuId = QStringLiteral("gpu%1").arg(gpuNumber);
++        auto *gpu = new LinuxAsahiGpu(gpuId, QStringLiteral("Apple AGX Graphics"), parent);
++        gpu->initialize();
++        m_devices.append(gpu);
++        Q_EMIT deviceAdded(gpu);
++        gpuNumber++;
++        udev_device_unref(drmDevice);
++    }
++
++    udev_enumerate_unref(enumerate);
+ }
+ 
+ void LinuxBackend::stop()
