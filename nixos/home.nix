@@ -101,6 +101,15 @@ in
       settings.max-connection-per-server = 5;
     };
 
+    konsole = {
+      enable = true;
+      defaultProfile = "JetBrains";
+      profiles.JetBrains.font = {
+        name = "JetBrainsMono Nerd Font";
+        size = 10;
+      };
+    };
+
     plasma = {
       enable = true;
       overrideConfig = true;
