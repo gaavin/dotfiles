@@ -138,7 +138,10 @@
   security.rtkit.enable = true;
 
   environment = {
-    plasma6.excludePackages = [ pkgs.kdePackages.discover ];
+    plasma6.excludePackages = with pkgs.kdePackages; [
+      discover
+      elisa
+    ];
     systemPackages = with pkgs; [
       vim
       wget
