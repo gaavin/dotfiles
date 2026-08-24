@@ -1,6 +1,6 @@
 diff --git a/drivers/gpu/drm/asahi/asahi.rs b/drivers/gpu/drm/asahi/asahi.rs
---- a/drivers/gpu/drm/asahi/asahi.rs	2026-08-24 00:37:18.722222704 -0230
-+++ b/drivers/gpu/drm/asahi/asahi.rs	2026-08-24 00:37:18.722222704 -0230
+--- a/drivers/gpu/drm/asahi/asahi.rs
++++ b/drivers/gpu/drm/asahi/asahi.rs
 @@ -16,6 +16,7 @@
  mod fw;
  mod gem;
@@ -10,8 +10,8 @@ diff --git a/drivers/gpu/drm/asahi/asahi.rs b/drivers/gpu/drm/asahi/asahi.rs
  mod initdata;
  mod mem;
 diff --git a/drivers/gpu/drm/asahi/channel.rs b/drivers/gpu/drm/asahi/channel.rs
---- a/drivers/gpu/drm/asahi/channel.rs	2026-08-24 00:37:18.722222704 -0230
-+++ b/drivers/gpu/drm/asahi/channel.rs	2026-08-24 00:37:18.725734645 -0230
+--- a/drivers/gpu/drm/asahi/channel.rs
++++ b/drivers/gpu/drm/asahi/channel.rs
 @@ -23,7 +23,8 @@
      buffer,
      event,
@@ -40,8 +40,8 @@ diff --git a/drivers/gpu/drm/asahi/channel.rs b/drivers/gpu/drm/asahi/channel.rs
                  }
                  _ => {
 diff --git a/drivers/gpu/drm/asahi/driver.rs b/drivers/gpu/drm/asahi/driver.rs
---- a/drivers/gpu/drm/asahi/driver.rs	2026-08-24 00:37:18.722222704 -0230
-+++ b/drivers/gpu/drm/asahi/driver.rs	2026-08-24 00:37:18.725734645 -0230
+--- a/drivers/gpu/drm/asahi/driver.rs
++++ b/drivers/gpu/drm/asahi/driver.rs
 @@ -25,6 +25,7 @@
      file,
      gem::AsahiObject,
@@ -72,49 +72,20 @@ diff --git a/drivers/gpu/drm/asahi/driver.rs b/drivers/gpu/drm/asahi/driver.rs
 +
 +impl Drop for AsahiDriver {
 +    fn drop(&mut self) {
-+        gpu_sysfs::remove(self.drm.pdev.as_ref().as_ref());
++        gpu_sysfs::remove(self.drm.pdev.as_ref());
 +    }
 +}
-diff --git a/drivers/gpu/drm/asahi/gpu_sysfs.c b/drivers/gpu/drm/asahi/gpu_sysfs.c
---- a/drivers/gpu/drm/asahi/gpu_sysfs.c	1969-12-31 20:30:00.000000000 -0330
-+++ b/drivers/gpu/drm/asahi/gpu_sysfs.c	2026-08-24 00:37:18.725734645 -0230
-@@ -0,0 +1,29 @@
-+// SPDX-License-Identifier: GPL-2.0-only OR MIT
-+
-+#include <linux/device.h>
-+#include <linux/sysfs.h>
-+#include <linux/types.h>
-+
-+static u32 gpu_busy_percent;
-+
-+void asahi_gpu_set_busy_percent(u32 percent)
-+{
-+	WRITE_ONCE(gpu_busy_percent, percent);
-+}
-+
-+static ssize_t gpu_busy_percent_show(struct device *dev,
-+				     struct device_attribute *attr, char *buf)
-+{
-+	return sysfs_emit(buf, "%u\n", READ_ONCE(gpu_busy_percent));
-+}
-+static DEVICE_ATTR_RO(gpu_busy_percent);
-+
-+int asahi_gpu_sysfs_init(struct device *dev)
-+{
-+	return device_create_file(dev, &dev_attr_gpu_busy_percent);
-+}
-+
-+void asahi_gpu_sysfs_remove(struct device *dev)
-+{
-+	device_remove_file(dev, &dev_attr_gpu_busy_percent);
-+}
 diff --git a/drivers/gpu/drm/asahi/gpu_sysfs.rs b/drivers/gpu/drm/asahi/gpu_sysfs.rs
---- a/drivers/gpu/drm/asahi/gpu_sysfs.rs	1969-12-31 20:30:00.000000000 -0330
-+++ b/drivers/gpu/drm/asahi/gpu_sysfs.rs	2026-08-24 00:37:18.725734645 -0230
-@@ -0,0 +1,37 @@
+new file mode 100644
+index 000000000000..111111111111
+--- /dev/null
++++ b/drivers/gpu/drm/asahi/gpu_sysfs.rs
+@@ -0,0 +1,99 @@
 +// SPDX-License-Identifier: GPL-2.0-only OR MIT
 +
 +//! Sysfs hook for firmware-reported AGX GPU utilization.
++
++use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 +
 +use kernel::{
 +    bindings,
@@ -124,36 +95,89 @@ diff --git a/drivers/gpu/drm/asahi/gpu_sysfs.rs b/drivers/gpu/drm/asahi/gpu_sysf
 +    },
 +    error::to_result,
 +    prelude::*,
++    str::AsCharPtr,
++    sync::SetOnce,
 +};
 +
-+unsafe extern "C" {
-+    fn asahi_gpu_sysfs_init(dev: *mut bindings::device) -> kernel::ffi::c_int;
-+    fn asahi_gpu_sysfs_remove(dev: *mut bindings::device);
-+    fn asahi_gpu_set_busy_percent(percent: u32);
++static GPU_BUSY_PERCENT: AtomicU32 = AtomicU32::new(0);
++static GPU_BUSY_ATTR: SetOnce<bindings::device_attribute> = SetOnce::new();
++static REGISTERED: AtomicBool = AtomicBool::new(false);
++
++fn write_u32_percent(buf: *mut u8, val: u32) -> usize {
++    let val = val.min(100);
++    let mut digits = [0u8; 3];
++    let mut len = 0;
++    let mut n = val;
++    if n == 0 {
++        digits[0] = b'0';
++        len = 1;
++    } else {
++        while n > 0 {
++            digits[len] = b'0' + (n % 10) as u8;
++            n /= 10;
++            len += 1;
++        }
++        digits[..len].reverse();
++    }
++    // SAFETY: Sysfs show callbacks receive at least `PAGE_SIZE` bytes.
++    unsafe {
++        core::ptr::copy_nonoverlapping(digits.as_ptr(), buf, len);
++        *buf.add(len) = b'\n';
++    }
++    len + 1
++}
++
++unsafe extern "C" fn gpu_busy_percent_show(
++    _dev: *mut bindings::device,
++    _attr: *mut bindings::device_attribute,
++    buf: *mut kernel::ffi::c_char,
++) -> isize {
++    let val = GPU_BUSY_PERCENT.load(Ordering::Relaxed);
++    write_u32_percent(buf.cast(), val) as isize
 +}
 +
 +fn as_device_ptr<Ctx: DeviceContext>(dev: &Device<Ctx>) -> *mut bindings::device {
 +    core::ptr::from_ref(dev).cast::<bindings::device>().cast_mut()
 +}
 +
++fn make_attr() -> bindings::device_attribute {
++    bindings::device_attribute {
++        attr: bindings::attribute {
++            name: c"gpu_busy_percent".as_char_ptr().cast(),
++            mode: 0o444,
++        },
++        show: Some(gpu_busy_percent_show),
++        store: None,
++    }
++}
++
 +pub(crate) fn init<Ctx: DeviceContext>(dev: &Device<Ctx>) -> Result {
-+    // SAFETY: `Device` is a transparent wrapper around `struct device`.
-+    to_result(unsafe { asahi_gpu_sysfs_init(as_device_ptr(dev)) })
++    if REGISTERED.load(Ordering::Acquire) {
++        return Ok(());
++    }
++
++    GPU_BUSY_ATTR.populate(make_attr());
++    let attr = GPU_BUSY_ATTR.as_ref().ok_or(EINVAL)?;
++
++    // SAFETY: `attr` lives in `GPU_BUSY_ATTR` for the module lifetime.
++    to_result(unsafe { bindings::device_create_file(as_device_ptr(dev), attr) })?;
++    REGISTERED.store(true, Ordering::Release);
++    Ok(())
 +}
 +
 +pub(crate) fn remove<Ctx: DeviceContext>(dev: &Device<Ctx>) {
-+    // SAFETY: Matches a prior `init` on the same device, or is a no-op if create failed.
-+    unsafe { asahi_gpu_sysfs_remove(as_device_ptr(dev)) }
++    if !REGISTERED.load(Ordering::Acquire) {
++        return;
++    }
++
++    if let Some(attr) = GPU_BUSY_ATTR.as_ref() {
++        // SAFETY: Complements a prior successful `init` on the same device.
++        unsafe { bindings::device_remove_file(as_device_ptr(dev), attr) };
++    }
++
++    REGISTERED.store(false, Ordering::Release);
 +}
 +
 +pub(crate) fn set_busy_percent(percent: u32) {
-+    unsafe { asahi_gpu_set_busy_percent(percent) }
++    GPU_BUSY_PERCENT.store(percent.min(100), Ordering::Relaxed);
 +}
-diff --git a/drivers/gpu/drm/asahi/Makefile b/drivers/gpu/drm/asahi/Makefile
---- a/drivers/gpu/drm/asahi/Makefile	2026-08-24 00:37:18.722222704 -0230
-+++ b/drivers/gpu/drm/asahi/Makefile	2026-08-24 00:37:18.725734645 -0230
-@@ -1,3 +1,4 @@
- # SPDX-License-Identifier: GPL-2.0
- 
- obj-$(CONFIG_DRM_ASAHI) += asahi.o
-+asahi-y += gpu_sysfs.o
