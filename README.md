@@ -35,7 +35,7 @@ cd dotfiles
 sudo ./nixos/install.sh
 ```
 
-### Instructions for macOS users
+### Instructions for users with Apple Silicon running macOS
 
 ```bash
 curl https://alx.sh | sh
