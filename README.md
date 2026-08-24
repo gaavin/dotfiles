@@ -51,17 +51,11 @@ curl https://alx.sh | sh
 
 Write the latest `*-apple-silicon-*.iso` from [nixos-apple-silicon releases](https://github.com/nix-community/nixos-apple-silicon/releases) to the **usb disk**, unfortunately other solutions such as Ventoy are not working.
 
-macOS (`diskutil list` → USB, e.g. `disk4`):
+(`diskutil list` → USB, e.g. `disk4`):
 
 ```bash
 diskutil unmountDisk /dev/disk4
 sudo dd if=nixos-*.iso of=/dev/rdisk4 bs=1m
-```
-
-Linux:
-
-```bash
-sudo dd if=nixos-*.iso of=/dev/sdX bs=4M status=progress oflag=direct
 ```
 
 Plug in the USB and power on. Then run **Install** above.
