@@ -60,13 +60,11 @@ sudo dd if=nixos-*.iso of=/dev/rdisk4 bs=1m
 
 Plug in the USB and power on. Then run **Install** above.
 
-> **Webcam** Recent Asahi installs include camera ISP data in `vendorfw/firmware.cpio`. If yours predates that, copy `/usr/sbin/appleh13camerad` from macOS and set `APPLEH13CAMERAD=/path/to/it` before install; the script merges ISP calibration automatically.
-
 ---
 
 ## Rebuild
 
-Updates the flake and runs `nixos-rebuild switch` for the current hostname. On air, also syncs firmware from `/efi` on asahi machines.
+Updates the flake and runs `nixos-rebuild switch` for the current hostname. On air, also syncs firmware from `/efi`, unlocks the macOS volume if needed (FileVault password prompt), merges camera ISP calibration, and caches `appleh13camerad` under `hosts/air/firmware/`.
 
 ```bash
 rebuild

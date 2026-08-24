@@ -1294,87 +1294,6 @@ air_installable_bytes() {
   echo $((free_bytes + reclaim_bytes))
 }
 
-air_firmware_has_camera() {
-  local cpio=$1
-  cpio -t --quiet <"$cpio" 2>/dev/null | grep -qE '(^|\./)vendorfw/apple/isp_.*\.dat$'
-}
-
-air_find_appleh13camerad() {
-  local candidate f
-  if [[ -n ${APPLEH13CAMERAD:-} && -f $APPLEH13CAMERAD ]]; then
-    printf '%s\n' "$APPLEH13CAMERAD"
-    return 0
-  fi
-  for candidate in \
-    "$REPO_ROOT/appleh13camerad" \
-    "$HOME/appleh13camerad" \
-    /tmp/appleh13camerad; do
-    [[ -f $candidate ]] || continue
-    printf '%s\n' "$candidate"
-    return 0
-  done
-  for f in /run/media/*/*/appleh13camerad /run/media/*/appleh13camerad; do
-    [[ -f $f ]] || continue
-    printf '%s\n' "$f"
-    return 0
-  done
-  return 1
-}
-
-# Merge ISP calibration from macOS appleh13camerad when the ESP bundle lacks it.
-air_ensure_camera_firmware() {
-  local fw_dir=$1 esp_cpio=${2:-}
-  local cpio="$fw_dir/firmware.cpio" cam tmp work
-
-  [[ -f $cpio ]] || return 0
-
-  if air_firmware_has_camera "$cpio"; then
-    ui_ok "camera ISP firmware present"
-    return 0
-  fi
-
-  cam=$(air_find_appleh13camerad || true)
-  if [[ -z $cam ]]; then
-    ui_warn "camera calibration missing from firmware.cpio (webcam will be low quality)"
-    ui_faint "Copy /usr/sbin/appleh13camerad from macOS, set APPLEH13CAMERAD, re-run install."
-    return 0
-  fi
-
-  ui_step "Merge camera firmware"
-  tmp=$(mktemp -d)
-  work="$tmp/work"
-  mkdir -p "$work"
-  (
-    cd "$work"
-    cpio -id --no-absolute-filenames --quiet <"$cpio"
-    mkdir -p isp-in
-    cp "$cam" isp-in/appleh13camerad
-    nix shell "${NIX_EXTRA[@]}" nixpkgs#asahi-fwextract --command \
-      python3 - isp-in vendorfw <<'PY'
-import sys
-from pathlib import Path
-from asahi_firmware.isp import ISPFWCollection
-
-source, dest = Path(sys.argv[1]), Path(sys.argv[2])
-col = ISPFWCollection(str(source))
-files = col.files()
-if not files:
-    raise SystemExit("no ISP calibration extracted from appleh13camerad")
-for name, fwf in files:
-    out = dest / name
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(fwf.data)
-PY
-    find vendorfw -print0 | cpio -o --null --quiet -H newc >firmware.cpio.new
-    mv firmware.cpio.new "$cpio"
-  ) || die "failed to merge camera ISP calibration"
-
-  if [[ -n $esp_cpio && -f $esp_cpio && $esp_cpio != "$cpio" ]]; then
-    ui_spin "Updating ESP firmware.cpio..." cp "$cpio" "$esp_cpio"
-  fi
-  ui_ok "camera ISP calibration merged"
-}
-
 # Tear down a partial/failed install so the nixos GPT slice can be recreated.
 air_teardown_linux_stack() {
   swapoff /dev/mapper/air-swap 2>/dev/null || true
@@ -1949,9 +1868,8 @@ install_air() {
     sleep 0.2
   done
 
-  ui_step "Copy firmware"
+  ui_step "Sync firmware"
   copy_repo
-  mkdir -p /mnt/home/max/dotfiles/nixos/hosts/air/firmware
   fw=""
   for candidate in /mnt/efi/vendorfw/firmware.cpio /efi/vendorfw/firmware.cpio /boot/vendorfw/firmware.cpio; do
     if [[ -f $candidate ]]; then
@@ -1960,8 +1878,8 @@ install_air() {
     fi
   done
   [[ -n $fw ]] || die "firmware.cpio not found on the ESP"
-  ui_spin "Copying firmware..." cp "$fw" /mnt/home/max/dotfiles/nixos/hosts/air/firmware/
-  air_ensure_camera_firmware /mnt/home/max/dotfiles/nixos/hosts/air/firmware "$fw"
+  bash /mnt/home/max/dotfiles/nixos/hosts/air/sync-firmware.sh --esp "$fw" ||
+    ui_warn "firmware sync incomplete (webcam may be low quality)"
 
   cat >/mnt/home/max/dotfiles/nixos/hosts/air/hardware.nix <<EOF
 {

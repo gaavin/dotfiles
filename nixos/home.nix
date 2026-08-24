@@ -40,9 +40,8 @@ in
           flake_dir="$HOME/dotfiles/nixos"
           host="${osConfig.networking.hostName}"
           if [ "$host" = air ]; then
-            sudo mkdir -p "$flake_dir/hosts/air/firmware"
-            sudo cp /efi/vendorfw/firmware.cpio "$flake_dir/hosts/air/firmware/firmware.cpio"
-            sudo chown "$(id -u):$(id -g)" "$flake_dir/hosts/air/firmware/firmware.cpio"
+            sudo bash "$flake_dir/hosts/air/sync-firmware.sh"
+            sudo chown -R "$(id -u):$(id -g)" "$flake_dir/hosts/air/firmware"
           fi
           nix flake update --flake "$flake_dir"
           exec sudo nixos-rebuild switch --flake "path:$flake_dir#$host"
