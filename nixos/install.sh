@@ -121,13 +121,27 @@ C_MUTED=245
 C_TEXT=252
 C_VIOLET=141
 
+# ASCII-only UI glyphs. Linux VT has no emoji font; many Unicode symbols are
+# missing or double-width. Keep every marker one column for alignment.
+UI_OK='+'
+UI_WARN='!'
+UI_FAIL='x'
+UI_MARK='>'
+UI_BULLET='*'
+UI_PART='o'
+UI_LUKS='#'
+UI_VOL='v'
+UI_ZRAM='z'
+UI_SWAP='s'
+UI_PROMPT='> '
+
 theme() {
   export GUM_INPUT_CURSOR_FOREGROUND="$C_ACCENT"
   export GUM_INPUT_PROMPT_FOREGROUND="$C_ACCENT"
   export GUM_INPUT_HEADER_FOREGROUND="$C_VIOLET"
   export GUM_INPUT_WIDTH="$UI_WIDTH"
   export GUM_INPUT_CHAR_LIMIT="512"
-  export GUM_INPUT_PROMPT="🔑 "
+  export GUM_INPUT_PROMPT="$UI_PROMPT"
   export GUM_INPUT_PLACEHOLDER_FOREGROUND="$C_MUTED"
   export GUM_CONFIRM_PROMPT_FOREGROUND="$C_WARN"
   export GUM_CONFIRM_SELECTED_FOREGROUND="15"
@@ -148,9 +162,9 @@ host_arch() {
 
 host_icon() {
   case $1 in
-    mina) echo "🖥" ;;
-    air) echo "💻" ;;
-    *) echo "⌁" ;;
+    mina) echo "M" ;;
+    air) echo "A" ;;
+    *) echo "$UI_BULLET" ;;
   esac
 }
 
@@ -162,17 +176,17 @@ ui_faint() {
   ui_ansi "2" "$1"
 }
 
-# Single-column markers only — emoji widths vary by terminal and break alignment.
+# Single-column ASCII markers only.
 ui_installer_icon() {
   case $1 in
-    *Password*) printf '◈' ;;
-    *destructive*) printf '!' ;;
-    *LUKS*) printf '▣' ;;
-    *Encrypt*) printf '●' ;;
-    *Format*) printf '■' ;;
-    *firmware*) printf '□' ;;
-    *Install*) printf '◎' ;;
-    *) printf '▸' ;;
+    *Password*) printf '%s' "$UI_BULLET" ;;
+    *destructive*) printf '%s' "$UI_WARN" ;;
+    *LUKS*) printf '%s' "$UI_LUKS" ;;
+    *Encrypt*) printf '%s' "$UI_BULLET" ;;
+    *Format*) printf '=' ;;
+    *firmware*) printf '-' ;;
+    *Install*) printf '%s' "$UI_OK" ;;
+    *) printf '%s' "$UI_MARK" ;;
   esac
 }
 
@@ -190,13 +204,13 @@ ui_banner() {
   local host=$1 installer=$2
   local line icon color
   local -a body=(
-    "$(ui_ansi "1;38;5;${C_ACCENT}" "❄ NixOS")"
-    "$(ui_ansi "2;38;5;${C_VIOLET}" "◈ Version $NIXOS_VERSION")"
-    "$(ui_faint "$(host_icon "$host") $host · $(host_arch)")"
+    "$(ui_ansi "1;38;5;${C_ACCENT}" "NixOS")"
+    "$(ui_ansi "2;38;5;${C_VIOLET}" "${UI_BULLET} Version $NIXOS_VERSION")"
+    "$(ui_faint "$(host_icon "$host") $host / $(host_arch)")"
   )
 
   if [[ -n $installer ]]; then
-    body+=("" "$(ui_ansi "1;38;5;${C_ACCENT}" "◆ Installer")")
+    body+=("" "$(ui_ansi "1;38;5;${C_ACCENT}" "${UI_BULLET} Installer")")
     while IFS= read -r line; do
       [[ -n $line ]] || continue
       line="${line#- }"
@@ -226,11 +240,11 @@ ui_section_line() {
 }
 
 ui_ok() {
-  ui_line "$(ui_ansi "38;5;${C_SUCCESS}" "✔ $1")"
+  ui_line "$(ui_ansi "38;5;${C_SUCCESS}" "${UI_OK} $1")"
 }
 
 ui_warn() {
-  ui_line "$(ui_ansi "38;5;${C_WARN}" "⚠ $1")"
+  ui_line "$(ui_ansi "38;5;${C_WARN}" "${UI_WARN} $1")"
 }
 
 ui_abort() {
@@ -242,7 +256,7 @@ ui_abort() {
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
     --margin "$UI_MARGIN_SECTION" \
-    "✕ Installation aborted." \
+    "${UI_FAIL} Installation aborted." \
     "$(ui_faint "Re-run ./nixos/install.sh to resume.")")"
   ui_tty_write "${msg}"$'\n'
 }
@@ -257,7 +271,7 @@ ui_line() {
 
 ui_step() {
   STEP_N=$((STEP_N + 1))
-  ui_section_line "▸" \
+  ui_section_line "$UI_MARK" \
     "$(ui_ansi "1;38;5;${C_ACCENT}" "$STEP_N/$STEP_TOTAL") $(ui_ansi "1;38;5;${C_TEXT}" "$1")"
 }
 
@@ -292,9 +306,9 @@ ui_spin() {
   fi
 
   if ((status == 0)); then
-    ui_line "$(ui_ansi "38;5;${C_SUCCESS}" "✔") $(ui_ansi "38;5;${C_TEXT}" "$title")"
+    ui_line "$(ui_ansi "38;5;${C_SUCCESS}" "${UI_OK}") $(ui_ansi "38;5;${C_TEXT}" "$title")"
   else
-    ui_line "$(ui_ansi "38;5;${C_DANGER}" "✕") $(ui_ansi "38;5;${C_TEXT}" "$title")"
+    ui_line "$(ui_ansi "38;5;${C_DANGER}" "${UI_FAIL}") $(ui_ansi "38;5;${C_TEXT}" "$title")"
     cat "$log" >&2
   fi
   rm -f "$log"
@@ -406,7 +420,7 @@ ui_cpu_tick() {
 }
 
 ui_box_label() {
-  ui_ansi "38;5;${C_MUTED}" "▸ $1"
+  ui_ansi "38;5;${C_MUTED}" "${UI_MARK} $1"
 }
 
 ui_cpu_sparkline() {
@@ -759,13 +773,13 @@ disk_planned_layout() {
   swap_h="$(fmt_size "$PLANNED_SWAP_BYTES")"
 
   if [[ $host == mina ]]; then
-    ui_diff_add "💿 ESP     $(fmt_size "$PLANNED_ESP_BYTES")  vfat  /efi$(disk_mount_opts_suffix /efi)"
-    ui_diff_add "🔒 nixos   ${luks_h}  LUKS  cryptroot"
+    ui_diff_add "${UI_PART} ESP     $(fmt_size "$PLANNED_ESP_BYTES")  vfat  /efi$(disk_mount_opts_suffix /efi)"
+    ui_diff_add "${UI_LUKS} nixos   ${luks_h}  LUKS  cryptroot"
   else
-    ui_diff_add "🔒 nixos   ${luks_h}  LUKS  cryptroot  (free space)"
+    ui_diff_add "${UI_LUKS} nixos   ${luks_h}  LUKS  cryptroot  (free space)"
   fi
-  ui_diff_add "  📦 swap  ${swap_h}"
-  ui_diff_add "  📦 root  ${root_h}  xfs  /$(disk_mount_opts_suffix /)"
+  ui_diff_add "  ${UI_VOL} swap  ${swap_h}"
+  ui_diff_add "  ${UI_VOL} root  ${root_h}  xfs  /$(disk_mount_opts_suffix /)"
 }
 
 ui_diff_ctx() {
@@ -828,10 +842,10 @@ disk_entry_desc() {
   [[ -n $mount && $mount != "-" ]] && spec="$spec  ${mount}"
 
   case $type in
-    crypt) icon="🔒" ;;
-    lvm) icon="📦" ;;
-    part) icon="💿" ;;
-    *) icon="▸" ;;
+    crypt) icon="$UI_LUKS" ;;
+    lvm) icon="$UI_VOL" ;;
+    part) icon="$UI_PART" ;;
+    *) icon="$UI_MARK" ;;
   esac
 
   printf '%s %s' "$icon" "$spec"
@@ -921,8 +935,8 @@ disk_diff_header() {
   disk_name="$(disk_short)"
   now_h="$(disk_size_human)"
   planned_h="$(fmt_size "$(disk_planned_total_bytes "$host")")"
-  ui_diff_ctx "${disk_name} · ${now_h}"
-  ui_diff_ctx "planned · ${planned_h}"
+  ui_diff_ctx "${disk_name} / ${now_h}"
+  ui_diff_ctx "planned / ${planned_h}"
   ui_diff_ctx ""
 }
 
@@ -997,7 +1011,7 @@ air_disk_diff() {
       spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
       role="$(part_role_air "${PARTUUID:-}" "$esp_uuid")"
       case $role in
-        esp) ui_diff_mod "${indent}${spec}  → /efi (mount only, never format)" ;;
+        esp) ui_diff_mod "${indent}${spec}  -> /efi (mount only, never format)" ;;
         preserved) ui_diff_ctx "${indent}${spec}" ;;
       esac
     done < <(disk_lsblk)
@@ -1010,12 +1024,12 @@ air_disk_diff() {
 ask_password() {
   local dest=$1 header=$2 pass pass2
   while true; do
-    pass="$(gum input --password --header "🔐 $header" --placeholder "password" --char-limit 0)" || exit 1
+    pass="$(gum input --password --header "$header" --placeholder "password" --char-limit 0)" || exit 1
     if [[ -z $pass ]]; then
       ui_warn "Password cannot be empty"
       continue
     fi
-    pass2="$(gum input --password --header "🔐 Confirm $header" --placeholder "confirm" --char-limit 0)" || exit 1
+    pass2="$(gum input --password --header "Confirm $header" --placeholder "confirm" --char-limit 0)" || exit 1
     if [[ $pass != "$pass2" ]]; then
       ui_warn "Passwords do not match"
       continue
@@ -1031,7 +1045,7 @@ confirm() {
   if [[ ${INSTALL_YES:-} == 1 ]]; then
     return
   fi
-  gum confirm --default=false --affirmative "Continue →" --negative "✕ Cancel" "$1" || {
+  gum confirm --default=false --affirmative "Continue ->" --negative "${UI_FAIL} Cancel" "$1" || {
     ui_ok "Cancelled"
     exit 1
   }
@@ -1219,13 +1233,13 @@ collect_swap_lines() {
     if [[ $base == zram* ]]; then
       algo="$(zram_compression "$base")"
       [[ ${#algo} -gt $detail_w ]] && detail_w=${#algo}
-      icons+=("⚡")
+      icons+=("$UI_ZRAM")
       sizes+=("$size_label")
       kinds+=("$SWAP_ZRAM_KIND")
       details+=("$algo")
       colors+=("$C_VIOLET")
     else
-      icons+=("💾")
+      icons+=("$UI_SWAP")
       sizes+=("$size_label")
       kinds+=("$SWAP_DISK_KIND")
       details+=("$SWAP_DISK_DETAIL")
@@ -1346,7 +1360,7 @@ prepare_live_environment() {
   avail=$(live_store_avail)
   avail=${avail:-0}
   if ((avail < min_free)); then
-    ui_warn "⚙ only $(fmt_size "$avail") free on /nix — reboot the live ISO if install fails"
+    ui_warn "only $(fmt_size "$avail") free on /nix - reboot the live ISO if install fails"
   fi
 }
 
@@ -1410,7 +1424,7 @@ ensure_swap() {
     ui_swap_box
     return 0
   fi
-  ui_warn "⚙ swap is off — install may run out of memory"
+  ui_warn "swap is off - install may run out of memory"
   return 1
 }
 
@@ -1471,7 +1485,7 @@ install_system() {
   systemctl restart systemd-timesyncd || true
   ui_step "Install NixOS"
   if [[ $HOST == air ]]; then
-    ui_ok "⚙ linux-asahi will compile from source"
+    ui_ok "linux-asahi will compile from source"
   fi
   prepare_live_environment
   ensure_swap
@@ -1520,7 +1534,7 @@ install_air() {
     die "expected 4096-byte logical sectors on $DISK"
 
   if ! read -r free_start free_end free_bytes < <(air_largest_free_region); then
-    die "no free space on $DISK — resize macOS in the Asahi installer first"
+    die "no free space on $DISK - resize macOS in the Asahi installer first"
   fi
   if ((free_bytes < AIR_MIN_FREE_BYTES)); then
     die "largest free region is $(fmt_size "$free_bytes"); need at least $(fmt_size "$AIR_MIN_FREE_BYTES")"
@@ -1549,7 +1563,7 @@ install_air() {
   part_bytes="$(lsblk -n -b -d -o SIZE "$part")"
   [[ $part_bytes =~ ^[0-9]+$ ]] || die "could not read new partition size"
   if ((part_bytes < AIR_MIN_FREE_BYTES)); then
-    die "new partition is only $(fmt_size "$part_bytes") — refused (likely hit an alignment gap)"
+    die "new partition is only $(fmt_size "$part_bytes") - refused (likely hit an alignment gap)"
   fi
 
   after="$(air_part_state)"
@@ -1636,13 +1650,13 @@ finish() {
     --width "$UI_WIDTH" \
     --padding "0 $UI_PAD_H" \
     --margin "$UI_MARGIN_SECTION" \
-    "✔ Done."
+    "${UI_OK} Done."
 
   if [[ ${INSTALL_YES:-} == 1 ]]; then
     return 0
   fi
 
-  header="Installation complete — what next?"
+  header="Installation complete - what next?"
   if [[ $HOST == air ]]; then
     header="$header
 $(ui_faint "Hold power at boot for the Apple boot picker if you need macOS.")"
@@ -1650,8 +1664,8 @@ $(ui_faint "Hold power at boot for the Apple boot picker if you need macOS.")"
 
   choice="$(
     gum choose --height 2 --header "$header" \
-      "↻ Reboot into NixOS" \
-      "✕ Exit to shell"
+      "${UI_MARK} Reboot into NixOS" \
+      "${UI_FAIL} Exit to shell"
   )" || exit 0
 
   case $choice in
@@ -1721,7 +1735,7 @@ cp "$SECRETS/luks" "$LUKS_PASSFILE"
 chmod 600 "$LUKS_PASSFILE"
 ask_password "$SECRETS/root" "root password"
 ask_password "$SECRETS/max" "max password"
-ui_ok "🔐 Passwords saved"
+ui_ok "Passwords saved"
 
 case $HOST in
   mina) install_mina ;;
