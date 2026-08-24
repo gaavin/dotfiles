@@ -724,9 +724,10 @@ air_largest_free_region() {
 }
 
 disk_air_free_bytes() {
-  local start_s end_s size_bytes
-  if read -r start_s end_s size_bytes < <(air_largest_free_region); then
-    echo "$size_bytes"
+  local installable
+  installable="$(air_installable_bytes)"
+  if ((installable > 0)); then
+    echo "$installable"
     return
   fi
 
@@ -1265,6 +1266,34 @@ air_linux_part_numbers() {
     awk '$1 == "part" && $3 == "nixos" { sub(/^.*p/, "", $2); print $2 }'
 }
 
+# Bytes in nixos-labelled slices from a prior install (reclaimable on retry).
+air_linux_reclaim_bytes() {
+  local num dev bytes total=0
+  while read -r num; do
+    [[ -n $num ]] || continue
+    dev="${DISK}p${num}"
+    [[ -b $dev ]] || dev="${DISK}${num}"
+    [[ -b $dev ]] || continue
+    bytes="$(lsblk -n -b -d -o SIZE "$dev" 2>/dev/null || echo 0)"
+    [[ $bytes =~ ^[0-9]+$ ]] || continue
+    total=$((total + bytes))
+  done < <(air_linux_part_numbers)
+  echo "$total"
+}
+
+# GPT free gaps plus any nixos slice we will delete before installing.
+air_installable_bytes() {
+  local free_bytes=0 reclaim_bytes start_s end_s size_s
+
+  if read -r start_s end_s free_bytes < <(air_largest_free_region); then
+    :
+  else
+    free_bytes=0
+  fi
+  reclaim_bytes="$(air_linux_reclaim_bytes)"
+  echo $((free_bytes + reclaim_bytes))
+}
+
 # Tear down a partial/failed install so the nixos GPT slice can be recreated.
 air_teardown_linux_stack() {
   swapoff /dev/mapper/air-swap 2>/dev/null || true
@@ -1765,18 +1794,19 @@ install_air() {
   [[ $(cat /sys/block/"$(disk_short)"/queue/logical_block_size) == 4096 ]] ||
     die "expected 4096-byte logical sectors on $DISK"
 
-  if ! read -r free_start free_end free_bytes < <(air_largest_free_region); then
-    die "no free space on $DISK - resize macOS in the Asahi installer first"
+  free_bytes="$(air_installable_bytes)"
+  if ((free_bytes < AIR_MIN_FREE_BYTES)); then
+    die "need at least $(fmt_size "$AIR_MIN_FREE_BYTES") for NixOS on $DISK (found $(fmt_size "$free_bytes"))"
   fi
 
   ui_step "Create LUKS partition"
   ui_disk_diff_box "$(air_disk_diff "$esp_uuid")"
-  confirm "Create a LUKS partition in the largest free region on $DISK ($(fmt_size "$free_bytes")). Previous Linux installs are removed. iBoot, macOS, the ESP, and Recovery are left alone."
+  confirm "Create a LUKS partition on $DISK ($(fmt_size "$free_bytes") available). Previous Linux installs are removed. iBoot, macOS, the ESP, and Recovery are left alone."
 
   air_remove_linux_partitions "$esp_dev"
 
   if ! read -r free_start free_end free_bytes < <(air_largest_free_region); then
-    die "no free space on $DISK after removing previous Linux install"
+    die "no free GPT gap on $DISK after removing previous Linux install"
   fi
   if ((free_bytes < AIR_MIN_FREE_BYTES)); then
     die "largest free region is $(fmt_size "$free_bytes"); need at least $(fmt_size "$AIR_MIN_FREE_BYTES")"
