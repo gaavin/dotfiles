@@ -28,7 +28,7 @@ Boot a NixOS installer, clone this repo, run the script.
 
 ```bash
 # if you need to connect to wifi
-nmtui
+sudo nmtui
 
 git clone https://github.com/gaavin/dotfiles.git
 cd dotfiles
