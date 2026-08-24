@@ -30,7 +30,7 @@ Boot a NixOS installer, clone this repo, run the script.
 # if you need to connect to wifi
 sudo nmtui
 
-git clone https://github.com/gaavin/dotfiles.git
+nix run nixpkgs#git -- clone https://github.com/gaavin/dotfiles.git
 cd dotfiles
 sudo ./nixos/install.sh
 ```
