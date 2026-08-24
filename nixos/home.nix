@@ -101,6 +101,8 @@ in
       settings.max-connection-per-server = 5;
     };
 
+    mpv.enable = true;
+
     konsole = {
       enable = true;
       defaultProfile = "JetBrains";
