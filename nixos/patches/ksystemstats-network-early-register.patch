@@ -1,0 +1,77 @@
+diff -Naur a/plugins/network/NetworkManagerBackend.cpp b/plugins/network/NetworkManagerBackend.cpp
+--- a/plugins/network/NetworkManagerBackend.cpp	2026-08-24 13:06:14.404947335 -0230
++++ b/plugins/network/NetworkManagerBackend.cpp	2026-08-24 13:06:28.608523869 -0230
+@@ -26,6 +26,10 @@
+     connect(m_device.data(), &NetworkManager::Device::activeConnectionChanged, this, &NetworkManagerDevice::update);
+     connect(m_device.data(), &NetworkManager::Device::ipV4ConfigChanged, this, &NetworkManagerDevice::update);
+     connect(m_device.data(), &NetworkManager::Device::ipV6ConfigChanged, this, &NetworkManagerDevice::update);
++    // iwd/NM can finish DHCP after activeConnectionChanged without emitting ipV4ConfigChanged.
++    connect(m_device.data(), &NetworkManager::Device::stateChanged, this, [this](auto, auto, auto) {
++        update();
++    });
+ 
+     connect(this, &NetworkManagerDevice::nameChanged, this, [this]() {
+         m_networkSensor->setPrefix(name());
+@@ -142,6 +146,22 @@
+             m_uploadSensor->setValue(0);
+             m_uploadBitsSensor->setValue(0);
+ 
++            // Keep the sensor object registered so overview regexes keep matching
++            // across reconnects; just clear identity/address fields.
++            setName(m_device->interfaceName());
++            m_networkSensor->setValue(name());
++            m_ipv4Sensor->setValue(QString{});
++            m_ipv4GatewaySensor->setValue(QString{});
++            m_ipv4SubnetMaskSensor->setValue(QString{});
++            m_ipv4WithPrefixLengthSensor->setValue(QString{});
++            m_ipv4DNSSensor->setValue(QString{});
++            m_ipv6Sensor->setValue(QString{});
++            m_ipv6GatewaySensor->setValue(QString{});
++            m_ipv6SubnetMaskSensor->setValue(QString{});
++            m_ipv6WithPrefixLengthSensor->setValue(QString{});
++            m_ipv6DNSSensor->setValue(QString{});
++            m_signalSensor->setValue(0);
++
+             m_pendingDisconnect = true;
+         }
+         return;
+@@ -288,13 +308,11 @@
+     }
+ 
+     auto nmDevice = new NetworkManagerDevice(device->interfaceName(), device);
+-    connect(nmDevice, &NetworkManagerDevice::connected, this, &NetworkManagerBackend::deviceAdded);
+-    connect(nmDevice, &NetworkManagerDevice::disconnected, this, &NetworkManagerBackend::deviceRemoved);
++    // Register immediately (even while disconnected). Plasma System Monitor resolves
++    // overview sensors once at page load; waiting for link-up leaves network/(?!all).*
++    // sensors permanently missing when Wi-Fi authenticates later (common on Asahi/iwd).
+     m_devices.insert(uni, nmDevice);
+-
+-    if (nmDevice->isConnected()) {
+-        Q_EMIT deviceAdded(nmDevice);
+-    }
++    Q_EMIT deviceAdded(nmDevice);
+ }
+ 
+ void NetworkManagerBackend::onDeviceRemoved(const QString& uni)
+@@ -305,18 +323,10 @@
+ 
+     auto device = m_devices.take(uni);
+ 
+-    // A disconnect may still be pending, meaning the device has lost its active
+-    // connection (so isConnected() is already false) but has not been removed
+-    // from the SensorContainer yet, as that only happens on the next update()
+-    // cycle. Process it now so the sensor object is unregistered before we
+-    // delete it. Otherwise SensorObject's destructor, which does not remove
+-    // itself from its container, would leave a dangling pointer behind and the
+-    // next AggregateSensor::updateSensors() would crash in SensorObject::id().
++    // Device is gone from NetworkManager entirely — always unregister sensors.
++    // Soft disconnects no longer remove the object (see onDeviceAdded).
+     device->processPendingDisconnect();
+-
+-    if (device->isConnected()) {
+-        Q_EMIT deviceRemoved(device);
+-    }
++    Q_EMIT deviceRemoved(device);
+ 
+     delete device;
+ }

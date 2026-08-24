@@ -158,6 +158,7 @@
           ksystemstats = kdePrev.ksystemstats.overrideAttrs (old: {
             patches = (old.patches or [ ]) ++ [
               ./patches/ksystemstats-asahi-gpu.patch
+              ./patches/ksystemstats-network-early-register.patch
             ];
           });
         });
