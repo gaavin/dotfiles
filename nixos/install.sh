@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SECRETS=""
 INSTALL_PASSWORDS_RUN=/run/nixos-install-passwords
+INSTALLER_NIX_STORE=""
 HOST=""
 STEP_N=0
 STEP_TOTAL=0
@@ -88,7 +89,9 @@ on_interrupt() {
 }
 
 nix_flake() {
-  command nix "${NIX_EXTRA[@]}" "$@"
+  local -a args=("${NIX_EXTRA[@]}")
+  [[ -n ${INSTALLER_NIX_STORE:-} ]] && args+=(--store "$INSTALLER_NIX_STORE")
+  command nix "${args[@]}" "$@"
 }
 
 UI_WIDTH=64
@@ -1070,7 +1073,7 @@ copy_repo() {
     ui_spin "Cloning configuration..." git clone "$REPO_URL" /mnt/home/max/dotfiles
   else
     ui_spin "Cloning configuration..." \
-      nix "${NIX_EXTRA[@]}" shell nixpkgs#git --command git clone "$REPO_URL" /mnt/home/max/dotfiles
+      nix_flake shell nixpkgs#git --command git clone "$REPO_URL" /mnt/home/max/dotfiles
   fi
 }
 
@@ -1100,71 +1103,100 @@ air_lvm_format_mount() {
   swapon /dev/mapper/air-swap
 }
 
-# Live ISO /nix is a RAM tmpfs (~half of 8GB on air). Plasma + linux-asahi needs
-# tens of GiB for fetches, build dirs, and the store. Move the writable store
-# and TMPDIR onto the target root as soon as it is mounted.
+# Live ISO /nix/store is a busy overlay (this script + gum run from it). Never
+# umount it. Mount a second disk-backed overlay and point nix-daemon at it.
+installer_stop_nix_daemon() {
+  systemctl stop nix-daemon.service nix-daemon.socket 2>/dev/null || true
+  pkill -TERM nix-daemon 2>/dev/null || true
+  sleep 1
+}
+
+installer_start_nix_daemon() {
+  local conf_dir=$1 state_dir=$2
+  export NIX_CONF_DIR=$conf_dir
+  export NIX_STATE_DIR=$state_dir
+  NIX_CONF_DIR=$conf_dir NIX_STATE_DIR=$state_dir nix-daemon &
+}
+
+installer_wait_nix_daemon_ready() {
+  local i
+  for i in {1..50}; do
+    nix "${NIX_EXTRA[@]}" --store "$INSTALLER_NIX_STORE" store info >/dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  die "nix-daemon did not become ready for installer store"
+}
+
 use_target_backed_nix() {
   local scratch=/mnt/.installer-nix
+  local merged=$scratch/merged
+  local upper=$scratch/store
+  local work=$scratch/work
+  local conf=$scratch/nix-conf
+  local state=$scratch/var/nix
   local lower=/nix/.ro-store
   local old_upper=/nix/.rw-store/store
+
+  if [[ -n ${INSTALLER_NIX_STORE:-} ]] && mountpoint -q "$INSTALLER_NIX_STORE"; then
+    export TMPDIR=/mnt/var/tmp
+    export TMP=/mnt/var/tmp
+    export TEMP=/mnt/var/tmp
+    export NIX_BUILD_TOP=/mnt/var/tmp
+    return 0
+  fi
 
   mountpoint -q /mnt || die "/mnt not mounted (need target root before nix work)"
   [[ -d $lower ]] || die "live ISO missing $lower"
 
-  mkdir -p "$scratch"/{store,work,var} /mnt/var/tmp /mnt/tmp
+  mkdir -p "$upper" "$work" "$merged" "$conf" "$state" /mnt/var/tmp /mnt/tmp
   chmod 1777 /mnt/var/tmp /mnt/tmp
 
   export TMPDIR=/mnt/var/tmp
   export TMP=/mnt/var/tmp
   export TEMP=/mnt/var/tmp
-  export NIX_REMOTE_SYSTEMS="${NIX_REMOTE_SYSTEMS:-}"
-  # Keep builder temp on disk for kernel/Plasma compiles.
   export NIX_BUILD_TOP=/mnt/var/tmp
 
   if [[ -d $old_upper ]] && [[ -n $(ls -A "$old_upper" 2>/dev/null || true) ]]; then
-    ui_spin "Migrating live nix store onto target disk..." \
-      cp -a "$old_upper"/. "$scratch/store/"
+    ui_spin "Copying nix store cache to target disk..." \
+      cp -a "$old_upper"/. "$upper/"
   fi
-  if [[ -d /nix/var ]] && [[ -n $(ls -A /nix/var 2>/dev/null || true) ]]; then
-    cp -a /nix/var/. "$scratch/var/" 2>/dev/null || true
-  fi
-  mkdir -p "$scratch/var/nix"
 
-  if mountpoint -q /nix/store; then
-    umount /nix/store || die "could not unmount /nix/store for remount"
-  fi
   mount -t overlay overlay \
-    -o "lowerdir=${lower},upperdir=${scratch}/store,workdir=${scratch}/work" \
-    /nix/store || die "could not mount disk-backed /nix/store"
+    -o "lowerdir=${lower},upperdir=${upper},workdir=${work}" \
+    "$merged" || die "could not mount disk-backed nix store at $merged"
 
-  if mountpoint -q /nix/var 2>/dev/null; then
-    umount /nix/var 2>/dev/null || true
-  fi
-  mount --bind "$scratch/var" /nix/var || die "could not bind /nix/var to target disk"
+  cat >"$conf/nix.conf" <<EOF
+experimental-features = nix-command flakes
+store = $merged
+EOF
+
+  INSTALLER_NIX_STORE=$merged
+  export INSTALLER_NIX_STORE
+  export NIX_CONF_DIR=$conf
+  export NIX_STATE_DIR=$state
+
+  installer_stop_nix_daemon
+  installer_start_nix_daemon "$conf" "$state"
+  ui_spin "Waiting for nix-daemon on target disk..." installer_wait_nix_daemon_ready
 
   local avail_h
   avail_h="$(fmt_size "$(df -B1 --output=avail /mnt | tail -1 | tr -d ' ')")"
-  ui_ok "nix store + TMPDIR on target disk (${avail_h} free)"
+  ui_ok "nix store on target disk (${avail_h} free)"
 }
 
 restore_live_nix_store() {
   local scratch=/mnt/.installer-nix
+  local merged=$scratch/merged
 
-  if mountpoint -q /nix/var 2>/dev/null; then
-    local src
-    src="$(findmnt -n -o SOURCE /nix/var 2>/dev/null || true)"
-    if [[ $src == *installer-nix* || -d $scratch/var ]]; then
-      umount /nix/var 2>/dev/null || true
-    fi
-  fi
+  [[ -n ${INSTALLER_NIX_STORE:-} || -d $scratch ]] || return 0
 
-  if mountpoint -q /nix/store 2>/dev/null && [[ -d /nix/.ro-store && -d /nix/.rw-store ]]; then
-    umount /nix/store 2>/dev/null || true
-    mkdir -p /nix/.rw-store/store /nix/.rw-store/work
-    mount -t overlay overlay \
-      -o "lowerdir=/nix/.ro-store,upperdir=/nix/.rw-store/store,workdir=/nix/.rw-store/work" \
-      /nix/store 2>/dev/null || true
+  installer_stop_nix_daemon
+  if mountpoint -q "$merged" 2>/dev/null; then
+    umount "$merged" 2>/dev/null || umount -l "$merged" 2>/dev/null || true
   fi
+  INSTALLER_NIX_STORE=""
+  unset NIX_CONF_DIR NIX_STATE_DIR
+  systemctl start nix-daemon.service 2>/dev/null || true
 }
 
 cleanup_installer_nix_scratch() {
@@ -1209,7 +1241,7 @@ disko_run() {
     die "refusing Disko destroy on air"
   fi
   ui_spin "Formatting and mounting..." \
-    nix "${NIX_EXTRA[@]}" run github:nix-community/disko/latest -- \
+    nix_flake run github:nix-community/disko/latest -- \
     --mode "$1" \
     "${@:2}" \
     --flake "path:$SCRIPT_DIR#$HOST"
@@ -1415,7 +1447,11 @@ reset_zram_swap() {
 }
 
 live_store_avail() {
-  df -B1 --output=avail /nix 2>/dev/null | tail -1 | tr -d ' '
+  if [[ -n ${INSTALLER_NIX_STORE:-} ]] && mountpoint -q "$INSTALLER_NIX_STORE"; then
+    df -B1 --output=avail /mnt | tail -1 | tr -d ' '
+  else
+    df -B1 --output=avail /nix 2>/dev/null | tail -1 | tr -d ' '
+  fi
 }
 
 reclaim_live_store() {
@@ -1468,7 +1504,7 @@ prepare_live_environment() {
   local avail min_free=$((8 * 1024 * 1024 * 1024))
 
   if mountpoint -q /mnt; then
-    if findmnt -n -o OPTIONS /nix/store 2>/dev/null | grep -q 'upperdir=/mnt/.installer-nix'; then
+    if [[ -n ${INSTALLER_NIX_STORE:-} ]] && mountpoint -q "$INSTALLER_NIX_STORE"; then
       export TMPDIR=/mnt/var/tmp
       export TMP=/mnt/var/tmp
       export TEMP=/mnt/var/tmp
@@ -1564,7 +1600,7 @@ hash_password() {
   elif command -v openssl >/dev/null 2>&1; then
     openssl passwd -6 -stdin <"$passfile"
   else
-    nix "${NIX_EXTRA[@]}" shell nixpkgs#mkpasswd --command mkpasswd -m yescrypt -s <"$passfile"
+    nix_flake shell nixpkgs#mkpasswd --command mkpasswd -m yescrypt -s <"$passfile"
   fi
 }
 
