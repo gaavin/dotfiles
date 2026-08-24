@@ -35,6 +35,7 @@ in
         prismlauncher
         qbittorrent
         fastfetch
+        dysk
         (pkgs.writeShellScriptBin "rebuild" ''
           set -euo pipefail
 
