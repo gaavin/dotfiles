@@ -37,6 +37,30 @@ in
         fastfetch
         (pkgs.writeShellScriptBin "rebuild" ''
           set -euo pipefail
+
+          start_sleep_inhibit() {
+            [[ -n ''${SLEEP_INHIBIT_PID:-} ]] && return 0
+            command -v systemd-inhibit >/dev/null 2>&1 || return 0
+            systemd-inhibit \
+              --what=idle:sleep:handle-lid-switch:handle-suspend-key:handle-hibernate-key \
+              --who="rebuild" \
+              --why="NixOS rebuild in progress" \
+              --mode=block \
+              sleep infinity &
+            SLEEP_INHIBIT_PID=$!
+          }
+
+          stop_sleep_inhibit() {
+            if [[ -n ''${SLEEP_INHIBIT_PID:-} ]] && kill -0 "$SLEEP_INHIBIT_PID" 2>/dev/null; then
+              kill "$SLEEP_INHIBIT_PID" 2>/dev/null || true
+              wait "$SLEEP_INHIBIT_PID" 2>/dev/null || true
+            fi
+            SLEEP_INHIBIT_PID=""
+          }
+
+          start_sleep_inhibit
+          trap stop_sleep_inhibit EXIT
+
           flake_dir="$HOME/dotfiles/nixos"
           host="${osConfig.networking.hostName}"
           if [ "$host" = air ]; then
@@ -44,7 +68,7 @@ in
             sudo chown -R "$(id -u):$(id -g)" "$flake_dir/hosts/air/firmware"
           fi
           nix flake update --flake "$flake_dir"
-          exec sudo nixos-rebuild switch --flake "path:$flake_dir#$host"
+          sudo nixos-rebuild switch --flake "path:$flake_dir#$host"
         '')
       ]
       ++ lib.optionals isX86 [
