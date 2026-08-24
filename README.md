@@ -11,7 +11,9 @@
 
 ## Install
 
-Boot a NixOS installer, clone this repo, run the script.
+Create a fork of my repository in your own GitHub account, and then ask Grok to customize it to your system and software preferences.
+
+Boot a NixOS installer, clone your repo (mine is used in the examples), run the script.
 
 <p align="center">
   <img src="assets/nixos-installer.gif" alt="NixOS installer TUI on mina" width="400">
