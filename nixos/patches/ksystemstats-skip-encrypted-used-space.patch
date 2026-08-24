@@ -1,0 +1,15 @@
+--- a/plugins/disks/disks.cpp	2026-08-24 15:19:19.053622190 -0230
++++ b/plugins/disks/disks.cpp	2026-08-24 15:19:19.062014960 -0230
+@@ -96,7 +96,11 @@
+     m_writeRate->setUnit(KSysGuard::UnitByteRate);
+     m_writeRate->setVariantType(QVariant::Double);
+ 
+-    if (volume->usage() != Solid::StorageVolume::PartitionTable) {
++    // Encrypted/Raid containers have no mountable filesystem; used/free would stay at 0 B
++    // (e.g. LUKS partlabel "nixos") while the unlocked mapper shows real usage.
++    const auto usage = volume->usage();
++    if (usage != Solid::StorageVolume::PartitionTable && usage != Solid::StorageVolume::Encrypted
++        && usage != Solid::StorageVolume::Raid) {
+         m_used = new KSysGuard::SensorProperty("used", i18nc("@title", "Used Space"), this);
+         m_used->setPrefix(name());
+         m_used->setShortName(i18nc("@title Short for 'Used Space'", "Used"));
