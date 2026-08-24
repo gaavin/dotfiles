@@ -1074,6 +1074,117 @@ copy_repo() {
   fi
 }
 
+# Match hosts/air/default.nix LVM layout without fetching Disko (live tmpfs is tiny).
+air_lvm_format_mount() {
+  local mapper=/dev/mapper/$MAPPER
+
+  [[ -b $mapper ]] || die "LUKS mapper missing: $mapper"
+  command -v pvcreate >/dev/null && command -v vgcreate >/dev/null &&
+    command -v lvcreate >/dev/null && command -v mkfs.xfs >/dev/null ||
+    die "missing lvm/xfs tools"
+
+  wipefs -a "$mapper" >/dev/null 2>&1 || true
+  pvcreate -ff -y "$mapper" >/dev/null
+  vgcreate -y air "$mapper" >/dev/null
+  lvcreate -y -L 8G -n swap air >/dev/null
+  lvcreate -y -l 100%FREE -n root air >/dev/null
+  udevadm settle 2>/dev/null || true
+
+  [[ -b /dev/mapper/air-swap && -b /dev/mapper/air-root ]] ||
+    die "air LVs not found after lvcreate"
+
+  mkswap /dev/mapper/air-swap >/dev/null
+  mkfs.xfs -f /dev/mapper/air-root >/dev/null
+  mkdir -p /mnt
+  mount /dev/mapper/air-root /mnt
+  swapon /dev/mapper/air-swap
+}
+
+# Live ISO /nix is a RAM tmpfs (~half of 8GB on air). Plasma + linux-asahi needs
+# tens of GiB for fetches, build dirs, and the store. Move the writable store
+# and TMPDIR onto the target root as soon as it is mounted.
+use_target_backed_nix() {
+  local scratch=/mnt/.installer-nix
+  local lower=/nix/.ro-store
+  local old_upper=/nix/.rw-store/store
+
+  mountpoint -q /mnt || die "/mnt not mounted (need target root before nix work)"
+  [[ -d $lower ]] || die "live ISO missing $lower"
+
+  mkdir -p "$scratch"/{store,work,var} /mnt/var/tmp /mnt/tmp
+  chmod 1777 /mnt/var/tmp /mnt/tmp
+
+  export TMPDIR=/mnt/var/tmp
+  export TMP=/mnt/var/tmp
+  export TEMP=/mnt/var/tmp
+  export NIX_REMOTE_SYSTEMS="${NIX_REMOTE_SYSTEMS:-}"
+  # Keep builder temp on disk for kernel/Plasma compiles.
+  export NIX_BUILD_TOP=/mnt/var/tmp
+
+  if [[ -d $old_upper ]] && [[ -n $(ls -A "$old_upper" 2>/dev/null || true) ]]; then
+    ui_spin "Migrating live nix store onto target disk..." \
+      cp -a "$old_upper"/. "$scratch/store/"
+  fi
+  if [[ -d /nix/var ]] && [[ -n $(ls -A /nix/var 2>/dev/null || true) ]]; then
+    cp -a /nix/var/. "$scratch/var/" 2>/dev/null || true
+  fi
+  mkdir -p "$scratch/var/nix"
+
+  if mountpoint -q /nix/store; then
+    umount /nix/store || die "could not unmount /nix/store for remount"
+  fi
+  mount -t overlay overlay \
+    -o "lowerdir=${lower},upperdir=${scratch}/store,workdir=${scratch}/work" \
+    /nix/store || die "could not mount disk-backed /nix/store"
+
+  if mountpoint -q /nix/var 2>/dev/null; then
+    umount /nix/var 2>/dev/null || true
+  fi
+  mount --bind "$scratch/var" /nix/var || die "could not bind /nix/var to target disk"
+
+  local avail_h
+  avail_h="$(fmt_size "$(df -B1 --output=avail /mnt | tail -1 | tr -d ' ')")"
+  ui_ok "nix store + TMPDIR on target disk (${avail_h} free)"
+}
+
+restore_live_nix_store() {
+  local scratch=/mnt/.installer-nix
+
+  if mountpoint -q /nix/var 2>/dev/null; then
+    local src
+    src="$(findmnt -n -o SOURCE /nix/var 2>/dev/null || true)"
+    if [[ $src == *installer-nix* || -d $scratch/var ]]; then
+      umount /nix/var 2>/dev/null || true
+    fi
+  fi
+
+  if mountpoint -q /nix/store 2>/dev/null && [[ -d /nix/.ro-store && -d /nix/.rw-store ]]; then
+    umount /nix/store 2>/dev/null || true
+    mkdir -p /nix/.rw-store/store /nix/.rw-store/work
+    mount -t overlay overlay \
+      -o "lowerdir=/nix/.ro-store,upperdir=/nix/.rw-store/store,workdir=/nix/.rw-store/work" \
+      /nix/store 2>/dev/null || true
+  fi
+}
+
+cleanup_installer_nix_scratch() {
+  restore_live_nix_store
+  if [[ -d /mnt/.installer-nix ]]; then
+    ui_spin "Removing installer scratch store on target..." rm -rf /mnt/.installer-nix
+  fi
+  rm -rf /mnt/var/tmp/nix-build-* /mnt/tmp/nix-build-* 2>/dev/null || true
+}
+
+expand_live_tmpfs_store() {
+  enable_zram_swap || true
+  if mountpoint -q /nix/.rw-store 2>/dev/null; then
+    # Stretch tmpfs with zram backing so early gum/disko fetches can finish.
+    mount -o remount,size=90% /nix/.rw-store 2>/dev/null ||
+      mount -o remount,size=6G /nix/.rw-store 2>/dev/null || true
+  fi
+  reclaim_live_store || true
+}
+
 luks_format_open() {
   local part=$1
   local pbsz
@@ -1346,6 +1457,7 @@ deactivate_all_swap() {
 
 abort_cleanup() {
   reclaim_live_store
+  restore_live_nix_store
   deactivate_all_swap
   if mountpoint -q /mnt/efi 2>/dev/null; then
     umount /mnt/efi 2>/dev/null || true
@@ -1353,14 +1465,31 @@ abort_cleanup() {
 }
 
 prepare_live_environment() {
-  local avail min_free=$((2 * 1024 * 1024 * 1024))
+  local avail min_free=$((8 * 1024 * 1024 * 1024))
+
+  if mountpoint -q /mnt; then
+    if findmnt -n -o OPTIONS /nix/store 2>/dev/null | grep -q 'upperdir=/mnt/.installer-nix'; then
+      export TMPDIR=/mnt/var/tmp
+      export TMP=/mnt/var/tmp
+      export TEMP=/mnt/var/tmp
+      export NIX_BUILD_TOP=/mnt/var/tmp
+      mkdir -p /mnt/var/tmp
+      chmod 1777 /mnt/var/tmp
+    else
+      use_target_backed_nix
+    fi
+  else
+    expand_live_tmpfs_store
+  fi
 
   ui_spin "Reclaiming space on live system..." reclaim_live_store
 
   avail=$(live_store_avail)
   avail=${avail:-0}
   if ((avail < min_free)); then
-    ui_warn "only $(fmt_size "$avail") free on /nix - reboot the live ISO if install fails"
+    ui_warn "only $(fmt_size "$avail") free on /nix - large builds may fail"
+  else
+    ui_ok "$(fmt_size "$avail") free for nix fetches/builds"
   fi
 }
 
@@ -1481,19 +1610,30 @@ finalize_users() {
 }
 
 install_system() {
-  local flake=/mnt/home/max/dotfiles/nixos system
+  local flake=/mnt/home/max/dotfiles/nixos
+  local -a install_args=(
+    --impure
+    --no-root-password
+    --no-channel-copy
+    --root /mnt
+    --flake "path:$flake#$HOST"
+  )
+
   systemctl restart systemd-timesyncd || true
   ui_step "Install NixOS"
   if [[ $HOST == air ]]; then
-    ui_ok "linux-asahi will compile from source"
+    ui_ok "linux-asahi + Plasma build on target disk (slow, large)"
+    # 8GB Air: one heavy derivation at a time keeps peak TMPDIR down.
+    install_args+=(--max-jobs 1)
+    export NIX_BUILD_CORES="${NIX_BUILD_CORES:-2}"
   fi
   prepare_live_environment
   ensure_swap
   write_install_passwords
   # --impure: configuration.nix gates hashedPasswordFile on /run pathExists
-  ui_build_box nixos-install --impure --no-root-password --no-channel-copy --root /mnt \
-    --flake "path:$flake#$HOST" || die "failed to install system"
+  ui_build_box nixos-install "${install_args[@]}" || die "failed to install system"
   finalize_users
+  cleanup_installer_nix_scratch
 }
 
 install_mina() {
@@ -1507,6 +1647,7 @@ install_mina() {
   disko_run destroy,format,mount --yes-wipe-all-disks
 
   mountpoint -q /mnt || die "/mnt not mounted"
+  use_target_backed_nix
   copy_repo
   install_system
 }
@@ -1573,16 +1714,18 @@ install_air() {
   fi
 
   ui_step "Encrypt disk"
-  # Format LUKS here (4096-byte sectors with fallback). Disko sees an existing
-  # LUKS container and will not reformat — it only builds LVM/xfs inside.
+  # Format LUKS here (4096-byte sectors). Root LVM/xfs is created next without Disko.
   luks_format_open "$part"
   [[ $nixos_dev == "$(readlink -f "$part")" ]] || die "nixos partition moved"
   air_safety_check "$before" "$esp_uuid"
 
   ui_step "Format and mount"
-  disko_run format,mount
+  # Manual LVM/xfs — same layout as disko.devices — so we never fetch Disko
+  # into the tiny live tmpfs before the target disk exists.
+  ui_spin "Formatting LVM and mounting..." air_lvm_format_mount
   mountpoint -q /mnt || die "/mnt not mounted"
   air_safety_check "$before" "$esp_uuid"
+  use_target_backed_nix
 
   # Shared Asahi/macOS ESP — mount only, never mkfs/wipefs.
   if mountpoint -q /mnt/efi 2>/dev/null; then
@@ -1686,11 +1829,17 @@ fi
 
 export NIX_CONFIG="experimental-features = nix-command flakes"
 
+# Stretch the live tmpfs store before the first nix fetch (gum).
+expand_live_tmpfs_store
+
 if ! command -v gum >/dev/null 2>&1; then
   exec nix "${NIX_EXTRA[@]}" shell nixpkgs#gum --command env \
     INSTALL_YES="${INSTALL_YES:-}" \
     TERM="${TERM:-}" \
     COLORTERM="${COLORTERM:-}" \
+    TMPDIR="${TMPDIR:-}" \
+    TMP="${TMP:-}" \
+    TEMP="${TEMP:-}" \
     "$0" "$@"
 fi
 
