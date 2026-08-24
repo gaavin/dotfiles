@@ -5,10 +5,14 @@
 
   networking = {
     hostName = "air";
+    # Live ISO already runs iwd under NetworkManager; keep that stack.
+    wireless.iwd.enable = true;
     networkmanager.wifi.backend = "iwd";
   };
 
   disko.devices = {
+    # Partition created by install.sh in free space only. destroy=false so Disko
+    # never touches the GPT / macOS / ESP slices on the parent NVMe.
     disk.nixos = {
       device = "/dev/disk/by-partlabel/nixos";
       type = "disk";
@@ -16,8 +20,10 @@
       content = {
         type = "luks";
         name = "cryptroot";
+        # APPLE SSD is 4096/4096 native; 512-byte LUKS sectors are wrong here.
         extraFormatArgs = [
           "--type=luks2"
+          "--sector-size=4096"
         ];
         settings = {
           allowDiscards = true;
@@ -60,7 +66,10 @@
     extraModprobeConfig = ''
       options hid_apple iso_layout=0
     '';
-    kernelParams = [ "appledrm.show_notch=1" ];
-    loader.efi.canTouchEfiVariables = false;
+    # Shared Asahi ESP is ~500M (m1n1 + vendorfw). Keep generations small.
+    loader = {
+      efi.canTouchEfiVariables = false;
+      systemd-boot.configurationLimit = 3;
+    };
   };
 }

@@ -21,7 +21,8 @@ Boot a NixOS installer, clone this repo, run the script.
 </p>
 
 > [!CAUTION]
-> **Destructive** This script will wipe any (except for mac related partitions) existing partitions on the preconfigured disks (/dev/nvme0n1).
+> **Destructive on mina** The script wipes `/dev/nvme0n1` on mina.
+> **On air** it only creates a LUKS partition in the largest free GPT gap. iBoot, macOS, the shared ESP, and Recovery are left alone; the Asahi ESP is mounted at `/efi`, never formatted.
 
 > **😪😪😪** This configuration takes a long time to build for the first time. The script will prevent your computer from going to sleep.
 

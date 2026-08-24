@@ -111,6 +111,8 @@ SWAP_DISK_KIND=swap
 SWAP_DISK_DETAIL=partition
 PLANNED_ESP_BYTES=$((2 * 1024 * 1024 * 1024))
 PLANNED_SWAP_BYTES=$((8 * 1024 * 1024 * 1024))
+# Asahi leaves alignment gaps; only the largest free region is used for NixOS.
+AIR_MIN_FREE_BYTES=$((20 * 1024 * 1024 * 1024))
 C_ACCENT=39
 C_SUCCESS=42
 C_WARN=214
@@ -650,20 +652,64 @@ disk_size_bytes() {
   echo "$size"
 }
 
-disk_air_free_bytes() {
-  local free=0
+# parted -m prints sizes with a unit suffix (34s, 17408B). Strip it.
+air_parted_int() {
+  local v=${1%%[A-Za-z]*}
+  [[ $v =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$v"
+}
 
-  if command -v parted >/dev/null 2>&1; then
-    while IFS= read -r line; do
-      [[ $line == *:free\; ]] || continue
-      IFS=: read -r _ start end _ _ _ <<<"$line"
-      [[ $start =~ ^[0-9]+$ && $end =~ ^[0-9]+$ ]] || continue
-      free=$((free + end - start))
-    done < <(parted -ms "$DISK" unit B print free 2>/dev/null || true)
+air_sector_bytes() {
+  local short sys
+  short="$(disk_short)"
+  sys="/sys/block/${short}/queue/logical_block_size"
+  if [[ -r $sys ]]; then
+    cat "$sys"
+  else
+    echo 512
   fi
+}
 
-  if ((free > 0)); then
-    echo "$free"
+# Each line: start_sector end_sector size_sectors (inclusive end, from parted).
+air_free_regions_sectors() {
+  local line start end size start_s end_s size_s
+  command -v parted >/dev/null 2>&1 || return 0
+  while IFS= read -r line; do
+    [[ $line == *:free\; ]] || continue
+    IFS=: read -r _ start end size _ <<<"$line"
+    start_s="$(air_parted_int "$start")" || continue
+    end_s="$(air_parted_int "$end")" || continue
+    size_s="$(air_parted_int "$size")" || continue
+    printf '%s %s %s\n' "$start_s" "$end_s" "$size_s"
+  done < <(parted -ms "$DISK" unit s print free 2>/dev/null || true)
+}
+
+# Largest free GPT gap: "start_sector end_sector size_bytes"
+air_largest_free_region() {
+  local start_s end_s size_s sector_b size_b
+  local best_start="" best_end="" best_bytes=0
+
+  sector_b="$(air_sector_bytes)"
+  [[ $sector_b =~ ^[0-9]+$ && $sector_b -gt 0 ]] || sector_b=512
+
+  while read -r start_s end_s size_s; do
+    [[ $start_s =~ ^[0-9]+$ && $end_s =~ ^[0-9]+$ && $size_s =~ ^[0-9]+$ ]] || continue
+    size_b=$((size_s * sector_b))
+    if ((size_b > best_bytes)); then
+      best_bytes=$size_b
+      best_start=$start_s
+      best_end=$end_s
+    fi
+  done < <(air_free_regions_sectors)
+
+  ((best_bytes > 0)) || return 1
+  printf '%s %s %s\n' "$best_start" "$best_end" "$best_bytes"
+}
+
+disk_air_free_bytes() {
+  local start_s end_s size_bytes
+  if read -r start_s end_s size_bytes < <(air_largest_free_region); then
+    echo "$size_bytes"
     return
   fi
 
@@ -749,33 +795,19 @@ part_label_display() {
   fi
 }
 
+# Only the Asahi-chosen ESP is mounted at /efi. Everything else on the disk
+# (iBoot, APFS/macOS, Recovery, stubs) is left untouched.
 part_role_air() {
-  local label=$1 fstype=$2 parttypename=$3
-  local l="${label,,}"
-  local t="${parttypename,,}"
-
-  if [[ $fstype == vfat || $t == *efi* ]]; then
+  local partuuid=$1 esp_uuid=$2
+  if [[ -n $esp_uuid && -n $partuuid && $partuuid == "$esp_uuid" ]]; then
     echo esp
-    return
+  else
+    echo preserved
   fi
-
-  case "$l" in
-    *iboot*|*macos*|*recovery*|*asahi*|*stub*) echo preserved; return ;;
-    *efi*|*esp*) echo esp; return ;;
-  esac
-
-  case "$t" in
-    *iboot*|*apple*boot*) echo preserved; return ;;
-    *apfs*|*macos*|*hfs*) echo preserved; return ;;
-    *recovery*) echo preserved; return ;;
-    *asahi*) echo preserved; return ;;
-  esac
-
-  echo preserved
 }
 
 disk_lsblk() {
-  lsblk -P -o NAME,SIZE,FSTYPE,LABEL,PARTLABEL,MOUNTPOINT,TYPE,PARTTYPENAME,PKNAME "$DISK" 2>/dev/null || true
+  lsblk -P -o NAME,SIZE,FSTYPE,LABEL,PARTLABEL,MOUNTPOINT,TYPE,PARTTYPENAME,PKNAME,PARTUUID "$DISK" 2>/dev/null || true
 }
 
 disk_entry_desc() {
@@ -826,7 +858,7 @@ disk_build_parent_map() {
 
   while IFS= read -r line; do
     [[ -z $line ]] && continue
-    NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
+    NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME= PARTUUID=
     eval "$line"
     [[ -n ${NAME:-} ]] || continue
     out[$NAME]=${PKNAME:-}
@@ -906,7 +938,7 @@ mina_disk_diff() {
 
     while IFS= read -r line; do
       [[ -z $line ]] && continue
-      NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
+      NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME= PARTUUID=
       eval "$line"
       [[ ${TYPE:-} == disk ]] && continue
       case ${TYPE:-} in
@@ -945,7 +977,8 @@ ui_disk_diff_box() {
 }
 
 air_disk_diff() {
-  local line role indent spec
+  local esp_uuid=${1:-}
+  local line indent spec role
   local -A pkmap=()
   local -A devtypes=()
 
@@ -956,15 +989,15 @@ air_disk_diff() {
 
     while IFS= read -r line; do
       [[ -z $line ]] && continue
-      NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME=
+      NAME= SIZE= FSTYPE= LABEL= PARTLABEL= MOUNTPOINT= TYPE= PARTTYPENAME= PKNAME= PARTUUID=
       eval "$line"
       [[ ${TYPE:-} == disk ]] && continue
       [[ ${TYPE:-} == part ]] || continue
       indent="$(disk_display_indent "$(disk_tree_depth "$NAME" pkmap)")"
       spec="$(disk_entry_desc "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$PARTLABEL" "$MOUNTPOINT" "$TYPE")"
-      role="$(part_role_air "$PARTLABEL" "$FSTYPE" "$PARTTYPENAME")"
+      role="$(part_role_air "${PARTUUID:-}" "$esp_uuid")"
       case $role in
-        esp) ui_diff_mod "${indent}${spec}  → /efi, not formatted" ;;
+        esp) ui_diff_mod "${indent}${spec}  → /efi (mount only, never format)" ;;
         preserved) ui_diff_ctx "${indent}${spec}" ;;
       esac
     done < <(disk_lsblk)
@@ -1029,7 +1062,16 @@ copy_repo() {
 
 luks_format_open() {
   local part=$1
-  if ! cryptsetup luksFormat --type luks2 --sector-size 4096 --batch-mode --key-file "$SECRETS/luks" "$part"; then
+  local pbsz
+
+  # Apple NVMe is 4096/4096; never fall back to 512-byte LUKS sectors on it.
+  pbsz="$(blockdev --getpbsz "$part" 2>/dev/null || echo 0)"
+  if [[ $pbsz == 4096 ]]; then
+    cryptsetup luksFormat --type luks2 --sector-size 4096 --batch-mode \
+      --key-file "$SECRETS/luks" "$part" ||
+      die "LUKS format with 4096-byte sectors failed (disk physical sector size is 4096)"
+  elif ! cryptsetup luksFormat --type luks2 --sector-size 4096 --batch-mode \
+    --key-file "$SECRETS/luks" "$part"; then
     ui_warn "LUKS 4096-byte sectors not accepted, retrying with defaults"
     cryptsetup luksFormat --type luks2 --batch-mode --key-file "$SECRETS/luks" "$part"
   fi
@@ -1066,8 +1108,21 @@ air_assert_preserved() {
 air_assert_esp() {
   local esp_uuid=$1
   local esp=/dev/disk/by-partuuid/$esp_uuid
+  local parent fstype
+
+  [[ -n $esp_uuid ]] || die "Asahi ESP partuuid is empty"
   [[ -b $esp ]] || die "ESP not found: $esp_uuid"
-  [[ $(lsblk -n -o FSTYPE "$esp") == vfat ]] || die "ESP is not vfat: $esp_uuid"
+  fstype="$(lsblk -n -o FSTYPE "$esp")"
+  [[ $fstype == vfat ]] || die "ESP is not vfat (got ${fstype:-unknown}): $esp_uuid"
+  parent="$(lsblk -n -o PKNAME "$esp")"
+  [[ $parent == "$(disk_short)" ]] || die "ESP $esp_uuid is on $parent, not $(disk_short)"
+}
+
+# Re-check that macOS/Asahi slices and the shared ESP are still intact.
+air_safety_check() {
+  local before=$1 esp_uuid=$2
+  air_assert_preserved "$before" "$(air_part_state)"
+  air_assert_esp "$esp_uuid"
 }
 
 swap_active_bytes() {
@@ -1444,9 +1499,12 @@ install_mina() {
 
 install_air() {
   local esp_uuid esp part fw candidate before after nixos_dev esp_dev
+  local free_start free_end free_bytes part_bytes
+
   command -v nixos-install >/dev/null || die "nixos-install not found"
   command -v cryptsetup >/dev/null && command -v sgdisk >/dev/null ||
     die "missing cryptsetup/sgdisk"
+  command -v parted >/dev/null || die "missing parted (needed to find free space)"
   [[ -b $DISK ]] || die "$DISK not found"
   [[ ! -e /dev/disk/by-partlabel/nixos ]] || die "/dev/disk/by-partlabel/nixos already exists; aborting"
 
@@ -1455,13 +1513,27 @@ install_air() {
   air_assert_esp "$esp_uuid"
   esp_dev="$(readlink -f "$esp")"
 
+  # j313 / Apple NVMe: logical and physical are 4096; LUKS must match.
+  [[ $(cat /sys/block/"$(disk_short)"/queue/physical_block_size) == 4096 ]] ||
+    die "expected 4096-byte physical sectors on $DISK"
+  [[ $(cat /sys/block/"$(disk_short)"/queue/logical_block_size) == 4096 ]] ||
+    die "expected 4096-byte logical sectors on $DISK"
+
+  if ! read -r free_start free_end free_bytes < <(air_largest_free_region); then
+    die "no free space on $DISK — resize macOS in the Asahi installer first"
+  fi
+  if ((free_bytes < AIR_MIN_FREE_BYTES)); then
+    die "largest free region is $(fmt_size "$free_bytes"); need at least $(fmt_size "$AIR_MIN_FREE_BYTES")"
+  fi
+
   ui_step "Create LUKS partition"
-  ui_disk_diff_box "$(air_disk_diff)"
-  confirm "Create a LUKS partition in the free space on $DISK. iBoot, macOS, the ESP, and Recovery are left alone."
+  ui_disk_diff_box "$(air_disk_diff "$esp_uuid")"
+  confirm "Create a LUKS partition in the largest free region on $DISK ($(fmt_size "$free_bytes")). iBoot, macOS, the ESP, and Recovery are left alone."
 
   before="$(air_part_state)"
-  # 0:0:0 = first free number, first free start, end of that gap — existing slices stay
-  ui_spin "Creating partition..." sgdisk "$DISK" -n 0:0:0 -t 0:8309 -c 0:nixos
+  # Only claim the largest free gap (sectors from parted). Never touch existing slices.
+  ui_spin "Creating partition..." \
+    sgdisk "$DISK" -n "0:${free_start}:${free_end}" -t 0:8309 -c 0:nixos
   partprobe "$DISK"
   udevadm settle
 
@@ -1474,29 +1546,39 @@ install_air() {
   [[ -b $part ]] || die "new partition not found"
   nixos_dev="$(readlink -f "$part")"
   [[ $nixos_dev != "$esp_dev" ]] || die "refusing to format the ESP"
+  part_bytes="$(lsblk -n -b -d -o SIZE "$part")"
+  [[ $part_bytes =~ ^[0-9]+$ ]] || die "could not read new partition size"
+  if ((part_bytes < AIR_MIN_FREE_BYTES)); then
+    die "new partition is only $(fmt_size "$part_bytes") — refused (likely hit an alignment gap)"
+  fi
 
   after="$(air_part_state)"
-  air_assert_preserved "$before" "$after"
-  air_assert_esp "$esp_uuid"
+  air_safety_check "$before" "$esp_uuid"
   if [[ $(grep -c . <<<"$after") -ne $(($(grep -c . <<<"$before") + 1)) ]]; then
     die "expected exactly one new partition"
   fi
 
   ui_step "Encrypt disk"
+  # Format LUKS here (4096-byte sectors with fallback). Disko sees an existing
+  # LUKS container and will not reformat — it only builds LVM/xfs inside.
   luks_format_open "$part"
   [[ $nixos_dev == "$(readlink -f "$part")" ]] || die "nixos partition moved"
-  air_assert_preserved "$before" "$(air_part_state)"
-  air_assert_esp "$esp_uuid"
+  air_safety_check "$before" "$esp_uuid"
 
   ui_step "Format and mount"
   disko_run format,mount
   mountpoint -q /mnt || die "/mnt not mounted"
-  air_assert_preserved "$before" "$(air_part_state)"
-  air_assert_esp "$esp_uuid"
+  air_safety_check "$before" "$esp_uuid"
+
+  # Shared Asahi/macOS ESP — mount only, never mkfs/wipefs.
+  if mountpoint -q /mnt/efi 2>/dev/null; then
+    umount /mnt/efi || die "could not unmount stale /mnt/efi"
+  fi
   mkdir -p /mnt/efi
-  ui_spin "Mounting original ESP..." mount "$esp" /mnt/efi
+  ui_spin "Mounting Asahi ESP..." mount -o umask=0077 "$esp" /mnt/efi
   mountpoint -q /mnt/efi || die "/mnt/efi not mounted"
-  [[ $(readlink -f "$(findmnt -n -o SOURCE /mnt/efi)") == "$esp_dev" ]] || die "/mnt/efi is not the original ESP"
+  [[ $(readlink -f "$(findmnt -n -o SOURCE /mnt/efi)") == "$esp_dev" ]] ||
+    die "/mnt/efi is not the Asahi ESP ($esp_uuid)"
   for _ in {1..25}; do
     [[ -f /mnt/efi/vendorfw/firmware.cpio ]] && break
     sleep 0.2
@@ -1529,10 +1611,12 @@ install_air() {
 
   nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
 
+  # Asahi shared ESP (macOS + m1n1). Mount only — do not format.
   fileSystems."/efi" = {
     device = "/dev/disk/by-partuuid/${esp_uuid}";
     fsType = "vfat";
     options = [ "umask=0077" ];
+    neededForBoot = true;
   };
 }
 EOF
