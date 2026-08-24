@@ -45,7 +45,7 @@ curl https://alx.sh | sh
 3. Install into free space: `f` → **UEFI environment only** → name it `NixOS`. Password again. Wait until the default boot volume is set. Read the last screen, press enter — the Mac shuts down.
 4. Hold power until the boot picker appears. Choose **NixOS**.
 5. Admin password. Wait for the local policy update.
-6. Set a custom boot object and **permissive security**. Same admin username and password.
+6. Set a custom boot object and permissive security. Same admin username and password.
 7. Reboot. You should get the Asahi and U-Boot logos. Hold power to shut down.
 
 Write the latest `*-apple-silicon-*.iso` from [nixos-apple-silicon releases](https://github.com/nix-community/nixos-apple-silicon/releases) to the **usb disk**, unfortunately other solutions such as Ventoy are not working.
