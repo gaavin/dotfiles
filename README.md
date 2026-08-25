@@ -11,7 +11,7 @@
 
 ## Install
 
-This repository is home to my NixOS setup, and aims to provide a flawless user experience.
+This repository is home to my NixOS setup, and aims to provide a flawless out of the box user experience.
 
 Create a fork of my repository in your own GitHub account, and then ask Grok to customize it to your host, disk, software, and user requirements. Be sure to instruct Grok to update everything in your new fork to reflect your changes.
 
