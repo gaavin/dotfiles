@@ -13,6 +13,8 @@ let
 in
 
 {
+  imports = [ ./osu-stable.nix ];
+
   home = {
     username = "max";
     homeDirectory = "/home/max";
@@ -117,6 +119,7 @@ in
     plasma = {
       enable = true;
       overrideConfig = true;
+      dataFile."dolphin/view_properties/global/.directory".Settings.HiddenFilesShown = true;
       workspace = {
         lookAndFeel = "org.kde.breezedark.desktop";
         theme = "breeze-dark";
@@ -347,12 +350,6 @@ in
     grok-build.enable = true;
   }
   // lib.optionalAttrs isX86 {
-    osu-stable = {
-      enable = true;
-      environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
-      offsetCalculator.enable = true;
-    };
-
     battle-net = {
       enable = true;
       protonVersion = pkgs.proton-cachyos_x86_64_v3;
