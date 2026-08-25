@@ -6,24 +6,26 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
     environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
     offsetCalculator.enable = true;
 
-    # Username / Password / SavePassword stay in the mutable osu!.$USERNAME.cfg only.
+    # Password / SavePassword stay in the mutable osu!.<user>.cfg only.
     # Only overrides vs factory defaults — re-export with: osu-wine --export-settings
     settings = {
-      AudioCompatibility = true;
-      ComboBurst = true;
-      CursorSize = 1.1;
-      DimLevel = 100;
-      EditorHitAnimations = true;
-      FrameSync = "Unlimited";
-      IHateHavingFun = true;
-      IgnoreBeatmapSkins = true;
-      Offset = -40;
-      PopupDuringGameplay = false;
-      Skin = "Shigetora's Skin";
-      VolumeUniversal = 50;
-      keyOsuLeft = "E";
-      keyOsuRight = "R";
-      keyOsuSmoke = "T";
+      max = {
+        AudioCompatibility = true;
+        ComboBurst = true;
+        CursorSize = 1.1;
+        DimLevel = 100;
+        EditorHitAnimations = true;
+        FrameSync = "Unlimited";
+        IHateHavingFun = true;
+        IgnoreBeatmapSkins = true;
+        Offset = -40;
+        PopupDuringGameplay = false;
+        Skin = "Shigetora's Skin";
+        VolumeUniversal = 50;
+        keyOsuLeft = "E";
+        keyOsuRight = "R";
+        keyOsuSmoke = "T";
+      };
     };
 
     beatmaps = [

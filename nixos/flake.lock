@@ -242,11 +242,11 @@
         "offset-calc-osu-stable": "offset-calc-osu-stable"
       },
       "locked": {
-        "lastModified": 1787676289,
-        "narHash": "sha256-WGtF03cBDBGIV6lZNwMTaY+K3AakWwqonhPJCBbgEOQ=",
+        "lastModified": 1787676664,
+        "narHash": "sha256-lp8DWaMdCfqS8IakJhexZFBj6fPivKmJFodP9lGmq10=",
         "owner": "gaavin",
         "repo": "nix-osu-stable",
-        "rev": "7ef340d894d50fe4ed758f42412dc083ff4b9434",
+        "rev": "93cd6039678a7c9203dcfdd5c9f8a3f0d1d78013",
         "type": "github"
       },
       "original": {
