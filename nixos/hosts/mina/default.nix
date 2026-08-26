@@ -85,7 +85,10 @@
       "preempt=full"
     ];
     kernelPackages = pkgs.linuxPackages_cachyos-lto;
-    kernelModules = [ "uinput" ];
+    kernelModules = [
+      "uinput"
+      "ntsync"
+    ];
     loader.efi.canTouchEfiVariables = true;
   };
 
@@ -116,6 +119,7 @@
   };
 
   services.udev.extraRules = ''
+    KERNEL=="ntsync", MODE="0666"
     # ADIOS I/O scheduler for NVMe and SSDs; BFQ for rotational HDDs
     ACTION=="add|change", KERNEL=="nvme[0-9]*|sd[a-z]*|mmcblk[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="adios"
     ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
