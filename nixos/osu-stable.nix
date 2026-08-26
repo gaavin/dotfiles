@@ -6,12 +6,11 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
     environment.WINE_ENABLE_ABS_TABLET_HACK = "2";
     offsetCalculator.enable = true;
 
-    # Username / Password / SavePassword stay in the mutable osu!.$USERNAME.cfg only.
-    # Only overrides vs factory defaults — re-export with: osu-wine --export-settings
     settings = {
-      AudioDevice = "Speakers (Fosi Audio SK02 Analog Stereo)";
+      ChatChannels = "#osu #userlog";
+      VolumeEffect = 60;
       AudioCompatibility = 1;
-      ComboBurst = 0;
+      AudioDevice = "Speakers (Fosi Audio SK02 Analog Stereo)";
       CursorSize = 1.1;
       DimLevel = 100;
       EditorHitAnimations = 1;
