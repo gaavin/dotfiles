@@ -9,16 +9,17 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
     # Username / Password / SavePassword stay in the mutable osu!.$USERNAME.cfg only.
     # Only overrides vs factory defaults — re-export with: osu-wine --export-settings
     settings = {
-      AudioCompatibility = true;
-      ComboBurst = true;
+      AudioDevice = "Speakers (Fosi Audio SK02 Analog Stereo)";
+      AudioCompatibility = 1;
+      ComboBurst = 0;
       CursorSize = 1.1;
       DimLevel = 100;
-      EditorHitAnimations = true;
+      EditorHitAnimations = 1;
       FrameSync = "Unlimited";
-      IHateHavingFun = true;
-      IgnoreBeatmapSkins = true;
+      IHateHavingFun = 1;
+      IgnoreBeatmapSkins = 1;
       Offset = -40;
-      PopupDuringGameplay = false;
+      PopupDuringGameplay = 0;
       Skin = "Shigetora's Skin";
       VolumeUniversal = 50;
       keyOsuLeft = "E";
