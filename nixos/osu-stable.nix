@@ -28,7 +28,19 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
     };
 
     beatmaps = [
+      376552
+      377930
+      636839
+      1898232
+      2142914
+      2198943
+      2258243
       2281545
+      2298941
+      2432962
+      2512831
+      2527269
+      2533966
     ];
 
     skins = [ "https://circle-people.com/wp-content/Skins/Cookiezi/Cookiezi%2004.osk" ];
