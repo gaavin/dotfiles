@@ -10,14 +10,13 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
       ChatChannels = "#osu #userlog";
       VolumeEffect = 60;
       AudioCompatibility = 1;
-      AudioDevice = "Speakers (Fosi Audio SK02 Analog Stereo)";
       CursorSize = 1.1;
       DimLevel = 100;
       EditorHitAnimations = 1;
       FrameSync = "Unlimited";
       IHateHavingFun = 1;
       IgnoreBeatmapSkins = 1;
-      Offset = -40;
+      Offset = -5;
       PopupDuringGameplay = 0;
       Skin = "Shigetora's Skin";
       VolumeUniversal = 50;
