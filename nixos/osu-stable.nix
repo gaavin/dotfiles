@@ -7,8 +7,11 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
     offsetCalculator.enable = true;
 
     settings = {
+      ScoreboardVisible = 0;
+      TreeSortMode2 = "Date";
+      AudioDevice = "Speakers (PipeWire)";
+      AudioCompatibility = 1;
       ChatChannels = "#osu #userlog";
-      VolumeEffect = 60;
       CursorSize = 1.1;
       DimLevel = 100;
       EditorHitAnimations = 1;
@@ -18,6 +21,7 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
       Offset = -5;
       PopupDuringGameplay = 0;
       Skin = "Shigetora's Skin";
+      VolumeEffect = 60;
       VolumeUniversal = 50;
       keyOsuLeft = "E";
       keyOsuRight = "R";
