@@ -115,7 +115,7 @@
                 sharedModules = [
                   plasma-manager.homeModules.plasma-manager
                   nix-grok-build.homeModules.grok-build
-                  nix-thonny.homeModules.thonny
+                  nix-thonny.homeModules.default
                 ]
                 ++ nixpkgs.lib.optionals (system == "x86_64-linux") [
                   nix-osu-stable.homeModules.osu-stable

@@ -29,7 +29,6 @@ in
     packages =
       with pkgs;
       [
-        nix-thonny.packages.${pkgs.stdenv.hostPlatform.system}.thonny
         python3
         python3Packages.tkinter
         arduino-ide
@@ -110,6 +109,8 @@ in
       enable = true;
       settings.max-connection-per-server = 5;
     };
+
+    thonny.enable = true;
 
     mpv.enable = true;
 
