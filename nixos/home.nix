@@ -29,6 +29,9 @@ in
     packages =
       with pkgs;
       [
+        thonny
+        python3
+        python3Packages.tkinter
         arduino-ide
         arduino-cli
         kdePackages.breeze-gtk
