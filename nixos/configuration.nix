@@ -1,4 +1,9 @@
-{ pkgs, lib, config, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  ...
+}:
 
 {
   boot = {
@@ -45,16 +50,15 @@
   console.keyMap = "us";
 
   users.mutableUsers = true;
-  users.users.root.hashedPasswordFile =
-    lib.mkIf (builtins.pathExists /run/nixos-install-passwords/root.hash)
-      "/run/nixos-install-passwords/root.hash";
+  users.users.root.hashedPasswordFile = lib.mkIf (builtins.pathExists /run/nixos-install-passwords/root.hash) "/run/nixos-install-passwords/root.hash";
   users.users.max = {
     isNormalUser = true;
     description = "Max Power";
-    extraGroups = [ "wheel" ];
-    hashedPasswordFile =
-      lib.mkIf (builtins.pathExists /run/nixos-install-passwords/max.hash)
-        "/run/nixos-install-passwords/max.hash";
+    extraGroups = [
+      "wheel"
+      "dialout"
+    ];
+    hashedPasswordFile = lib.mkIf (builtins.pathExists /run/nixos-install-passwords/max.hash) "/run/nixos-install-passwords/max.hash";
   };
 
   networking = {
@@ -157,15 +161,17 @@
             ./patches/xdg-desktop-portal-gtk-fc-monitor.patch
           ];
         });
-        kdePackages = prev.kdePackages.overrideScope (kdeFinal: kdePrev: {
-          ksystemstats = kdePrev.ksystemstats.overrideAttrs (old: {
-            patches = (old.patches or [ ]) ++ [
-              ./patches/ksystemstats-asahi-gpu.patch
-              ./patches/ksystemstats-network-early-register.patch
-              ./patches/ksystemstats-skip-encrypted-used-space.patch
-            ];
-          });
-        });
+        kdePackages = prev.kdePackages.overrideScope (
+          kdeFinal: kdePrev: {
+            ksystemstats = kdePrev.ksystemstats.overrideAttrs (old: {
+              patches = (old.patches or [ ]) ++ [
+                ./patches/ksystemstats-asahi-gpu.patch
+                ./patches/ksystemstats-network-early-register.patch
+                ./patches/ksystemstats-skip-encrypted-used-space.patch
+              ];
+            });
+          }
+        );
       })
     ];
   };
