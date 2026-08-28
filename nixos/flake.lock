@@ -275,6 +275,26 @@
         "type": "github"
       }
     },
+    "nix-thonny": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787886189,
+        "narHash": "sha256-ZjSOM8PR6zKrEUiPnXcbXXYSS9xSawtAkZXDuRTZi/U=",
+        "owner": "gaavin",
+        "repo": "nix-thonny",
+        "rev": "aebf39a3966dad560d200e677ed8b94e3447bf93",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gaavin",
+        "repo": "nix-thonny",
+        "type": "github"
+      }
+    },
     "nixos-apple-silicon": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -396,6 +416,7 @@
         "nix-osu-lazer-aarch64": "nix-osu-lazer-aarch64",
         "nix-osu-stable": "nix-osu-stable",
         "nix-spotify-aarch64": "nix-spotify-aarch64",
+        "nix-thonny": "nix-thonny",
         "nixos-apple-silicon": "nixos-apple-silicon",
         "nixpkgs": "nixpkgs_3",
         "plasma-manager": "plasma-manager",

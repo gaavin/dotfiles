@@ -17,6 +17,11 @@
       inputs.home-manager.follows = "home-manager";
     };
 
+    nix-thonny = {
+      url = "github:gaavin/nix-thonny";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     firefox-addons = {
       url = "gitlab:rycee/nur-expressions?dir=pkgs/firefox-addons";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -81,6 +86,7 @@
       nix-grok-build,
       disko,
       nixos-apple-silicon,
+      nix-thonny,
       ...
     }:
     let
@@ -109,6 +115,7 @@
                 sharedModules = [
                   plasma-manager.homeModules.plasma-manager
                   nix-grok-build.homeModules.grok-build
+                  nix-thonny.homeModules.thonny
                 ]
                 ++ nixpkgs.lib.optionals (system == "x86_64-linux") [
                   nix-osu-stable.homeModules.osu-stable

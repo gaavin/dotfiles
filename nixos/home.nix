@@ -29,7 +29,7 @@ in
     packages =
       with pkgs;
       [
-        thonny
+        nix-thonny.packages.${pkgs.stdenv.hostPlatform.system}.thonny
         python3
         python3Packages.tkinter
         arduino-ide
