@@ -29,6 +29,8 @@ in
     packages =
       with pkgs;
       [
+        arduino-ide
+        arduino-cli
         kdePackages.breeze-gtk
         nil
         nixfmt
