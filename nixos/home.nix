@@ -4,6 +4,7 @@
   pkgs,
   osConfig,
   firefox-addons,
+  nix-thonny,
   ...
 }:
 
@@ -13,7 +14,9 @@ let
 in
 
 {
-  imports = [ ./osu-stable.nix ];
+  imports = [
+    ./osu-stable.nix
+  ];
 
   home = {
     username = "max";
@@ -29,6 +32,7 @@ in
     packages =
       with pkgs;
       [
+        nix-thonny.packages.${pkgs.stdenv.hostPlatform.system}.default
         python3
         python3Packages.tkinter
         arduino-ide
@@ -109,8 +113,6 @@ in
       enable = true;
       settings.max-connection-per-server = 5;
     };
-
-    thonny.enable = true;
 
     mpv.enable = true;
 

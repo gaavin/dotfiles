@@ -282,11 +282,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787886189,
-        "narHash": "sha256-ZjSOM8PR6zKrEUiPnXcbXXYSS9xSawtAkZXDuRTZi/U=",
+        "lastModified": 1787889707,
+        "narHash": "sha256-Vr8Dr3v71ZYeph2tV7+jl7Onz1qTmixe8ROMxwZOvmM=",
         "owner": "gaavin",
         "repo": "nix-thonny",
-        "rev": "aebf39a3966dad560d200e677ed8b94e3447bf93",
+        "rev": "5366710bb8320fb6c9c5ca0a5f5525a5fce7aaf4",
         "type": "github"
       },
       "original": {

@@ -110,12 +110,12 @@
                 useUserPackages = true;
                 extraSpecialArgs = {
                   inherit firefox-addons;
+                  inherit nix-thonny;
                 };
                 users.max = import ./home.nix;
                 sharedModules = [
                   plasma-manager.homeModules.plasma-manager
                   nix-grok-build.homeModules.grok-build
-                  nix-thonny.homeModules.default
                 ]
                 ++ nixpkgs.lib.optionals (system == "x86_64-linux") [
                   nix-osu-stable.homeModules.osu-stable
