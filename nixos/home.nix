@@ -29,7 +29,6 @@ in
       [
         python3
         python3Packages.tkinter
-        arduino-ide
         arduino-cli
         kdePackages.breeze-gtk
         nil
@@ -79,6 +78,7 @@ in
         '')
       ]
       ++ lib.optionals isX86 [
+        arduino-ide
         osu-lazer-bin
         spotify
       ];
