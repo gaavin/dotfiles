@@ -14,10 +14,6 @@ let
 in
 
 {
-  imports = [
-    ./osu-stable.nix
-  ];
-
   home = {
     username = "max";
     homeDirectory = "/home/max";

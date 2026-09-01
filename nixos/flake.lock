@@ -234,27 +234,6 @@
         "type": "github"
       }
     },
-    "nix-osu-stable": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "offset-calc-osu-stable": "offset-calc-osu-stable"
-      },
-      "locked": {
-        "lastModified": 1787794067,
-        "narHash": "sha256-nXENQYluLpktjwuhefcblSjzGo/Sw4mShH8LTYa3zS4=",
-        "owner": "gaavin",
-        "repo": "nix-osu-stable",
-        "rev": "8a5869a1687395b1cd1fd5074060383d6911a994",
-        "type": "github"
-      },
-      "original": {
-        "owner": "gaavin",
-        "repo": "nix-osu-stable",
-        "type": "github"
-      }
-    },
     "nix-spotify-aarch64": {
       "inputs": {
         "nixpkgs": [
@@ -360,27 +339,6 @@
         "type": "indirect"
       }
     },
-    "offset-calc-osu-stable": {
-      "inputs": {
-        "nixpkgs": [
-          "nix-osu-stable",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1787279683,
-        "narHash": "sha256-gHwz/G1J69Vs5DTVcyXYOktLyhMpN8SyoaCz5jyCrNM=",
-        "owner": "gaavin",
-        "repo": "offset-calc-osu-stable",
-        "rev": "ccb640f86f8c12e50356062168cb347fba12c174",
-        "type": "github"
-      },
-      "original": {
-        "owner": "gaavin",
-        "repo": "offset-calc-osu-stable",
-        "type": "github"
-      }
-    },
     "plasma-manager": {
       "inputs": {
         "home-manager": [
@@ -414,7 +372,6 @@
         "nix-epic-games-launcher": "nix-epic-games-launcher",
         "nix-grok-build": "nix-grok-build",
         "nix-osu-lazer-aarch64": "nix-osu-lazer-aarch64",
-        "nix-osu-stable": "nix-osu-stable",
         "nix-spotify-aarch64": "nix-spotify-aarch64",
         "nix-thonny": "nix-thonny",
         "nixos-apple-silicon": "nixos-apple-silicon",

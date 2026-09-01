@@ -32,11 +32,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    nix-osu-stable = {
-      url = "github:gaavin/nix-osu-stable";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
     nix-battle-net = {
       url = "github:gaavin/nix-battle-net";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -78,7 +73,6 @@
       plasma-manager,
       firefox-addons,
       steam-config-nix,
-      nix-osu-stable,
       nix-battle-net,
       nix-epic-games-launcher,
       nix-spotify-aarch64,
@@ -118,7 +112,6 @@
                   nix-grok-build.homeModules.grok-build
                 ]
                 ++ nixpkgs.lib.optionals (system == "x86_64-linux") [
-                  nix-osu-stable.homeModules.osu-stable
                   nix-battle-net.homeModules.battle-net
                   nix-epic-games-launcher.homeModules.epic-games-launcher
                 ]
