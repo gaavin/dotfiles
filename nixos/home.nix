@@ -4,7 +4,6 @@
   pkgs,
   osConfig,
   firefox-addons,
-  nix-thonny,
   ...
 }:
 
@@ -28,7 +27,6 @@ in
     packages =
       with pkgs;
       [
-        nix-thonny.packages.${pkgs.stdenv.hostPlatform.system}.default
         python3
         python3Packages.tkinter
         arduino-ide
