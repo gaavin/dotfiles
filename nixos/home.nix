@@ -39,7 +39,6 @@ in
         qbittorrent
         fastfetch
         dysk
-        kdePackages.partitionmanager
         gh
         (pkgs.writeShellScriptBin "rebuild" ''
           set -euo pipefail

@@ -145,6 +145,7 @@
     plasma6.excludePackages = with pkgs.kdePackages; [
       discover
       elisa
+      partitionmanager
     ];
     systemPackages = with pkgs; [
       vim
