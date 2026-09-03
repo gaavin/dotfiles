@@ -89,7 +89,15 @@
     kernelParams = [
       "amd_pstate=guided"
       "preempt=full"
+      # mina has plenty of RAM and rarely swaps; keep zswap's footprint small
+      # and favor low-latency lz4 over a better compression ratio.
+      "zswap.compressor=lz4"
+      "zswap.max_pool_percent=10"
     ];
+    kernel.sysctl = {
+      # Avoid swapping proactively; only reach for it under real pressure.
+      "vm.swappiness" = 10;
+    };
     kernelPackages = pkgs.linuxPackages_cachyos-lto;
     kernelModules = [
       "uinput"

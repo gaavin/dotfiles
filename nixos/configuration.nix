@@ -13,9 +13,15 @@
       "boot.shell_on_fail"
       "splash"
       "loglevel=3"
+      # zswap: compressed write-back cache in front of the LVM swap partition.
+      # compressor + pool size are tuned per-host (see hosts/*/default.nix)
+      # since mina rarely swaps and air leans on it heavily.
+      "zswap.enabled=1"
+      "zswap.zpool=zsmalloc"
+      "zswap.shrinker_enabled=1"
     ];
     kernel.sysctl = {
-      "vm.swappiness" = 180;
+      # vm.swappiness is tuned per-host; see hosts/*/default.nix.
       "vm.watermark_boost_factor" = 0;
       "vm.watermark_scale_factor" = 125;
       "vm.page-cluster" = 0;
@@ -34,13 +40,6 @@
     "relatime"
     "lazytime"
   ];
-
-  zramSwap = {
-    enable = true;
-    priority = 100;
-    algorithm = "lz4";
-    memoryPercent = 100;
-  };
 
   i18n.defaultLocale = "en_CA.UTF-8";
   time.timeZone = "America/St_Johns";

@@ -82,6 +82,17 @@
         patch = ../../patches/asahi-gpu-busy-sysfs.patch;
       }
     ];
+    kernelParams = [
+      # air only has 8G of RAM and leans on swap hard (kernel builds with
+      # other apps open), so favor zstd's better ratio over raw speed and
+      # give zswap a much bigger pool than mina gets.
+      "zswap.compressor=zstd"
+      "zswap.max_pool_percent=30"
+    ];
+    kernel.sysctl = {
+      # Swap proactively to keep RAM free for the active build/workload.
+      "vm.swappiness" = 130;
+    };
     extraModprobeConfig = ''
       options hid_apple iso_layout=0
     '';
