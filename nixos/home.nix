@@ -11,24 +11,11 @@
 let
   isX86 = pkgs.stdenv.hostPlatform.isx86_64;
   onePasswordPath = "${config.home.homeDirectory}/.1password/agent.sock";
-  # FIFO 80: below PipeWire 88 / WirePlumber 84 so audio still wins.
-  wrapFifo80 =
-    pkg: bin:
-    pkgs.symlinkJoin {
-      name = "${pkg.pname or pkg.name}-fifo";
-      paths = [ pkg ];
-      nativeBuildInputs = [ pkgs.makeWrapper ];
-      postBuild = ''
-        rm -f "$out/bin/${bin}"
-        makeWrapper ${pkgs.util-linux}/bin/chrt "$out/bin/${bin}" \
-          --add-flags --fifo \
-          --add-flags 80 \
-          --add-flags ${lib.escapeShellArg "${pkg}/bin/${bin}"}
-      '';
-    };
 in
 
 {
+  imports = [ ./osu-lazer.nix ];
+
   home = {
     username = "max";
     homeDirectory = "/home/max";
@@ -96,7 +83,6 @@ in
       ]
       ++ lib.optionals isX86 [
         arduino-ide
-        (wrapFifo80 osu-lazer-bin "osu!")
         spotify
       ];
   };
