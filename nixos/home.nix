@@ -137,19 +137,7 @@ in
         pointSize = 10;
       };
       kwin.effects.shakeCursor.enable = false;
-      powerdevil = lib.mkMerge [
-        (lib.mkIf (osConfig.networking.hostName == "mina") {
-          AC.autoSuspend.action = "nothing";
-        })
-        (lib.mkIf (osConfig.networking.hostName == "air") {
-          AC.autoSuspend.action = "nothing";
-          battery.autoSuspend.action = "sleep";
-          battery.autoSuspend.idleTimeout = 1800;
-          AC.keyboardBrightness = 25;
-          battery.keyboardBrightness = 25;
-          lowBattery.keyboardBrightness = 25;
-        })
-      ];
+      # Per-host powerdevil tuning lives in hosts/<name>/home.nix.
       input.mice = [
         {
           enable = true;

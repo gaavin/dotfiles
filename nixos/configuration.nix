@@ -1,7 +1,6 @@
 {
   pkgs,
   lib,
-  config,
   ...
 }:
 
@@ -79,12 +78,7 @@
     polkitPolicyOwners = [ "max" ];
   };
 
-  virtualisation.virtualbox.host = {
-    enable = true;
-    enableExtensionPack = true;
-  };
-
-  users.extraGroups.vboxusers.members = [ "max" ];
+  # VirtualBox is x86_64-only; see hosts/mina/default.nix.
 
   fonts = {
     packages = with pkgs; [
@@ -116,52 +110,28 @@
         Domains = [ "~." ];
       };
     };
-    pipewire = lib.mkMerge [
-      {
-        enable = true;
-        pulse.enable = true;
-        extraConfig.pipewire."99-rtkit" = {
-          "module.rt.args" = {
-            "nice.level" = -11;
-            "rt.prio" = 88;
-            "rt.time.soft" = -1;
-            "rt.time.hard" = -1;
-          };
+    # air's low-latency audio comes from hardware.asahi.setupAsahiSound instead
+    # of the extraConfig tuning below; see hosts/mina/default.nix for that.
+    pipewire = {
+      enable = true;
+      pulse.enable = true;
+      extraConfig.pipewire."99-rtkit" = {
+        "module.rt.args" = {
+          "nice.level" = -11;
+          "rt.prio" = 88;
+          "rt.time.soft" = -1;
+          "rt.time.hard" = -1;
         };
-        wireplumber.extraConfig."99-rtkit" = {
-          "module.rt.args" = {
-            "nice.level" = -11;
-            "rt.prio" = 88;
-            "rt.time.soft" = -1;
-            "rt.time.hard" = -1;
-          };
+      };
+      wireplumber.extraConfig."99-rtkit" = {
+        "module.rt.args" = {
+          "nice.level" = -11;
+          "rt.prio" = 88;
+          "rt.time.soft" = -1;
+          "rt.time.hard" = -1;
         };
-      }
-      # air uses hardware.asahi.setupAsahiSound (asahi-audio DSP + speakersafetyd).
-      (lib.mkIf (config.networking.hostName != "air") {
-        extraConfig.pipewire."92-low-latency" = {
-          "context.properties" = {
-            "default.clock.rate" = 48000;
-            "default.clock.quantum" = 128;
-            "default.clock.min-quantum" = 128;
-            "default.clock.max-quantum" = 128;
-          };
-        };
-        extraConfig.pipewire-pulse."92-low-latency" = {
-          "pulse.properties" = {
-            "pulse.min.req" = "128/48000";
-            "pulse.default.req" = "128/48000";
-            "pulse.max.req" = "128/48000";
-            "pulse.min.quantum" = "128/48000";
-            "pulse.max.quantum" = "128/48000";
-          };
-          "stream.properties" = {
-            "node.latency" = "128/48000";
-            "resample.quality" = 1;
-          };
-        };
-      })
-    ];
+      };
+    };
   };
 
   # rtkit defaults to max prio 20; raise the ceiling so PipeWire can take FIFO ~88.

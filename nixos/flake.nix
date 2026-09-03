@@ -106,7 +106,10 @@
                   inherit firefox-addons;
                   inherit grok-bot-nix;
                 };
-                users.max = import ./home.nix;
+                users.max.imports = [
+                  ./home.nix
+                  ./hosts/${hostname}/home.nix
+                ];
                 sharedModules = [
                   plasma-manager.homeModules.plasma-manager
                   nix-grok-build.homeModules.grok-build

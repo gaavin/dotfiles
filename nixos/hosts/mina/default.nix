@@ -8,6 +8,13 @@
 
   networking.hostName = "mina";
 
+  virtualisation.virtualbox.host = {
+    enable = true;
+    enableExtensionPack = true;
+  };
+
+  users.extraGroups.vboxusers.members = [ "max" ];
+
   disko.devices = {
     disk.main = {
       device = "/dev/nvme0n1";
@@ -116,6 +123,31 @@
 
   services.logind.settings.Login = {
     IdleAction = "ignore";
+  };
+
+  # air stays off this; it uses hardware.asahi.setupAsahiSound instead.
+  services.pipewire = {
+    extraConfig.pipewire."92-low-latency" = {
+      "context.properties" = {
+        "default.clock.rate" = 48000;
+        "default.clock.quantum" = 128;
+        "default.clock.min-quantum" = 128;
+        "default.clock.max-quantum" = 128;
+      };
+    };
+    extraConfig.pipewire-pulse."92-low-latency" = {
+      "pulse.properties" = {
+        "pulse.min.req" = "128/48000";
+        "pulse.default.req" = "128/48000";
+        "pulse.max.req" = "128/48000";
+        "pulse.min.quantum" = "128/48000";
+        "pulse.max.quantum" = "128/48000";
+      };
+      "stream.properties" = {
+        "node.latency" = "128/48000";
+        "resample.quality" = 1;
+      };
+    };
   };
 
   services.udev.extraRules = ''
