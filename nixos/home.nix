@@ -14,8 +14,6 @@ let
 in
 
 {
-  imports = [ ./osu-lazer.nix ];
-
   home = {
     username = "max";
     homeDirectory = "/home/max";
@@ -83,6 +81,7 @@ in
       ]
       ++ lib.optionals isX86 [
         arduino-ide
+        osu-lazer-bin
         spotify
       ];
   };
