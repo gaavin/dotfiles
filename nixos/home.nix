@@ -29,6 +29,7 @@ in
     packages =
       with pkgs;
       [
+        htop
         grok-bot-nix.packages.${pkgs.stdenv.hostPlatform.system}.default
         claude-code
         helium
