@@ -30,6 +30,7 @@ in
       with pkgs;
       [
         grok-bot-nix.packages.${pkgs.stdenv.hostPlatform.system}.default
+        claude-code
         python3
         python3Packages.tkinter
         arduino-cli

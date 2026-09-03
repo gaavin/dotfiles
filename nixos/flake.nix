@@ -63,6 +63,11 @@
     };
 
     nixos-apple-silicon.url = "github:nix-community/nixos-apple-silicon";
+
+    claude-code = {
+      url = "github:sadjow/claude-code-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -81,6 +86,7 @@
       grok-bot-nix,
       disko,
       nixos-apple-silicon,
+      claude-code,
       ...
     }:
     let
@@ -98,6 +104,7 @@
             ./configuration.nix
             ./hosts/${hostname}
             home-manager.nixosModules.home-manager
+            { nixpkgs.overlays = [ claude-code.overlays.default ]; }
             {
               home-manager = {
                 useGlobalPkgs = true;
