@@ -79,6 +79,13 @@
     polkitPolicyOwners = [ "max" ];
   };
 
+  virtualisation.virtualbox.host = {
+    enable = true;
+    enableExtensionPack = true;
+  };
+
+  users.extraGroups.vboxusers.members = [ "max" ];
+
   fonts = {
     packages = with pkgs; [
       nerd-fonts.jetbrains-mono
