@@ -113,6 +113,26 @@
         "url": "https://flakehub.com/f/DeterminateSystems/flake-schemas/%3D0.5.0.tar.gz"
       }
     },
+    "grok-bot-nix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788167997,
+        "narHash": "sha256-kiHZRaSGGDnFvX3L9x46dTwBM7rkefK73jOS4J3X1tA=",
+        "owner": "d-513",
+        "repo": "grok-bot-nix",
+        "rev": "41cc6a6e93ae8f260dbc2007bf938754a5ec6f83",
+        "type": "github"
+      },
+      "original": {
+        "owner": "d-513",
+        "repo": "grok-bot-nix",
+        "type": "github"
+      }
+    },
     "home-manager": {
       "inputs": {
         "nixpkgs": [
@@ -347,6 +367,7 @@
         "chaotic": "chaotic",
         "disko": "disko",
         "firefox-addons": "firefox-addons",
+        "grok-bot-nix": "grok-bot-nix",
         "home-manager": "home-manager_2",
         "nix-battle-net": "nix-battle-net",
         "nix-epic-games-launcher": "nix-epic-games-launcher",

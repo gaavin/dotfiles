@@ -52,6 +52,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    grok-bot-nix = {
+      url = "github:d-513/grok-bot-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -73,6 +78,7 @@
       nix-spotify-aarch64,
       nix-osu-lazer-aarch64,
       nix-grok-build,
+      grok-bot-nix,
       disko,
       nixos-apple-silicon,
       ...
@@ -98,6 +104,7 @@
                 useUserPackages = true;
                 extraSpecialArgs = {
                   inherit firefox-addons;
+                  inherit grok-bot-nix;
                 };
                 users.max = import ./home.nix;
                 sharedModules = [

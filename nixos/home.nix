@@ -4,6 +4,7 @@
   pkgs,
   osConfig,
   firefox-addons,
+  grok-bot-nix,
   ...
 }:
 
@@ -21,12 +22,14 @@ in
       MOZ_ENABLE_WAYLAND = "1";
       SDL_VIDEO_DRIVER = "wayland";
       PROTON_ENABLE_WAYLAND = "1";
+      NIXOS_OZONE_WL = "1";
       SSH_AUTH_SOCK = onePasswordPath;
       EDITOR = "vim";
     };
     packages =
       with pkgs;
       [
+        grok-bot-nix.packages.${pkgs.stdenv.hostPlatform.system}.default
         python3
         python3Packages.tkinter
         arduino-cli
