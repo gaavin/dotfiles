@@ -57,6 +57,8 @@
     extraGroups = [
       "wheel"
       "dialout"
+      "audio"
+      "pipewire"
     ];
     hashedPasswordFile = lib.mkIf (builtins.pathExists /run/nixos-install-passwords/max.hash) "/run/nixos-install-passwords/max.hash";
   };
@@ -111,6 +113,22 @@
       {
         enable = true;
         pulse.enable = true;
+        extraConfig.pipewire."99-rtkit" = {
+          "module.rt.args" = {
+            "nice.level" = -11;
+            "rt.prio" = 88;
+            "rt.time.soft" = -1;
+            "rt.time.hard" = -1;
+          };
+        };
+        wireplumber.extraConfig."99-rtkit" = {
+          "module.rt.args" = {
+            "nice.level" = -11;
+            "rt.prio" = 88;
+            "rt.time.soft" = -1;
+            "rt.time.hard" = -1;
+          };
+        };
       }
       # air uses hardware.asahi.setupAsahiSound (asahi-audio DSP + speakersafetyd).
       (lib.mkIf (config.networking.hostName != "air") {
@@ -139,7 +157,32 @@
     ];
   };
 
+  # rtkit defaults to max prio 20; raise the ceiling so PipeWire can take FIFO ~88.
   security.rtkit.enable = true;
+  security.rtkit.args = [
+    "--scheduling-policy=FIFO"
+    "--our-realtime-priority=89"
+    "--max-realtime-priority=88"
+    "--min-nice-level=-19"
+    "--rttime-usec-max=2000000"
+    "--no-canary"
+  ];
+
+  # systemd --user units do not inherit PAM loginLimits.
+  systemd.user.services = {
+    pipewire.serviceConfig = {
+      LimitRTPRIO = 95;
+      LimitMEMLOCK = "infinity";
+    };
+    pipewire-pulse.serviceConfig = {
+      LimitRTPRIO = 95;
+      LimitMEMLOCK = "infinity";
+    };
+    wireplumber.serviceConfig = {
+      LimitRTPRIO = 95;
+      LimitMEMLOCK = "infinity";
+    };
+  };
 
   environment = {
     plasma6.excludePackages = with pkgs.kdePackages; [
