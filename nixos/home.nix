@@ -44,7 +44,6 @@ in
         qbittorrent
         fastfetch
         dysk
-        gh
         (pkgs.writeShellScriptBin "rebuild" ''
           set -euo pipefail
 
@@ -171,7 +170,13 @@ in
         gpg.format = "ssh";
         gpg.ssh.program = "${pkgs._1password-gui}/share/1password/op-ssh-sign";
         commit.gpgsign = true;
+        url."git@github.com:".insteadOf = "https://github.com/";
       };
+    };
+
+    gh = {
+      enable = true;
+      settings.git_protocol = "ssh";
     };
 
     ssh = {
