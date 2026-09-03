@@ -86,7 +86,6 @@
   chaotic.mesa-git.enable = true;
 
   boot = {
-    initrd.kernelModules = [ "amdgpu" ];
     kernelParams = [
       "amd_pstate=guided"
       "preempt=full"

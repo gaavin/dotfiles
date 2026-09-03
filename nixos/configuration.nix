@@ -78,8 +78,6 @@
     polkitPolicyOwners = [ "max" ];
   };
 
-  # VirtualBox is x86_64-only; see hosts/mina/default.nix.
-
   fonts = {
     packages = with pkgs; [
       nerd-fonts.jetbrains-mono
@@ -161,7 +159,7 @@
     };
   };
 
-  # So desktop apps (osu!) can chrt; pipewire.service limits only cover PipeWire.
+  # So desktop apps can chrt; pipewire.service limits only cover PipeWire.
   systemd.user.settings.Manager = {
     DefaultLimitRTPRIO = "95";
     DefaultLimitMEMLOCK = "infinity";
@@ -202,11 +200,19 @@
       })
     ];
   };
-  nix.settings = {
-    experimental-features = [
-      "nix-command"
-      "flakes"
-    ];
+  nix = {
+    gc = {
+      automatic = true;
+      dates = "daily";
+      options = "--delete-older-than 7d";
+    };
+    settings = {
+      experimental-features = [
+        "nix-command"
+        "flakes"
+      ];
+      auto-optimise-store = true;
+    };
   };
   system.stateVersion = "26.05";
 }
