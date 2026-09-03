@@ -184,6 +184,12 @@
     };
   };
 
+  # So desktop apps (osu!) can chrt; pipewire.service limits only cover PipeWire.
+  systemd.user.extraConfig = ''
+    DefaultLimitRTPRIO=95
+    DefaultLimitMEMLOCK=infinity
+  '';
+
   environment = {
     plasma6.excludePackages = with pkgs.kdePackages; [
       discover
