@@ -68,6 +68,11 @@
       url = "github:sadjow/claude-code-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    helium-browser = {
+      url = "github:schembriaiden/helium-browser-nix-flake";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -87,6 +92,7 @@
       disko,
       nixos-apple-silicon,
       claude-code,
+      helium-browser,
       ...
     }:
     let
@@ -104,7 +110,12 @@
             ./configuration.nix
             ./hosts/${hostname}
             home-manager.nixosModules.home-manager
-            { nixpkgs.overlays = [ claude-code.overlays.default ]; }
+            {
+              nixpkgs.overlays = [
+                claude-code.overlays.default
+                helium-browser.overlays.default
+              ];
+            }
             {
               home-manager = {
                 useGlobalPkgs = true;
