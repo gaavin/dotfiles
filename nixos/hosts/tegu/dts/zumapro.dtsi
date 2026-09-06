@@ -151,6 +151,19 @@
 		clock-output-names = "ext-200m";
 	};
 
+	/*
+	 * Stand-in for clocks the (driverless) zumapro clock controller owns.
+	 * The bootloader leaves these running and clk_ignore_unused keeps them
+	 * that way; drivers only need a plausible rate to derive timings from.
+	 * 166.666 MHz is the usual UFS core clock on this Exynos generation.
+	 */
+	ufs_clk_stub: clock-3 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <166666666>;
+		clock-output-names = "ufs-core-stub";
+	};
+
 	pmu {
 		compatible = "arm,armv8-pmuv3";
 		interrupts = <GIC_PPI 7 IRQ_TYPE_LEVEL_HIGH 0>;
@@ -345,30 +358,79 @@
 		};
 
 		/*
-		 * USB 3.2 DRD controller.
+		 * USB 3.2 DRD controller — DELIBERATELY NOT DESCRIBED.
 		 *
-		 * Described bare, as the generic Synopsys core rather than
-		 * through the Exynos glue, because zumapro has no clock or
-		 * power-domain driver for the glue to ask for. dwc3 treats
-		 * clocks and PHYs as optional, and the bootloader leaves the
-		 * controller and its PHY running (it is how fastboot talks),
-		 * so with clk_ignore_unused the core probes onto hardware that
-		 * is already initialised.
+		 * Adding a "snps,dwc3" node here bootloops the device. Unlike
+		 * UFS, this block sits in the hsi0 power domain
+		 * (PMU pd-hsi0 @0x15462a80) and the bootloader appears to shut
+		 * it down before handing over, so dwc3 probes onto dead
+		 * registers. There is no clock or power-domain driver for
+		 * zumapro to bring it back.
 		 *
-		 * Peripheral-only on purpose: the point is a gadget serial
-		 * console on the USB-C port, which is the only way to get a
-		 * log off this device without a debug cable.
+		 * Before re-enabling: read the pd-hsi0 status register from
+		 * userspace (/dev/mem is available) and only describe the
+		 * controller if the domain reports powered. A gadget serial
+		 * console is the prize here — it ends photographing the panel —
+		 * so this is worth doing properly rather than by trial.
+		 *
+		 * Addresses for whoever picks this up:
+		 *   usb@11210000  len 0x10000, GIC SPI 402
+		 *   phy@11100000  samsung,exynos-usbdrd-phy
 		 */
-		usb: usb@11210000 {
-			compatible = "snps,dwc3";
-			reg = <0x11210000 0x10000>;
-			interrupts = <GIC_SPI 402 IRQ_TYPE_LEVEL_HIGH 0>;
-			dr_mode = "peripheral";
-			maximum-speed = "high-speed";
-			/* Do not touch a PHY we have no driver for */
-			snps,dis_u2_susphy_quirk;
-			snps,dis_u3_susphy_quirk;
-			snps,dis_enblslpm_quirk;
+
+		/*
+		 * Power management unit. Referenced by the UFS PHY to lift
+		 * PHY isolation; same register block as gs101.
+		 */
+		pmu_system_controller: system-controller@15460000 {
+			compatible = "samsung,gs101-pmu", "syscon";
+			reg = <0x15460000 0x10000>;
+		};
+
+		sysreg_ufs: syscon@13020000 {
+			compatible = "google,zuma-sysreg-ufs", "syscon";
+			reg = <0x13020000 0x1000>;
+		};
+
+		/*
+		 * UFS storage, described as gs101's. Tensor G4's controller is
+		 * the same generation: the PHY sits at the same +0x4000 offset
+		 * from the host controller, and the sysreg IOCC field is at the
+		 * same 0x710, both of which match the downstream description.
+		 *
+		 * Unlike USB, this block has no power-domains property
+		 * downstream, i.e. it is not in a switchable domain, so probing
+		 * it does not risk the dead-register hang that USB caused.
+		 */
+		ufs_0_phy: phy@13204000 {
+			compatible = "google,gs101-ufs-phy";
+			reg = <0x13204000 0x3000>;
+			reg-names = "phy-pma";
+			samsung,pmu-syscon = <&pmu_system_controller>;
+			#phy-cells = <0>;
+			clocks = <&ext_24_5m>;
+			clock-names = "ref_clk";
+		};
+
+		ufs_0: ufs@13200000 {
+			compatible = "google,gs101-ufs";
+			reg = <0x13200000 0x200>,
+			      <0x13201100 0x200>,
+			      <0x13280000 0x8000>,
+			      <0x132a0000 0x100>;
+			reg-names = "hci", "vs_hci", "unipro", "ufsp";
+			interrupts = <GIC_SPI 466 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&ufs_clk_stub>, <&ufs_clk_stub>,
+				 <&ufs_clk_stub>, <&ufs_clk_stub>,
+				 <&ufs_clk_stub>, <&ufs_clk_stub>;
+			clock-names = "core_clk", "sclk_unipro_main", "fmp",
+				      "aclk", "pclk", "sysreg";
+			dma-coherent;
+			freq-table-hz = <0 0>, <0 0>, <0 0>,
+					<0 0>, <0 0>, <0 0>;
+			phys = <&ufs_0_phy>;
+			phy-names = "ufs-phy";
+			samsung,sysreg = <&sysreg_ufs 0x710>;
 		};
 
 		/*

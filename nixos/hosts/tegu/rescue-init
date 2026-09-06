@@ -12,7 +12,13 @@
 #    whole init down with it if the node is missing, and the only evidence is
 #    "Attempted to kill init" with no clue which line failed.
 BB=/tegu-bin/busybox
-log() { $BB echo "TEGU: $*" >/dev/kmsg 2>/dev/null; }
+log() {
+	# Both sinks on purpose: /dev/kmsg is the durable record, and writing
+	# the VT is what actually puts text on the panel. Writes, never exec,
+	# and never held open, or fbcon cannot own the console.
+	$BB echo "TEGU: $*" >/dev/kmsg 2>/dev/null
+	$BB echo "TEGU: $*" >/dev/console 2>/dev/null
+}
 
 $BB mkdir -p /proc /sys /dev /tmp
 $BB mount -t proc proc /proc 2>/dev/null
@@ -21,6 +27,15 @@ $BB mount -t devtmpfs dev /dev 2>/dev/null
 [ -c /dev/kmsg ] || $BB mknod /dev/kmsg c 1 11 2>/dev/null
 [ -c /dev/mem ] || $BB mknod /dev/mem c 1 1 2>/dev/null
 [ -c /dev/console ] || $BB mknod /dev/console c 5 1 2>/dev/null
+
+# Dump the whole kernel ring buffer to the panel explicitly.
+#
+# printk hands console output to a kthread, so messages queued before the
+# framebuffer console bound are never rendered, and on this device the only
+# boots that ever showed text were ones that panicked, because a panic
+# force-flushes every console. Writing the buffer out from here is what makes
+# the panel a usable log rather than a crash artefact.
+$BB dmesg >/dev/console 2>/dev/null
 
 log "rescue init running: $($BB uname -srm)"
 $BB --install -s /tegu-bin 2>/dev/null
@@ -52,4 +67,7 @@ fi
 # terminal; input arrives over USB once the gadget works.
 
 log "rescue init ready"
+# Everything above went to /dev/kmsg; flush it to the panel too.
+$BB dmesg | $BB tail -40 >/dev/console 2>/dev/null
+
 while true; do $BB sleep 30; done

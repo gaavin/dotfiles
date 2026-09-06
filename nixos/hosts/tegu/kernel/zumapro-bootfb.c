@@ -434,46 +434,25 @@ unmap_win:
 }
 early_param("zumapro_bootfb", zumapro_bootfb_early);
 
-static void __iomem *decon_main;
-static struct delayed_work sw_trig_work;
-
-static void zumapro_bootfb_sw_trig(struct work_struct *work)
-{
-	u32 val = readl(decon_main + TRIG_CON);
-
-	val &= ~(HW_TRIG_EN | HW_TRIG_MASK_DECON);
-	val |= SW_TRIG_EN | SW_TRIG_DET_EN;
-	writel(val, decon_main + TRIG_CON);
-	schedule_delayed_work(&sw_trig_work, SW_TRIG_INTERVAL);
-}
-
+/*
+ * Nothing here touches DECON. An earlier version unmasked the panel's
+ * hardware frame trigger, on the theory that a command-mode panel needs to be
+ * told to fetch each frame. That was wrong and it froze the display: the
+ * bootloader is already driving the panel perfectly well, and unmasking the
+ * trigger makes DECON wait for a TE signal that is not necessarily running.
+ * The logo would be drawn and then the screen would never update again.
+ *
+ * The rule this port keeps relearning: the bootloader left the display in a
+ * working state, so read its registers to find the framebuffer and change
+ * nothing.
+ */
 static int __init zumapro_bootfb_init(void)
 {
 	struct resource res;
 	struct platform_device *pdev;
-	u32 val;
 
 	if (!bootfb.found)
 		return 0;
-
-	decon_main = ioremap(DECON0_MAIN_BASE, DECON_MAIN_SIZE);
-	if (!decon_main)
-		return -ENOMEM;
-
-	if (bootfb.cmd_mode) {
-		val = readl(decon_main + TRIG_CON);
-		if ((val & HW_TRIG_SEL_MASK) != HW_TRIG_SEL_NONE) {
-			/* Let every panel TE push the next frame */
-			val &= ~HW_TRIG_MASK_DECON;
-			val |= HW_TRIG_EN;
-			writel(val, decon_main + TRIG_CON);
-			pr_info("hardware trigger unmasked (TRIG_CON=%08x)\n", val);
-		} else {
-			INIT_DELAYED_WORK(&sw_trig_work, zumapro_bootfb_sw_trig);
-			schedule_delayed_work(&sw_trig_work, 0);
-			pr_info("no hardware trigger, software-triggering at 30 Hz\n");
-		}
-	}
 
 	res = DEFINE_RES_MEM_NAMED(bootfb.fb_base, bootfb.fb_size,
 				   "zumapro-bootfb");
