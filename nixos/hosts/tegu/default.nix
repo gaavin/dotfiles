@@ -14,17 +14,31 @@
   networking.hostName = "tegu";
 
   boot = {
-    kernelPackages = pkgs.linuxPackagesFor (pkgs.callPackage ./kernel.nix { });
+    # ./cross-kernel.nix overrides this with an x86_64-built kernel
+    kernelPackages = lib.mkDefault (pkgs.linuxPackagesFor (pkgs.callPackage ./kernel.nix { }));
 
     # ABL (the Pixel bootloader) passes this from the boot image's cmdline;
     # images.nix prepends init=<toplevel>/init.
     kernelParams = [
+      # Serial console stays for anyone with a debug cable; earlycon is a
+      # no-op without one.
       "console=ttySAC0,115200n8"
       "earlycon"
-      # No clock driver for zumapro yet: never gate what the bootloader left on
+      # Adopt the bootloader's framebuffer (kernel/zumapro-bootfb.c) and make
+      # fbcon on it the primary console: the last console= wins /dev/console,
+      # so the initrd emergency shell and systemd land on the panel.
+      "zumapro_bootfb"
+      "console=tty0"
+      # 1080 px across at ~430 dpi; the 8x16 default is unreadable
+      "fbcon=font:TER16x32"
+      # No clock/power-domain drivers for zumapro yet: never gate what the
+      # bootloader left on, or the panel goes dark
       "clk_ignore_unused"
+      "pd_ignore_unused"
       "no_console_suspend"
       "printk.devkmsg=on"
+      # Leave a crash on screen instead of rebooting into Android
+      "panic=0"
       "boot.shell_on_fail"
     ];
 

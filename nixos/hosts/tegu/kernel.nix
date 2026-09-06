@@ -83,6 +83,17 @@ let
         sha256 = "0w62iaz3yfmv82h36dziqc26ah4q97w31k5s3vxcq1l9gkygndld";
       };
 
+      # The boot framebuffer driver (see ./kernel/zumapro-bootfb.c) goes in
+      # as a patch, not postPatch: nixpkgs generates .config in a separate
+      # derivation that only sees kernelPatches, and an option that is not
+      # in Kconfig at that point is silently dropped.
+      kernelPatches = [
+        {
+          name = "zumapro-bootfb";
+          patch = ./kernel/zumapro-bootfb.patch;
+        }
+      ];
+
       defconfig = "defconfig";
       # Don't let nixpkgs' generic "enable everything as a module" pass undo
       # the trimming below.
@@ -132,11 +143,24 @@ let
             USB_CONFIGFS_MASS_STORAGE = yes;
             USB_ROLE_SWITCH = yes;
 
-            # Display: only what a bootloader framebuffer could use, for now
+            # Display: no DPU driver exists, so ./kernel/zumapro-bootfb.c hands
+            # the framebuffer the bootloader left scanning out to simpledrm,
+            # and fbcon puts the kernel log on the panel. That is the debug
+            # console for this port until something else works.
+            ZUMAPRO_BOOTFB = yes;
             DRM = yes;
             DRM_SIMPLEDRM = yes;
+            DRM_FBDEV_EMULATION = yes;
+            FB_CORE = yes;
+            VT = yes;
+            VT_CONSOLE = yes;
             FRAMEBUFFER_CONSOLE = yes;
-            DRM_PANEL = yes;
+            FRAMEBUFFER_CONSOLE_ROTATION = yes;
+            FONTS = yes;
+            FONT_8x16 = yes;
+            FONT_TER16x32 = yes;
+            LOGO = yes;
+            LOGO_LINUX_CLUT224 = yes;
 
             # Filesystems used by the images
             EXT4_FS = yes;

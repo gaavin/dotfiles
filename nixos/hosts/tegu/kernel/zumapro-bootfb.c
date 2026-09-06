@@ -1,0 +1,382 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Google Tensor G4 (zumapro) boot framebuffer
+ *
+ * The Pixel bootloader leaves the boot logo scanning out on DECON0 when it
+ * jumps to the kernel. Mainline has no driver for this display pipeline,
+ * so rather than program it we read back what the bootloader configured,
+ * reserve the buffer it is scanning from, and hand that buffer to simpledrm
+ * as a "simple-framebuffer" platform device. The result is a DRM device,
+ * an fbcon, and the kernel log on the panel without a UART cable.
+ *
+ * Register offsets come from the downstream display driver
+ * (google-modules/display/samsung, cal_9865, shared by zuma and zumapro)
+ * and the addresses from the downstream zumapro DTB.
+ *
+ * Two boot stages:
+ *
+ *  1. early_param "zumapro_bootfb" runs from parse_early_param(), before
+ *     arm64_memblock_init(). It reads the DECON/DPP registers and reserves
+ *     the framebuffer as NOMAP so the kernel neither allocates over it nor
+ *     maps it cacheable (which would also stop ioremap_wc from mapping it).
+ *
+ *  2. A device_initcall keeps the panel refreshing (command-mode panels
+ *     only push a frame when triggered), coerces the DMA pixel format to one
+ *     simpledrm can blit into if the bootloader picked one it cannot, and
+ *     registers the platform device.
+ *
+ * Nothing here powers anything on: if the display was off at kernel entry
+ * the register reads would fault. The bootloader shows its logo right up to
+ * the jump, so in practice the domain is on.
+ */
+
+#define pr_fmt(fmt) "zumapro-bootfb: " fmt
+
+#include <linux/init.h>
+#include <linux/io.h>
+#include <linux/ioport.h>
+#include <linux/memblock.h>
+#include <linux/of_fdt.h>
+#include <linux/platform_device.h>
+#include <linux/platform_data/simplefb.h>
+#include <linux/workqueue.h>
+#include <asm/early_ioremap.h>
+
+/* DECON0 register regions (downstream reg-names "main", "win", "wincon") */
+#define DECON0_MAIN_BASE	0x19470000
+#define DECON0_WIN_BASE		0x19480000
+#define DECON0_WINCON_BASE	0x194a0000
+#define DECON_MAIN_SIZE		0x100
+#define DECON_WINDOWS		14
+#define DECON_WIN_SIZE		(0x1000 * DECON_WINDOWS)
+
+#define GLOBAL_CON		0x0020
+#define  GLOBAL_CON_OP_MODE_CMD	BIT(8)
+#define  GLOBAL_CON_RUN_STATUS	BIT(4)
+#define  GLOBAL_CON_DECON_EN	BIT(1)
+#define TRIG_CON		0x0030
+#define  HW_TRIG_SEL_MASK	GENMASK(25, 24)
+#define  HW_TRIG_SEL_NONE	(3 << 24)
+#define  SW_TRIG_EN		BIT(8)
+#define  HW_TRIG_MASK_DECON	BIT(4)
+#define  SW_TRIG_DET_EN		BIT(1)
+#define  HW_TRIG_EN		BIT(0)
+#define SHD_REG_UP_REQ		0x0050
+#define  SHD_REG_UP_REQ_GLOBAL	BIT(31)
+#define  SHD_REG_UP_REQ_CMP	BIT(20)
+#define  SHD_REG_UP_REQ_WIN(w)	BIT(w)
+
+#define WIN_OFFSET(w)		(0x1000 * (w))
+#define DECON_CON_WIN(w)	(WIN_OFFSET(w) + 0x00)	/* wincon region */
+#define  WIN_CHMAP_GET(v)	(((v) >> 4) & 0xf)
+#define  WIN_EN			BIT(0)
+#define WIN_START_POSITION(w)	(WIN_OFFSET(w) + 0x0c)	/* win region */
+#define WIN_END_POSITION(w)	(WIN_OFFSET(w) + 0x10)
+#define  WIN_POS_Y(v)		(((v) >> 16) & 0x3fff)
+#define  WIN_POS_X(v)		((v) & 0x3fff)
+
+/* DPP read-DMA blocks: L0-L6 in DPUF0, L7-L13 in DPUF1, 0x1000 apart */
+#define DPUF0_DMA_BASE		0x19900000
+#define DPUF1_DMA_BASE		0x19d00000
+#define DPP_PER_DPUF		7
+#define DMA_SIZE		0x100
+
+#define RDMA_IN_CTRL_0		0x0008
+#define  IDMA_IMG_FORMAT_MASK	GENMASK(13, 8)
+#define  IDMA_IMG_FORMAT(v)	((v) << 8)
+#define  IDMA_ROT_MASK		GENMASK(6, 4)
+#define  IDMA_COMP_MASK		GENMASK(3, 0)	/* AFBC, SBWC, SAJC, BLOCK */
+#define RDMA_SRC_WIDTH		0x0010
+#define RDMA_SRC_HEIGHT		0x0014
+#define RDMA_SRC_OFFSET		0x0018
+#define  IDMA_SRC_OFFSET_Y(v)	(((v) >> 16) & 0xffff)
+#define  IDMA_SRC_OFFSET_X(v)	((v) & 0xffff)
+#define RDMA_IMG_SIZE		0x001c
+#define  IDMA_IMG_HEIGHT(v)	(((v) >> 16) & 0xffff)
+#define  IDMA_IMG_WIDTH(v)	((v) & 0xffff)
+#define RDMA_BASEADDR_P0	0x0040
+#define RDMA_SRC_STRIDE_0	0x0050
+#define  IDMA_STRIDE_0_SEL	BIT(31)
+#define  IDMA_STRIDE_0_MASK	GENMASK(23, 0)
+
+/* The DPU SysMMUs (v9). If one is enabled, RDMA_BASEADDR_P0 is an IOVA. */
+#define DPUF0_SYSMMU_BASE	0x19840000
+#define DPUF1_SYSMMU_BASE	0x19c40000
+#define REG_MMU_CTRL		0x0000
+#define  MMU_CTRL_ENABLE	BIT(0)
+
+/* Refresh cadence for command-mode panels without a hardware trigger */
+#define SW_TRIG_INTERVAL	msecs_to_jiffies(33)
+
+/*
+ * IDMA_IMG_FORMAT values for RGB. Samsung's names use the same convention
+ * as DRM fourccs, so ARGB8888 here is DRM_FORMAT_ARGB8888. simpledrm only
+ * knows the simplefb names, and the fbdev path can only blit into a subset
+ * of those, so anything without a name is rewritten to XRGB8888 / RGB565.
+ */
+struct bootfb_format {
+	const char *simplefb_name;	/* NULL: rewrite the DMA format */
+	u8 bpp;
+};
+
+#define IDMA_FMT_XRGB8888	7
+#define IDMA_FMT_RGB565		9
+
+static const struct bootfb_format bootfb_formats[] = {
+	[0] = { NULL, 4 },		/* BGRA8888 */
+	[1] = { NULL, 4 },		/* RGBA8888 */
+	[2] = { "a8b8g8r8", 4 },	/* ABGR8888 */
+	[3] = { "a8r8g8b8", 4 },	/* ARGB8888 */
+	[4] = { NULL, 4 },		/* BGRX8888 */
+	[5] = { NULL, 4 },		/* RGBX8888 */
+	[6] = { "x8b8g8r8", 4 },	/* XBGR8888 */
+	[IDMA_FMT_XRGB8888] = { "x8r8g8b8", 4 },
+	[8] = { NULL, 2 },		/* BGR565 */
+	[IDMA_FMT_RGB565] = { "r5g6b5", 2 },
+};
+
+static struct {
+	bool found;
+	bool cmd_mode;
+	bool rewrite_format;
+	unsigned int win;
+	unsigned int channel;
+	unsigned int bpp;
+	phys_addr_t dma_base;
+	phys_addr_t fb_base;
+	resource_size_t fb_size;
+	struct simplefb_platform_data pd;
+} bootfb __initdata;
+
+static int __init zumapro_bootfb_early(char *arg)
+{
+	void __iomem *regs, *win, *wincon, *dma, *mmu;
+	u32 con, ctrl, size, off, stride_reg, base, fmt;
+	unsigned int w, ch = 0, bpp, stride, width, height;
+	phys_addr_t start, end;
+
+	if (!of_flat_dt_is_compatible(of_get_flat_dt_root(), "google,zumapro"))
+		return 0;
+
+	regs = early_ioremap(DECON0_MAIN_BASE, DECON_MAIN_SIZE);
+	if (!regs)
+		return 0;
+
+	con = readl(regs + GLOBAL_CON);
+	early_iounmap(regs, DECON_MAIN_SIZE);
+	if (!(con & GLOBAL_CON_DECON_EN)) {
+		pr_info("DECON0 disabled (GLOBAL_CON=%08x), no boot framebuffer\n",
+			con);
+		return 0;
+	}
+	pr_info("DECON0 GLOBAL_CON=%08x (%srunning)\n", con,
+		con & GLOBAL_CON_RUN_STATUS ? "" : "not ");
+	bootfb.cmd_mode = con & GLOBAL_CON_OP_MODE_CMD;
+
+	wincon = early_ioremap(DECON0_WINCON_BASE, DECON_WIN_SIZE);
+	win = early_ioremap(DECON0_WIN_BASE, DECON_WIN_SIZE);
+	if (!wincon || !win)
+		goto unmap_win;
+
+	for (w = 0; w < DECON_WINDOWS; w++) {
+		u32 wc = readl(wincon + DECON_CON_WIN(w));
+
+		if (!(wc & WIN_EN))
+			continue;
+		ch = WIN_CHMAP_GET(wc);
+		pr_info("window %u enabled, channel %u, %ux%u+%ux%u\n", w, ch,
+			WIN_POS_X(readl(win + WIN_END_POSITION(w))) + 1,
+			WIN_POS_Y(readl(win + WIN_END_POSITION(w))) + 1,
+			WIN_POS_X(readl(win + WIN_START_POSITION(w))),
+			WIN_POS_Y(readl(win + WIN_START_POSITION(w))));
+		break;
+	}
+	if (w == DECON_WINDOWS) {
+		pr_info("DECON0 running but no window enabled\n");
+		goto unmap_win;
+	}
+	if (ch >= 2 * DPP_PER_DPUF) {
+		pr_info("channel %u is not a read DMA\n", ch);
+		goto unmap_win;
+	}
+	bootfb.win = w;
+	bootfb.channel = ch;
+	bootfb.dma_base = ch < DPP_PER_DPUF ?
+		DPUF0_DMA_BASE + 0x1000 * ch :
+		DPUF1_DMA_BASE + 0x1000 * (ch - DPP_PER_DPUF);
+
+	mmu = early_ioremap(ch < DPP_PER_DPUF ? DPUF0_SYSMMU_BASE :
+					       DPUF1_SYSMMU_BASE, 0x10);
+	if (mmu) {
+		u32 mmu_ctrl = readl(mmu + REG_MMU_CTRL);
+
+		early_iounmap(mmu, 0x10);
+		if (mmu_ctrl & MMU_CTRL_ENABLE) {
+			pr_info("DPU SysMMU enabled (CTRL=%08x), DMA address is an IOVA\n",
+				mmu_ctrl);
+			goto unmap_win;
+		}
+	}
+
+	dma = early_ioremap(bootfb.dma_base, DMA_SIZE);
+	if (!dma)
+		goto unmap_win;
+
+	ctrl = readl(dma + RDMA_IN_CTRL_0);
+	size = readl(dma + RDMA_IMG_SIZE);
+	off = readl(dma + RDMA_SRC_OFFSET);
+	stride_reg = readl(dma + RDMA_SRC_STRIDE_0);
+	base = readl(dma + RDMA_BASEADDR_P0);
+	width = IDMA_IMG_WIDTH(size);
+	height = IDMA_IMG_HEIGHT(size);
+	fmt = (ctrl & IDMA_IMG_FORMAT_MASK) >> 8;
+
+	pr_info("L%u: base %08x src %ux%u img %ux%u off %u,%u ctrl %08x stride %08x\n",
+		ch, base, readl(dma + RDMA_SRC_WIDTH), readl(dma + RDMA_SRC_HEIGHT),
+		width, height, IDMA_SRC_OFFSET_X(off), IDMA_SRC_OFFSET_Y(off),
+		ctrl, stride_reg);
+
+	if (fmt >= ARRAY_SIZE(bootfb_formats) || !bootfb_formats[fmt].bpp) {
+		pr_info("pixel format %u is not RGB, giving up\n", fmt);
+		goto unmap_dma;
+	}
+	if (ctrl & IDMA_COMP_MASK) {
+		pr_info("compressed/blocked layer (ctrl %08x), giving up\n", ctrl);
+		goto unmap_dma;
+	}
+	if (ctrl & IDMA_ROT_MASK)
+		pr_info("layer is rotated/flipped (ctrl %08x); console will be too\n",
+			ctrl);
+	if (!base || !width || !height) {
+		pr_info("layer not configured, giving up\n");
+		goto unmap_dma;
+	}
+
+	bpp = bootfb_formats[fmt].bpp;
+	bootfb.bpp = bpp;
+	if (stride_reg & IDMA_STRIDE_0_SEL)
+		stride = stride_reg & IDMA_STRIDE_0_MASK;
+	else
+		stride = readl(dma + RDMA_SRC_WIDTH) * bpp;
+	if (stride < width * bpp) {
+		pr_info("stride %u too small for %u pixels, giving up\n", stride,
+			width);
+		goto unmap_dma;
+	}
+
+	bootfb.fb_base = (phys_addr_t)base +
+		(phys_addr_t)IDMA_SRC_OFFSET_Y(off) * stride +
+		(phys_addr_t)IDMA_SRC_OFFSET_X(off) * bpp;
+	bootfb.fb_size = (resource_size_t)stride * (height - 1) + width * bpp;
+	bootfb.rewrite_format = !bootfb_formats[fmt].simplefb_name;
+	bootfb.pd.width = width;
+	bootfb.pd.height = height;
+	bootfb.pd.stride = stride;
+	bootfb.pd.format = bootfb.rewrite_format ?
+		(bpp == 2 ? "r5g6b5" : "x8r8g8b8") :
+		bootfb_formats[fmt].simplefb_name;
+
+	if (!memblock_is_memory(bootfb.fb_base)) {
+		pr_info("framebuffer %pa is outside RAM, giving up\n",
+			&bootfb.fb_base);
+		goto unmap_dma;
+	}
+
+	start = ALIGN_DOWN(bootfb.fb_base, PAGE_SIZE);
+	end = ALIGN(bootfb.fb_base + bootfb.fb_size, PAGE_SIZE);
+	memblock_reserve(start, end - start);
+	memblock_mark_nomap(start, end - start);
+	bootfb.found = true;
+
+	pr_info("%ux%u %s stride %u at %pa (%s mode), reserved %pa-%pa\n",
+		width, height, bootfb.pd.format, stride, &bootfb.fb_base,
+		bootfb.cmd_mode ? "command" : "video", &start, &end);
+
+unmap_dma:
+	early_iounmap(dma, DMA_SIZE);
+unmap_win:
+	if (win)
+		early_iounmap(win, DECON_WIN_SIZE);
+	if (wincon)
+		early_iounmap(wincon, DECON_WIN_SIZE);
+	return 0;
+}
+early_param("zumapro_bootfb", zumapro_bootfb_early);
+
+static void __iomem *decon_main;
+static struct delayed_work sw_trig_work;
+
+static void zumapro_bootfb_sw_trig(struct work_struct *work)
+{
+	u32 val = readl(decon_main + TRIG_CON);
+
+	val &= ~(HW_TRIG_EN | HW_TRIG_MASK_DECON);
+	val |= SW_TRIG_EN | SW_TRIG_DET_EN;
+	writel(val, decon_main + TRIG_CON);
+	schedule_delayed_work(&sw_trig_work, SW_TRIG_INTERVAL);
+}
+
+static int __init zumapro_bootfb_init(void)
+{
+	struct resource res;
+	struct platform_device *pdev;
+	u32 val;
+
+	if (!bootfb.found)
+		return 0;
+
+	decon_main = ioremap(DECON0_MAIN_BASE, DECON_MAIN_SIZE);
+	if (!decon_main)
+		return -ENOMEM;
+
+	if (bootfb.rewrite_format) {
+		void __iomem *dma = ioremap(bootfb.dma_base, DMA_SIZE);
+
+		if (!dma) {
+			iounmap(decon_main);
+			return -ENOMEM;
+		}
+		val = readl(dma + RDMA_IN_CTRL_0) & ~IDMA_IMG_FORMAT_MASK;
+		val |= IDMA_IMG_FORMAT(bootfb.bpp == 2 ? IDMA_FMT_RGB565 :
+							 IDMA_FMT_XRGB8888);
+		writel(val, dma + RDMA_IN_CTRL_0);
+		iounmap(dma);
+		/* DMA registers are shadowed; latch them at the next frame */
+		writel(SHD_REG_UP_REQ_GLOBAL | SHD_REG_UP_REQ_CMP |
+		       SHD_REG_UP_REQ_WIN(bootfb.win),
+		       decon_main + SHD_REG_UP_REQ);
+		pr_info("rewrote L%u pixel format to %s\n", bootfb.channel,
+			bootfb.pd.format);
+	}
+
+	if (bootfb.cmd_mode) {
+		val = readl(decon_main + TRIG_CON);
+		if ((val & HW_TRIG_SEL_MASK) != HW_TRIG_SEL_NONE) {
+			/* Let every panel TE push the next frame */
+			val &= ~HW_TRIG_MASK_DECON;
+			val |= HW_TRIG_EN;
+			writel(val, decon_main + TRIG_CON);
+			pr_info("hardware trigger unmasked (TRIG_CON=%08x)\n", val);
+		} else {
+			INIT_DELAYED_WORK(&sw_trig_work, zumapro_bootfb_sw_trig);
+			schedule_delayed_work(&sw_trig_work, 0);
+			pr_info("no hardware trigger, software-triggering at 30 Hz\n");
+		}
+	}
+
+	res = DEFINE_RES_MEM_NAMED(bootfb.fb_base, bootfb.fb_size,
+				   "zumapro-bootfb");
+	pdev = platform_device_register_resndata(NULL, "simple-framebuffer", 0,
+						 &res, 1, &bootfb.pd,
+						 sizeof(bootfb.pd));
+	if (IS_ERR(pdev)) {
+		pr_err("failed to register simple-framebuffer: %ld\n",
+		       PTR_ERR(pdev));
+		return PTR_ERR(pdev);
+	}
+
+	pr_info("registered %ux%u %s framebuffer at %pa\n", bootfb.pd.width,
+		bootfb.pd.height, bootfb.pd.format, &bootfb.fb_base);
+	return 0;
+}
+device_initcall(zumapro_bootfb_init);

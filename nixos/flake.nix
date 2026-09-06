@@ -148,6 +148,12 @@
           ]
           ++ extraModules;
         };
+      mkTegu =
+        extraModules:
+        nixpkgs.lib.nixosSystem {
+          system = "aarch64-linux";
+          modules = [ ./hosts/tegu ] ++ extraModules;
+        };
     in
     {
       nixosConfigurations.mina = mkHost {
@@ -171,15 +177,21 @@
 
       # Google Pixel 9a. Standalone: the desktop configuration.nix assumes an
       # EFI machine, and the phone is delivered as flashable images instead.
-      nixosConfigurations.tegu = nixpkgs.lib.nixosSystem {
-        system = "aarch64-linux";
-        modules = [ ./hosts/tegu ];
-      };
+      nixosConfigurations.tegu = mkTegu [ ];
 
       packages.aarch64-linux.tegu-images =
         nixpkgs.legacyPackages.aarch64-linux.callPackage ./hosts/tegu/images.nix
           {
             nixos = self.nixosConfigurations.tegu;
+          };
+
+      # From an x86_64 host the kernel is cross-compiled natively rather than
+      # under QEMU user emulation, and the images are assembled natively too;
+      # only the NixOS closure's own small derivations run emulated.
+      packages.x86_64-linux.tegu-images =
+        nixpkgs.legacyPackages.x86_64-linux.callPackage ./hosts/tegu/images.nix
+          {
+            nixos = mkTegu [ ./hosts/tegu/cross-kernel.nix ];
           };
     };
 }
