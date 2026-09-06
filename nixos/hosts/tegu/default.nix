@@ -31,6 +31,12 @@
       "console=tty0"
       # 1080 px across at ~430 dpi; the 8x16 default is unreadable
       "fbcon=font:TER16x32"
+      # Take the panel over immediately. fbcon defers handover on a firmware
+      # framebuffer, waiting for a real display driver to replace it; on this
+      # device that driver does not exist, so without nodefer the boot splash
+      # stays on screen and nothing is ever printed. This was only masked
+      # earlier because a kernel panic forces the handover anyway.
+      "fbcon=nodefer"
       # No clock/power-domain drivers for zumapro yet: never gate what the
       # bootloader left on, or the panel goes dark
       "clk_ignore_unused"

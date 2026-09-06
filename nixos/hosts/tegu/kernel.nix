@@ -88,17 +88,6 @@ let
         sha256 = "0w62iaz3yfmv82h36dziqc26ah4q97w31k5s3vxcq1l9gkygndld";
       };
 
-      # The boot framebuffer driver (see ./kernel/zumapro-bootfb.c) goes in
-      # as a patch, not postPatch: nixpkgs generates .config in a separate
-      # derivation that only sees kernelPatches, and an option that is not
-      # in Kconfig at that point is silently dropped.
-      kernelPatches = [
-        {
-          name = "zumapro-bootfb";
-          patch = ./kernel/zumapro-bootfb.patch;
-        }
-      ];
-
       defconfig = "defconfig";
       # Don't let nixpkgs' generic "enable everything as a module" pass undo
       # the trimming below.
@@ -158,7 +147,6 @@ let
             # the framebuffer the bootloader left scanning out to simpledrm,
             # and fbcon puts the kernel log on the panel. That is the debug
             # console for this port until something else works.
-            ZUMAPRO_BOOTFB = yes;
             DRM = yes;
             DRM_SIMPLEDRM = yes;
             DRM_FBDEV_EMULATION = yes;
@@ -226,11 +214,6 @@ let
 in
 kernel.overrideAttrs (old: {
   postPatch = (old.postPatch or "") + ''
-    cp ${./dts}/zumapro.dtsi \
-       ${./dts}/zumapro-pixel-common.dtsi \
-       ${./dts}/zumapro-tegu.dts \
-       arch/arm64/boot/dts/exynos/google/
-    printf 'dtb-$(CONFIG_ARCH_EXYNOS) += zumapro-tegu.dtb\n' \
-      >> arch/arm64/boot/dts/exynos/google/Makefile
+    bash ${./kernel/apply.sh} ${./kernel} ${./dts}
   '';
 })
