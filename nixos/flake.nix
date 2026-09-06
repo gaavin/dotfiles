@@ -1,5 +1,5 @@
 {
-  description = "NixOS configurations for mina and air";
+  description = "NixOS configurations for mina, air and tegu";
 
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
@@ -77,6 +77,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       chaotic,
       home-manager,
@@ -167,5 +168,18 @@
           nixos-apple-silicon.nixosModules.apple-silicon-support
         ];
       };
+
+      # Google Pixel 9a. Standalone: the desktop configuration.nix assumes an
+      # EFI machine, and the phone is delivered as flashable images instead.
+      nixosConfigurations.tegu = nixpkgs.lib.nixosSystem {
+        system = "aarch64-linux";
+        modules = [ ./hosts/tegu ];
+      };
+
+      packages.aarch64-linux.tegu-images =
+        nixpkgs.legacyPackages.aarch64-linux.callPackage ./hosts/tegu/images.nix
+          {
+            nixos = self.nixosConfigurations.tegu;
+          };
     };
 }

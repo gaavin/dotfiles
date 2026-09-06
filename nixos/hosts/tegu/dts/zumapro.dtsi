@@ -1,0 +1,375 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Google Tensor G4 (zumapro) SoC — minimal mainline description.
+ *
+ * There is no upstream support for this SoC yet. Everything here was
+ * derived from the downstream android-gs-tegu-6.1 base DTB
+ * (zumapro-a1-foplp.dtb) and modelled on the upstream gs101.dtsi:
+ *   - CPU MPIDRs / capacities, PSCI method
+ *   - GIC-v3 and generic timer (24.576 MHz)
+ *   - debug UART at 0x10870000 (the "uart0"/serial_0 the bootloader logs on)
+ *   - firmware / bootloader carve-outs that must stay no-map
+ *
+ * Deliberately absent (no mainline driver, or unknown register map):
+ * clock controllers, pinctrl, PMIC/ACPM, UFS, USB, DPU/DSIM, WLAN, modem.
+ */
+
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+/ {
+	compatible = "google,zumapro";
+	#address-cells = <2>;
+	#size-cells = <1>;
+
+	interrupt-parent = <&gic>;
+
+	cpus {
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		/* One DSU cluster: 4x Cortex-A520, 3x Cortex-A720, 1x Cortex-X4 */
+		cpu-map {
+			cluster0 {
+				core0 {
+					cpu = <&cpu0>;
+				};
+
+				core1 {
+					cpu = <&cpu1>;
+				};
+
+				core2 {
+					cpu = <&cpu2>;
+				};
+
+				core3 {
+					cpu = <&cpu3>;
+				};
+
+				core4 {
+					cpu = <&cpu4>;
+				};
+
+				core5 {
+					cpu = <&cpu5>;
+				};
+
+				core6 {
+					cpu = <&cpu6>;
+				};
+
+				core7 {
+					cpu = <&cpu7>;
+				};
+			};
+		};
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a520";
+			reg = <0x0 0x0000>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <193>;
+		};
+
+		cpu1: cpu@100 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a520";
+			reg = <0x0 0x0100>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <193>;
+		};
+
+		cpu2: cpu@200 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a520";
+			reg = <0x0 0x0200>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <193>;
+		};
+
+		cpu3: cpu@300 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a520";
+			reg = <0x0 0x0300>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <193>;
+		};
+
+		cpu4: cpu@400 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a720";
+			reg = <0x0 0x0400>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <927>;
+		};
+
+		cpu5: cpu@500 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a720";
+			reg = <0x0 0x0500>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <927>;
+		};
+
+		cpu6: cpu@600 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a720";
+			reg = <0x0 0x0600>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <927>;
+		};
+
+		cpu7: cpu@700 {
+			device_type = "cpu";
+			compatible = "arm,cortex-x4";
+			reg = <0x0 0x0700>;
+			enable-method = "psci";
+			capacity-dmips-mhz = <1024>;
+		};
+	};
+
+	/* ect node is required to be present by the bootloader (as on gs101) */
+	ect {
+	};
+
+	ext_24_5m: clock-1 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24576000>;
+		clock-output-names = "oscclk";
+	};
+
+	/*
+	 * Downstream feeds the debug UART from ext_200m for both its gate and
+	 * IP clocks; the bootloader leaves that path running.
+	 */
+	ext_200m: clock-2 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+		clock-output-names = "ext-200m";
+	};
+
+	pmu {
+		compatible = "arm,armv8-pmuv3";
+		interrupts = <GIC_PPI 7 IRQ_TYPE_LEVEL_HIGH 0>;
+	};
+
+	psci {
+		compatible = "arm,psci-1.0";
+		method = "smc";
+	};
+
+	reserved_memory: reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <1>;
+		ranges;
+
+		/* Exynos Clock Table, filled in by the bootloader */
+		ect_reserved: ect@90000000 {
+			reg = <0x0 0x90000000 0x60000>;
+			no-map;
+		};
+
+		gsa_reserved_protected: gsa@90200000 {
+			reg = <0x0 0x90200000 0x3ff000>;
+			no-map;
+		};
+
+		gsa_shmem_reserved: gsa-shmem@905ff000 {
+			reg = <0x0 0x905ff000 0x1000>;
+			no-map;
+		};
+
+		gxp_scratchpad_reserved: gxp-scratchpad@91300000 {
+			reg = <0x0 0x91300000 0x60000>;
+			no-map;
+		};
+
+		iif_wait_table_reserved: iif-wait-table@91360000 {
+			reg = <0x0 0x91360000 0x20000>;
+			no-map;
+		};
+
+		iif_signal_table_reserved: iif-signal-table@91380000 {
+			reg = <0x0 0x91380000 0x20000>;
+			no-map;
+		};
+
+		gxp_secure_data_reserved: gxp-secure-data@91400000 {
+			reg = <0x0 0x91400000 0x900000>;
+			no-map;
+		};
+
+		gxp_fw_data_reserved: gxp-fw-data@91d00000 {
+			reg = <0x0 0x91d00000 0x300000>;
+			no-map;
+		};
+
+		gxp_mcu_fw_reserved: gxp-mcu-fw@92000000 {
+			reg = <0x0 0x92000000 0x400000>;
+			no-map;
+		};
+
+		tpu_fw_reserved: tpu-fw@92e00000 {
+			reg = <0x0 0x92e00000 0x1200000>;
+			no-map;
+		};
+
+		aoc_reserve: aoc@94000000 {
+			reg = <0x0 0x94000000 0x3000000>;
+			no-map;
+		};
+
+		xhci_dma_reserved: xhci-dma@97000000 {
+			reg = <0x0 0x97000000 0x400000>;
+			no-map;
+		};
+
+		seclog_reserved: seclog@c3000000 {
+			reg = <0x0 0xc3000000 0x80000>;
+			no-map;
+		};
+
+		/* Debug-core log carve-outs (written by firmware) */
+		log_header_reserved: log-header@d8100000 {
+			reg = <0x0 0xd8100000 0x10000>;
+			no-map;
+		};
+
+		log_kevents_reserved: log-kevents@d8110000 {
+			reg = <0x0 0xd8110000 0x700000>;
+			no-map;
+		};
+
+		log_s2d_reserved: log-s2d@d8810000 {
+			reg = <0x0 0xd8810000 0x1800000>;
+			no-map;
+		};
+
+		log_array_reset_reserved: log-array-reset@da010000 {
+			reg = <0x0 0xda010000 0xa00000>;
+			no-map;
+		};
+
+		log_array_panic_reserved: log-array-panic@daa10000 {
+			reg = <0x0 0xdaa10000 0xa00000>;
+			no-map;
+		};
+
+		log_slcdump_reserved: log-slcdump@db410000 {
+			reg = <0x0 0xdb410000 0x1100000>;
+			no-map;
+		};
+
+		log_preslcdump_reserved: log-preslcdump@dc510000 {
+			reg = <0x0 0xdc510000 0x1100000>;
+			no-map;
+		};
+
+		log_bcm_reserved: log-bcm@dd610000 {
+			reg = <0x0 0xdd610000 0x400000>;
+			no-map;
+		};
+
+		log_itmon_reserved: log-itmon@dda10000 {
+			reg = <0x0 0xdda10000 0x10000>;
+			no-map;
+		};
+
+		log_s2d_extract_reserved: log-s2d-extract@dda20000 {
+			reg = <0x0 0xdda20000 0x600000>;
+			no-map;
+		};
+
+		/* Modem (CP) shared memory */
+		cp_reserved_1: cp@e8000000 {
+			reg = <0x0 0xe8000000 0x2000000>;
+			no-map;
+		};
+
+		cp_reserved: cp@ea400000 {
+			reg = <0x0 0xea400000 0xc00000>;
+			no-map;
+		};
+
+		cp_msi_reserved: cp-msi@f6200000 {
+			reg = <0x0 0xf6200000 0x1000>;
+			no-map;
+		};
+
+		dss_log_reserved: dss-log-reserved@fd3f0000 {
+			reg = <0x0 0xfd3f0000 0xe000>;
+			no-map;
+		};
+
+		debug_kinfo_reserved: debug-kinfo-reserved@fd3fe000 {
+			reg = <0x0 0xfd3fe000 0x1000>;
+			no-map;
+		};
+
+		/*
+		 * Same ramoops window Android uses, so a crashed mainline boot
+		 * leaves its console log where a stock boot can read it back
+		 * from /sys/fs/pstore.
+		 */
+		ramoops@fd3ff000 {
+			compatible = "ramoops";
+			reg = <0x0 0xfd3ff000 0x400000>;
+			record-size = <0x20000>;
+			console-size = <0x200000>;
+			pmsg-size = <0x200000>;
+		};
+
+		bldr_log_reserved: bldr-log-reserved@fd800000 {
+			reg = <0x0 0xfd800000 0x100000>;
+			no-map;
+		};
+	};
+
+	soc: soc@0 {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0x0 0x0 0x0 0x40000000>;
+
+		gic: interrupt-controller@10400000 {
+			compatible = "arm,gic-v3";
+			#address-cells = <0>;
+			#interrupt-cells = <4>;
+			interrupt-controller;
+			reg = <0x10400000 0x10000>,  /* GICD */
+			      <0x10440000 0x200000>; /* GICR * 8 */
+			interrupts = <GIC_PPI 9 IRQ_TYPE_LEVEL_HIGH 0>;
+		};
+
+		/*
+		 * Debug UART. Downstream: samsung,exynos-uart, usi-serial-v2,
+		 * 256-byte FIFO, 32-bit accesses, SPI 641. Register-compatible
+		 * with the gs101 debug UART as far as the samsung_tty driver is
+		 * concerned, so reuse that binding.
+		 */
+		serial_0: serial@10870000 {
+			compatible = "google,gs101-uart";
+			reg = <0x10870000 0x100>;
+			interrupts = <GIC_SPI 641 IRQ_TYPE_LEVEL_HIGH 0>;
+			clocks = <&ext_200m>, <&ext_200m>;
+			clock-names = "uart", "clk_uart_baud0";
+			reg-io-width = <4>;
+			samsung,uart-fifosize = <256>;
+
+			status = "disabled";
+		};
+	};
+
+	timer {
+		compatible = "arm,armv8-timer";
+		interrupts =
+		   <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(8) | IRQ_TYPE_LEVEL_LOW) 0>,
+		   <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(8) | IRQ_TYPE_LEVEL_LOW) 0>,
+		   <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(8) | IRQ_TYPE_LEVEL_LOW) 0>,
+		   <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(8) | IRQ_TYPE_LEVEL_LOW) 0>,
+		   <GIC_PPI 12 (GIC_CPU_MASK_SIMPLE(8) | IRQ_TYPE_LEVEL_LOW) 0>;
+	};
+};

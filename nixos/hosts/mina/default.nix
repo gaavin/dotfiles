@@ -8,6 +8,10 @@
 
   networking.hostName = "mina";
 
+  # Build the aarch64 Pixel 9a images (hosts/tegu) here under QEMU user
+  # emulation; air is too small for the kernel + Plasma Mobile closure.
+  boot.binfmt.emulatedSystems = [ "aarch64-linux" ];
+
   virtualisation.virtualbox.host = {
     enable = true;
     enableExtensionPack = true;

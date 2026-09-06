@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Google Pixel 9a (tegu) Device Tree
+ */
+
+/dts-v1/;
+
+#include "zumapro-pixel-common.dtsi"
+
+/ {
+	model = "Google Pixel 9a";
+	compatible = "google,tegu", "google,zumapro";
+};

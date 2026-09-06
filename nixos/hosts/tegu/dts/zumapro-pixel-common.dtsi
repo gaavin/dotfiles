@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Device Tree nodes common to all Tensor G4 (zumapro) Pixels.
+ */
+
+/dts-v1/;
+
+#include "zumapro.dtsi"
+
+/ {
+	aliases {
+		serial0 = &serial_0;
+	};
+
+	chosen {
+		/* Bootloader expects bootargs specified otherwise it crashes */
+		bootargs = "";
+		stdout-path = "serial0:115200n8";
+	};
+
+	/*
+	 * Placeholder only: ABL patches this node with the real DRAM layout
+	 * (8 GiB on the Pixel 9a) before jumping to the kernel.
+	 */
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x80000000>;
+	};
+};
+
+&serial_0 {
+	status = "okay";
+};
