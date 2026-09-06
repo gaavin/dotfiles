@@ -403,6 +403,8 @@
 		 * it does not risk the dead-register hang that USB caused.
 		 */
 		ufs_0_phy: phy@13204000 {
+			/* Disabled with its controller; see ufs@13200000. */
+			status = "disabled";
 			compatible = "google,gs101-ufs-phy";
 			reg = <0x13204000 0x3000>;
 			reg-names = "phy-pma";
@@ -413,6 +415,36 @@
 		};
 
 		ufs_0: ufs@13200000 {
+			/*
+			 * DISABLED: probing this panics the kernel.
+			 *
+			 * Captured over UART on hardware:
+			 *
+			 *   scsi host0: ufshcd
+			 *   SError Interrupt on CPU7, code 0xbe000411
+			 *   samsung_ufs_phy_power_on
+			 *   exynos_ufs_link_startup_notify
+			 *   ufshcd_init / exynos_ufs_probe
+			 *   Kernel panic: Asynchronous SError Interrupt
+			 *
+			 * An SError is an asynchronous external abort: the
+			 * controller is being pointed at an address that is
+			 * not a device. Every other register here was derived
+			 * from gs101's fixed offsets relative to the host
+			 * controller (vs_hci +0x1100, unipro +0x80000, phy
+			 * +0x4000) and those all match the downstream node.
+			 * "ufsp" is the exception: gs101 places it at
+			 * hci-0x100000, which would be 0x13100000, and the
+			 * downstream node lists no such region. The 0x132a0000
+			 * used below is a guess and is the prime suspect.
+			 *
+			 * To resume: try ufsp at 0x13100000, and if that still
+			 * faults, dump the candidate regions from the rescue
+			 * userspace via /dev/mem before letting the driver
+			 * touch them. Storage is what a real root filesystem
+			 * needs, so this is the top of the queue.
+			 */
+			status = "disabled";
 			compatible = "google,gs101-ufs";
 			reg = <0x13200000 0x200>,
 			      <0x13201100 0x200>,

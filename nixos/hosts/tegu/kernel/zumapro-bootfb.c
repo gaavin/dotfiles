@@ -435,17 +435,53 @@ unmap_win:
 early_param("zumapro_bootfb", zumapro_bootfb_early);
 
 /*
- * Nothing here touches DECON. An earlier version unmasked the panel's
- * hardware frame trigger, on the theory that a command-mode panel needs to be
- * told to fetch each frame. That was wrong and it froze the display: the
- * bootloader is already driving the panel perfectly well, and unmasking the
- * trigger makes DECON wait for a TE signal that is not necessarily running.
- * The logo would be drawn and then the screen would never update again.
+ * Frame triggering.
  *
- * The rule this port keeps relearning: the bootloader left the display in a
- * working state, so read its registers to find the framebuffer and change
- * nothing.
+ * This panel is in command mode: DECON only pushes a frame when triggered, so
+ * writes into the framebuffer are invisible until one happens. The bootloader
+ * draws its logo and then stops triggering, which is why removing this code
+ * left the screen stuck on the logo with the kernel running fine behind it.
+ *
+ * So this is the one place the driver does write to the display, and it is
+ * necessary rather than opportunistic. Everything else (pixel format, window
+ * configuration) is left exactly as the bootloader set it; attempts to
+ * reprogram those were the cause of every display problem this port hit.
+ *
+ * A periodic software trigger runs regardless of whether the hardware TE
+ * trigger could be unmasked. Relying on TE alone means trusting that the
+ * bootloader left the panel's tear-effect signal running, which is not
+ * something this port can verify.
  */
+static void __iomem *decon_main;
+static struct delayed_work sw_trig_work;
+
+static void zumapro_bootfb_sw_trig(struct work_struct *work)
+{
+	u32 val = readl(decon_main + TRIG_CON);
+
+	val &= ~HW_TRIG_MASK_DECON;
+	val |= SW_TRIG_EN | SW_TRIG_DET_EN;
+	writel(val, decon_main + TRIG_CON);
+	writel(SHD_REG_UP_REQ_GLOBAL, decon_main + SHD_REG_UP_REQ);
+	schedule_delayed_work(&sw_trig_work, SW_TRIG_INTERVAL);
+}
+/*
+ * Stage 20: every initcall has run.
+ *
+ * The panel console has proved unreliable as evidence — it draws the boot
+ * logo and then shows nothing, and text has only ever appeared when a panic
+ * force-flushed the consoles. That makes "kernel hung in a driver" and
+ * "kernel fine, console silent" indistinguishable. A reset is not
+ * ambiguous: boot with zumapro_bootfb=20 and if the phone reboots, all
+ * initcalls completed and the problem is later than driver init.
+ */
+static int __init zumapro_bootfb_late_probe(void)
+{
+	bootfb_probe(20);
+	return 0;
+}
+late_initcall_sync(zumapro_bootfb_late_probe);
+
 static int __init zumapro_bootfb_init(void)
 {
 	struct resource res;
@@ -453,6 +489,24 @@ static int __init zumapro_bootfb_init(void)
 
 	if (!bootfb.found)
 		return 0;
+
+	decon_main = ioremap(DECON0_MAIN_BASE, DECON_MAIN_SIZE);
+	if (!decon_main)
+		return -ENOMEM;
+
+	if (bootfb.cmd_mode) {
+		u32 val = readl(decon_main + TRIG_CON);
+
+		if ((val & HW_TRIG_SEL_MASK) != HW_TRIG_SEL_NONE) {
+			val &= ~HW_TRIG_MASK_DECON;
+			val |= HW_TRIG_EN;
+			writel(val, decon_main + TRIG_CON);
+			pr_err("BOOTFB hw trigger unmasked TRIG_CON=%08x\n", val);
+		}
+		/* Keep pushing frames even if TE never fires. */
+		INIT_DELAYED_WORK(&sw_trig_work, zumapro_bootfb_sw_trig);
+		schedule_delayed_work(&sw_trig_work, SW_TRIG_INTERVAL);
+	}
 
 	res = DEFINE_RES_MEM_NAMED(bootfb.fb_base, bootfb.fb_size,
 				   "zumapro-bootfb");

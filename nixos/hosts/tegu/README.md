@@ -29,7 +29,9 @@ sources, then tested by booting it.
 | Debug UART | **Probes and binds** (`ttySAC0` at `0x10870000`). Untested for output: no cable |
 | Register access from userspace | **Yes**, `/dev/mem` (`STRICT_DEVMEM` deliberately off) |
 | Rescue userspace | **Yes**, linked into the kernel image |
-| Storage, USB, WLAN, modem, GPU, touch, audio, camera | No |
+| Serial console | **Yes**, with a USB-C debug board (read-only) |
+| Storage | Described but **disabled**: probing panics with an SError, see below |
+| USB, WLAN, modem, GPU, touch, audio, camera | No |
 
 ## The panel console
 
@@ -56,6 +58,23 @@ to convert into BGRX8888. Do **not** try to fix this by reprogramming the
 scanout engine instead: those registers are shadowed and only latch on a frame
 boundary, so the writes silently do nothing, and poking a live display engine
 mid-boot destabilises it. That mistake cost several boot cycles.
+
+## Serial console
+
+A USB-C debug board gives a read-only UART. This is by far the best instrument
+available and everything below it in this section is what had to be done
+*without* one.
+
+```sh
+picocom -b 115200 /dev/ttyACM0      # or: cat /dev/ttyACM0
+```
+
+The kernel writes to it with `console=ttySAC0,115200n8`; `earlycon` works too,
+and the bootloader's own log comes out at the same rate. Note the debug board
+occupies the USB-C port, so fastboot and UART are not simultaneously
+available: flash first, then attach the board and power on. Flashing the
+kernel to `boot_a` means the phone boots mainline unattended, which is the
+workflow this port now uses.
 
 ## Debugging a device with almost no output
 
@@ -167,10 +186,16 @@ Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
 
 ## Next steps, in order
 
-1. **Storage.** Add the UFS controller (`ufs@13200000`, sysreg `@13020000`) so a
-   root filesystem can mount. Mainline has `samsung,exynos-ufs` with gs101
-   support. Blocker: no clock driver, so it likely needs fixed-clock stubs in
-   the device tree standing in for the real controller.
+1. **Storage.** The controller and PHY are described (`ufs@13200000`) but
+   disabled: probing panics with an asynchronous SError inside
+   `samsung_ufs_phy_power_on`, i.e. the driver is pointed at an address that
+   is not a device. Every register derived from gs101's relative offsets
+   (`vs_hci` +0x1100, `unipro` +0x80000, `phy` +0x4000) matches the downstream
+   node; only `ufsp` had to be guessed, and gs101 puts it at hci-0x100000
+   (0x13100000 here) which the downstream node does not list. Try that, and
+   confirm the region responds by reading it from the rescue userspace via
+   `/dev/mem` before letting the driver touch it. Fixed-clock stubs already
+   stand in for the driverless clock controller.
 2. **USB.** `usb@11210000`, PHY `@11100000`. Establish the power state from
    userspace first (item 5 above). A gadget serial console ends the
    photograph-the-screen workflow; `USB_G_SERIAL` and `U_SERIAL_CONSOLE` are
