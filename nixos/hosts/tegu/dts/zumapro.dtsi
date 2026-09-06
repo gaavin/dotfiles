@@ -345,6 +345,33 @@
 		};
 
 		/*
+		 * USB 3.2 DRD controller.
+		 *
+		 * Described bare, as the generic Synopsys core rather than
+		 * through the Exynos glue, because zumapro has no clock or
+		 * power-domain driver for the glue to ask for. dwc3 treats
+		 * clocks and PHYs as optional, and the bootloader leaves the
+		 * controller and its PHY running (it is how fastboot talks),
+		 * so with clk_ignore_unused the core probes onto hardware that
+		 * is already initialised.
+		 *
+		 * Peripheral-only on purpose: the point is a gadget serial
+		 * console on the USB-C port, which is the only way to get a
+		 * log off this device without a debug cable.
+		 */
+		usb: usb@11210000 {
+			compatible = "snps,dwc3";
+			reg = <0x11210000 0x10000>;
+			interrupts = <GIC_SPI 402 IRQ_TYPE_LEVEL_HIGH 0>;
+			dr_mode = "peripheral";
+			maximum-speed = "high-speed";
+			/* Do not touch a PHY we have no driver for */
+			snps,dis_u2_susphy_quirk;
+			snps,dis_u3_susphy_quirk;
+			snps,dis_enblslpm_quirk;
+		};
+
+		/*
 		 * Debug UART. Downstream: samsung,exynos-uart, usi-serial-v2,
 		 * 256-byte FIFO, 32-bit accesses, SPI 641. Register-compatible
 		 * with the gs101 debug UART as far as the samsung_tty driver is

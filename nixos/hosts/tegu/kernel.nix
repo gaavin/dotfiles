@@ -9,11 +9,16 @@
   lib,
   buildLinux,
   fetchurl,
+  callPackage,
   ...
 }@args:
 
 let
   version = "7.3-rc1";
+
+  # Built into the image because the bootloader discards boot.img's ramdisk
+  # on this device; see ./initramfs.nix.
+  initramfs = callPackage ./initramfs.nix { };
 
   # Every CONFIG_ARCH_*=y in arch/arm64/configs/defconfig for 7.3-rc1 except
   # ARCH_EXYNOS, which the Tensor line (gs101 and, here, zumapro) lives under.
@@ -136,12 +141,18 @@ let
             USB_DWC3_DUAL_ROLE = yes;
             USB_DWC3_EXYNOS = yes;
             USB_GADGET = yes;
-            USB_CONFIGFS = yes;
-            USB_CONFIGFS_NCM = yes;
-            USB_CONFIGFS_ACM = yes;
-            USB_CONFIGFS_RNDIS = yes;
-            USB_CONFIGFS_MASS_STORAGE = yes;
             USB_ROLE_SWITCH = yes;
+
+            # Gadget serial, built in and bound at boot, so the USB-C port
+            # comes up as a terminal on the host. This is the log channel for
+            # a device with no debug cable; the configfs gadget is left out
+            # because two built-in gadget drivers would race for the one UDC.
+            USB_LIBCOMPOSITE = yes;
+            USB_U_SERIAL = yes;
+            USB_F_ACM = yes;
+            USB_F_SERIAL = yes;
+            USB_G_SERIAL = yes;
+            U_SERIAL_CONSOLE = yes;
 
             # Display: no DPU driver exists, so ./kernel/zumapro-bootfb.c hands
             # the framebuffer the bootloader left scanning out to simpledrm,
@@ -162,7 +173,21 @@ let
             LOGO = yes;
             LOGO_LINUX_CLUT224 = yes;
 
+            # Bring-up: this port has no driver for most of the SoC, so the
+            # only way to inspect or drive a block is /dev/mem from userspace.
+            # STRICT_DEVMEM would refuse those reads, and IO_STRICT_DEVMEM
+            # also refuses any range a driver has claimed. Both are dropped
+            # deliberately, and should come back once real drivers exist.
+            DEVMEM = yes;
+            STRICT_DEVMEM = no;
+            IO_STRICT_DEVMEM = no;
+
             # Filesystems used by the images
+            # Rescue userspace, linked into the image (see ./initramfs.nix)
+            BLK_DEV_INITRD = yes;
+            INITRAMFS_SOURCE = freeform "${initramfs}";
+            RD_GZIP = yes;
+
             EXT4_FS = yes;
             F2FS_FS = yes;
             SQUASHFS = yes;

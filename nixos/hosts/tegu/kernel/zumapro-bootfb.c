@@ -82,6 +82,8 @@
 #define DPP_PER_DPUF		7
 #define DMA_SIZE		0x100
 
+#define RDMA_ENABLE		0x0000
+#define  IDMA_SFR_UPDATE_FORCE	BIT(4)	/* latch the shadowed SFRs now */
 #define RDMA_IN_CTRL_0		0x0008
 #define  IDMA_IMG_FORMAT_MASK	GENMASK(13, 8)
 #define  IDMA_IMG_FORMAT(v)	((v) << 8)
@@ -124,11 +126,19 @@ struct bootfb_format {
 #define IDMA_FMT_RGB565		9
 
 static const struct bootfb_format bootfb_formats[] = {
-	[0] = { NULL, 4 },		/* BGRA8888 */
+	/*
+	 * The Pixel bootloader hands over a BGRA8888 buffer. Alpha is ignored
+	 * for a scanout-only layer, so it is described as BGRX8888, which DRM
+	 * can convert into (drm_fb_xrgb8888_to_bgrx8888). "b8g8r8x8" is added
+	 * to the simplefb format table by this patch; upstream has no name for
+	 * this order, which is why it previously had to be reported as
+	 * x8r8g8b8 and came out with red and blue swapped.
+	 */
+	[0] = { "b8g8r8x8", 4 },	/* BGRA8888 */
 	[1] = { NULL, 4 },		/* RGBA8888 */
 	[2] = { "a8b8g8r8", 4 },	/* ABGR8888 */
 	[3] = { "a8r8g8b8", 4 },	/* ARGB8888 */
-	[4] = { NULL, 4 },		/* BGRX8888 */
+	[4] = { "b8g8r8x8", 4 },	/* BGRX8888 */
 	[5] = { NULL, 4 },		/* RGBX8888 */
 	[6] = { "x8b8g8r8", 4 },	/* XBGR8888 */
 	[IDMA_FMT_XRGB8888] = { "x8r8g8b8", 4 },
@@ -139,10 +149,12 @@ static const struct bootfb_format bootfb_formats[] = {
 static struct {
 	bool found;
 	bool cmd_mode;
-	bool rewrite_format;
+	bool format_guessed;
 	unsigned int win;
 	unsigned int channel;
 	unsigned int bpp;
+	u32 fmt;
+	u32 ctrl;
 	phys_addr_t dma_base;
 	phys_addr_t fb_base;
 	resource_size_t fb_size;
@@ -334,6 +346,8 @@ static int __init zumapro_bootfb_early(char *arg)
 
 	bpp = bootfb_formats[fmt].bpp;
 	bootfb.bpp = bpp;
+	bootfb.fmt = fmt;
+	bootfb.ctrl = ctrl;
 	if (stride_reg & IDMA_STRIDE_0_SEL)
 		stride = stride_reg & IDMA_STRIDE_0_MASK;
 	else
@@ -348,11 +362,11 @@ static int __init zumapro_bootfb_early(char *arg)
 		(phys_addr_t)IDMA_SRC_OFFSET_Y(off) * stride +
 		(phys_addr_t)IDMA_SRC_OFFSET_X(off) * bpp;
 	bootfb.fb_size = (resource_size_t)stride * (height - 1) + width * bpp;
-	bootfb.rewrite_format = !bootfb_formats[fmt].simplefb_name;
+	bootfb.format_guessed = !bootfb_formats[fmt].simplefb_name;
 	bootfb.pd.width = width;
 	bootfb.pd.height = height;
 	bootfb.pd.stride = stride;
-	bootfb.pd.format = bootfb.rewrite_format ?
+	bootfb.pd.format = bootfb.format_guessed ?
 		(bpp == 2 ? "r5g6b5" : "x8r8g8b8") :
 		bootfb_formats[fmt].simplefb_name;
 
@@ -370,6 +384,15 @@ static int __init zumapro_bootfb_early(char *arg)
 
 	/* Full discovery succeeded and the framebuffer has been reserved */
 	bootfb_probe(7);
+
+	/*
+	 * One compact line at KERN_ERR so it survives a quiet console and can
+	 * be read off a photograph of the panel: on a device whose only output
+	 * is the screen, a summary that scrolls away is no summary at all.
+	 */
+	pr_err("BOOTFB fmt=%u ctrl=%08x %ux%u stride=%u bpp=%u base=%pa as=%s%s\n",
+	       fmt, ctrl, width, height, stride, bpp, &bootfb.fb_base,
+	       bootfb.pd.format, bootfb.format_guessed ? " GUESSED" : "");
 
 	/*
 	 * Paint a stripe across the top of the panel. This device has no
@@ -437,26 +460,6 @@ static int __init zumapro_bootfb_init(void)
 	if (!decon_main)
 		return -ENOMEM;
 
-	if (bootfb.rewrite_format) {
-		void __iomem *dma = ioremap(bootfb.dma_base, DMA_SIZE);
-
-		if (!dma) {
-			iounmap(decon_main);
-			return -ENOMEM;
-		}
-		val = readl(dma + RDMA_IN_CTRL_0) & ~IDMA_IMG_FORMAT_MASK;
-		val |= IDMA_IMG_FORMAT(bootfb.bpp == 2 ? IDMA_FMT_RGB565 :
-							 IDMA_FMT_XRGB8888);
-		writel(val, dma + RDMA_IN_CTRL_0);
-		iounmap(dma);
-		/* DMA registers are shadowed; latch them at the next frame */
-		writel(SHD_REG_UP_REQ_GLOBAL | SHD_REG_UP_REQ_CMP |
-		       SHD_REG_UP_REQ_WIN(bootfb.win),
-		       decon_main + SHD_REG_UP_REQ);
-		pr_info("rewrote L%u pixel format to %s\n", bootfb.channel,
-			bootfb.pd.format);
-	}
-
 	if (bootfb.cmd_mode) {
 		val = readl(decon_main + TRIG_CON);
 		if ((val & HW_TRIG_SEL_MASK) != HW_TRIG_SEL_NONE) {
@@ -483,8 +486,17 @@ static int __init zumapro_bootfb_init(void)
 		return PTR_ERR(pdev);
 	}
 
-	pr_info("registered %ux%u %s framebuffer at %pa\n", bootfb.pd.width,
-		bootfb.pd.height, bootfb.pd.format, &bootfb.fb_base);
+	/*
+	 * Repeat the summary here. The copy in the early parameter is printed
+	 * long before any console exists, so on a device whose only output is
+	 * the panel it has always scrolled away by the time anyone can read
+	 * it. This one lands late enough to photograph.
+	 */
+	pr_err("BOOTFB fmt=%u ctrl=%08x %ux%u stride=%u bpp=%u base=%pa as=%s%s %s\n",
+	       bootfb.fmt, bootfb.ctrl, bootfb.pd.width, bootfb.pd.height,
+	       bootfb.pd.stride, bootfb.bpp, &bootfb.fb_base, bootfb.pd.format,
+	       bootfb.format_guessed ? " GUESSED" : "",
+	       bootfb.cmd_mode ? "command" : "video");
 	return 0;
 }
 device_initcall(zumapro_bootfb_init);

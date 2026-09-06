@@ -1,0 +1,57 @@
+#!/tegu-bin/busybox sh
+# Bring-up rescue userspace for tegu. Run with rdinit=/tegu-init.
+#
+# Two hard-won rules here:
+#
+#  - Everything lives under /tegu-bin, and the entry point is /tegu-init.
+#    The bootloader unpacks the device's own ramdisk on top of this one, and
+#    Android's root has /bin as a symlink into /system, so anything in /bin
+#    can vanish underfoot.
+#  - Progress is reported to /dev/kmsg, never to a console we had to open
+#    ourselves. An earlier version used "exec >/dev/console", which takes the
+#    whole init down with it if the node is missing, and the only evidence is
+#    "Attempted to kill init" with no clue which line failed.
+BB=/tegu-bin/busybox
+log() { $BB echo "TEGU: $*" >/dev/kmsg 2>/dev/null; }
+
+$BB mkdir -p /proc /sys /dev /tmp
+$BB mount -t proc proc /proc 2>/dev/null
+$BB mount -t sysfs sys /sys 2>/dev/null
+$BB mount -t devtmpfs dev /dev 2>/dev/null
+[ -c /dev/kmsg ] || $BB mknod /dev/kmsg c 1 11 2>/dev/null
+[ -c /dev/mem ] || $BB mknod /dev/mem c 1 1 2>/dev/null
+[ -c /dev/console ] || $BB mknod /dev/console c 5 1 2>/dev/null
+
+log "rescue init running: $($BB uname -srm)"
+$BB --install -s /tegu-bin 2>/dev/null
+export PATH=/tegu-bin:$PATH
+
+# Display pipeline: read-only. Writing these registers from here was an
+# attempt to fix the console colour and it destabilised the display; the
+# format is now reported correctly to the graphics stack instead, which
+# converts in software. Kept as a report because it is useful evidence.
+DMA=0x19900000; CTRL=0x19900008; SHD=0x19900408
+log "DPP L0 enable=$($BB devmem $DMA 2>&1) ctrl=$($BB devmem $CTRL 2>&1) shadow=$($BB devmem $SHD 2>&1)"
+
+# A shell on the USB gadget serial port when the controller is present, so a
+# terminal replaces photographing the panel.
+if [ -c /dev/ttyGS0 ]; then
+	log "starting shell on /dev/ttyGS0"
+	while true; do
+		$BB setsid $BB sh -i </dev/ttyGS0 >/dev/ttyGS0 2>&1
+		$BB sleep 1
+	done &
+else
+	log "no /dev/ttyGS0; USB gadget not present"
+fi
+
+# A shell on the panel too, so the device is never left with nothing.
+if [ -c /dev/console ]; then
+	while true; do
+		$BB setsid $BB sh -i </dev/console >/dev/console 2>&1
+		$BB sleep 1
+	done &
+fi
+
+log "rescue init ready"
+while true; do $BB sleep 30; done
