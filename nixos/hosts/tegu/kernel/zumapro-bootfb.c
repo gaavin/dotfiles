@@ -32,6 +32,7 @@
 
 #define pr_fmt(fmt) "zumapro-bootfb: " fmt
 
+#include <linux/arm-smccc.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
@@ -148,6 +149,64 @@ static struct {
 	struct simplefb_platform_data pd;
 } bootfb __initdata;
 
+/*
+ * Staged reset probes.
+ *
+ * This device has no serial console, and if the display turns out not to be
+ * scanning at kernel entry there is no screen output either. What is left is
+ * a single observable bit: whether the phone resets or sits there. So make
+ * that bit deliberate. "zumapro_bootfb=<n>" resets the machine the moment
+ * boot reaches stage <n>, using a direct PSCI SYSTEM_RESET SMC because the
+ * kernel's own reboot machinery is not wired up this early. Firmware is up
+ * (it is what launched us), so the call works from the first instruction.
+ *
+ * Boot once per stage: a reset means that stage was reached, a hang means it
+ * was not. That bisects the failure to an exact line without any console.
+ */
+#define PSCI_0_2_FN_SYSTEM_RESET	0x84000009
+
+static int bootfb_probe_stage __initdata = -1;
+
+/*
+ * Root compatible strings this SoC appears under.
+ *
+ * The mainline device tree in ../dts uses "google,zumapro". A stock Android
+ * boot does not: the bootloader applies its dtbo, whose board fragment
+ * rewrites the root node to
+ *
+ *     compatible = "google,ZUMA PRO TEGU", "google,ZUMA PRO";
+ *
+ * spaces, capitals and all. Both have to be accepted, or this driver
+ * silently does nothing on exactly the configuration used to bring the
+ * device up (fastboot boot, which keeps the stock device tree).
+ */
+static const char * const zumapro_dt_compat[] __initconst = {
+	"google,zumapro",
+	"google,ZUMA PRO",
+};
+
+static bool __init zumapro_dt_root_matches(void)
+{
+	unsigned long root = of_get_flat_dt_root();
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(zumapro_dt_compat); i++)
+		if (of_flat_dt_is_compatible(root, zumapro_dt_compat[i]))
+			return true;
+	return false;
+}
+
+static void __init bootfb_probe(int stage)
+{
+	struct arm_smccc_res res;
+
+	if (bootfb_probe_stage != stage)
+		return;
+
+	arm_smccc_smc(PSCI_0_2_FN_SYSTEM_RESET, 0, 0, 0, 0, 0, 0, 0, &res);
+	/* Firmware declined; carry on booting rather than wedge here. */
+}
+
 static int __init zumapro_bootfb_early(char *arg)
 {
 	void __iomem *regs, *win, *wincon, *dma, *mmu;
@@ -155,8 +214,17 @@ static int __init zumapro_bootfb_early(char *arg)
 	unsigned int w, ch = 0, bpp, stride, width, height;
 	phys_addr_t start, end;
 
-	if (!of_flat_dt_is_compatible(of_get_flat_dt_root(), "google,zumapro"))
+	if (arg && kstrtoint(arg, 10, &bootfb_probe_stage))
+		bootfb_probe_stage = -1;
+
+	/* Reached parse_early_param() at all */
+	bootfb_probe(1);
+
+	if (!zumapro_dt_root_matches())
 		return 0;
+
+	/* Flattened DT is parsed and the root is the SoC we expect */
+	bootfb_probe(2);
 
 	regs = early_ioremap(DECON0_MAIN_BASE, DECON_MAIN_SIZE);
 	if (!regs)
@@ -164,6 +232,15 @@ static int __init zumapro_bootfb_early(char *arg)
 
 	con = readl(regs + GLOBAL_CON);
 	early_iounmap(regs, DECON_MAIN_SIZE);
+
+	/* DECON0 MMIO is mapped and readable: its power domain is on */
+	bootfb_probe(3);
+
+	if (con & GLOBAL_CON_DECON_EN)
+		bootfb_probe(4);	/* ... and it is enabled */
+	if (con & GLOBAL_CON_RUN_STATUS)
+		bootfb_probe(5);	/* ... and actively scanning out */
+
 	if (!(con & GLOBAL_CON_DECON_EN)) {
 		pr_info("DECON0 disabled (GLOBAL_CON=%08x), no boot framebuffer\n",
 			con);
@@ -199,6 +276,9 @@ static int __init zumapro_bootfb_early(char *arg)
 		pr_info("channel %u is not a read DMA\n", ch);
 		goto unmap_win;
 	}
+	/* A DECON window is enabled and mapped to a read-DMA channel */
+	bootfb_probe(6);
+
 	bootfb.win = w;
 	bootfb.channel = ch;
 	bootfb.dma_base = ch < DPP_PER_DPUF ?
@@ -287,6 +367,34 @@ static int __init zumapro_bootfb_early(char *arg)
 	memblock_reserve(start, end - start);
 	memblock_mark_nomap(start, end - start);
 	bootfb.found = true;
+
+	/* Full discovery succeeded and the framebuffer has been reserved */
+	bootfb_probe(7);
+
+	/*
+	 * Paint a stripe across the top of the panel. This device has no
+	 * serial console, so this is the only evidence that gets out of early
+	 * boot: if the stripe appears, the kernel started, this parameter ran,
+	 * the DECON/DPP registers read back sanely, and fb_base points at the
+	 * buffer the display is really scanning. If the kernel then dies
+	 * before DRM comes up, the stripe stays on screen and says so.
+	 *
+	 * early_ioremap maps at most 256 KiB per call, hence only a stripe.
+	 * The region is NOMAP, so there is no cacheable linear alias to
+	 * conflict with these device-attribute writes.
+	 */
+	{
+		unsigned int rows = min_t(unsigned int, height,
+					  (256 * 1024) / stride);
+		void __iomem *fb = early_ioremap(bootfb.fb_base, rows * stride);
+
+		if (fb) {
+			memset_io(fb, 0xff, rows * stride);
+			early_iounmap(fb, rows * stride);
+			pr_info("painted a %u-row stripe at %pa\n", rows,
+				&bootfb.fb_base);
+		}
+	}
 
 	pr_info("%ux%u %s stride %u at %pa (%s mode), reserved %pa-%pa\n",
 		width, height, bootfb.pd.format, stride, &bootfb.fb_base,

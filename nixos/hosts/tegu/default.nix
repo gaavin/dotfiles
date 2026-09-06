@@ -45,6 +45,11 @@
     # No firmware-level bootloader to manage: the boot.img is the loader
     loader.grub.enable = false;
 
+    # The panel is the only console, so print everything to it. NixOS
+    # defaults to 4, which hides every pr_info and would leave the screen
+    # blank through a successful boot.
+    consoleLogLevel = 7;
+
     initrd = {
       systemd = {
         enable = true;
