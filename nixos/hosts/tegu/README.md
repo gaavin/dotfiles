@@ -1,126 +1,193 @@
-# tegu — Google Pixel 9a on mainline NixOS
+# tegu — Google Pixel 9a (Tensor G4) on mainline NixOS
 
-Status: **bring-up scaffold, untested on hardware.** The first build's goal
-is the kernel log on the panel. Nothing else is expected to work yet; see
-"What is missing" before assuming anything does.
+Status: **mainline Linux boots on this phone.** 7.3-rc1 comes up on a Tensor G4
+(`zumapro`), runs to userspace, and prints its log on the panel with no debug
+cable. There is no root filesystem yet, so it is not a usable system. See
+"What works" for the honest boundary.
 
-## Why this is not a daily driver yet
+Everything below was established on hardware. Where something is inferred
+rather than observed it says so.
 
-The Pixel 9a uses the Tensor G4 (`zumapro`). As of Linux 7.3-rc1 mainline
-carries device trees only for the Tensor G1 (`gs101`, Pixel 6 family);
-nobody has posted `zuma`/`zumapro` support, postmarketOS has no `google-tegu`
-port, and Mobile NixOS has no Google phones at all. Google's own mainline
-effort skipped to the Pixel 10 (Tensor G5, Nov 2025), and even that only
-reaches a UART shell with an unreleased bootloader.
+## Why this is not a daily driver
 
-So every hardware description here was reverse-derived from the downstream
-`android-gs-tegu-6.1` device tree (the `zumapro-a1-*.dtb` and `dtbo.img`
-shipped by GrapheneOS) and from Google's downstream display driver.
+Mainline has no Tensor G4 support at all. As of 7.3-rc1 upstream carries device
+trees only for the Tensor G1 (`gs101`, Pixel 6). Nobody has posted `zuma` or
+`zumapro` support, postmarketOS has no `google-tegu` port, and Mobile NixOS has
+no Google phones. Google's own mainline effort skipped to the Pixel 10 and only
+reaches a serial shell.
 
-## Debugging without a serial cable
+So every hardware description here was reverse-derived from Google's downstream
+sources, then tested by booting it.
 
-There is no USB-C debug cable on hand, so the port needs a feedback path
-that does not depend on the UART. It has two:
+## What works
 
-1. **The bootloader's framebuffer.** ABL leaves the boot logo scanning out
-   on DECON0 when it jumps to the kernel. `kernel/zumapro-bootfb.c` reads the
-   DECON window and DPP read-DMA registers before memory is handed to the
-   allocator, reserves the buffer the hardware is scanning from, and
-   registers it as a `simple-framebuffer`. simpledrm picks it up, fbcon
-   attaches, and with `console=tty0` the kernel log, the initrd emergency
-   shell and systemd all end up on the panel. On command-mode panels it also
-   unmasks the TE trigger so the screen keeps refreshing. Register offsets
-   come from `google-modules/display/samsung` (`cal_9865`).
+| | State |
+| --- | --- |
+| Boot to userspace | **Yes.** Memory, interrupts, timers, SMP, driver model, initramfs |
+| Panel as console | **Yes**, via the bootloader's framebuffer (see below) |
+| Our own device tree | **Yes.** Bootloader fills in the real 8 GiB; machine reports as "Google Pixel 9a" |
+| Debug UART | **Probes and binds** (`ttySAC0` at `0x10870000`). Untested for output: no cable |
+| Register access from userspace | **Yes**, `/dev/mem` (`STRICT_DEVMEM` deliberately off) |
+| Rescue userspace | **Yes**, linked into the kernel image |
+| Storage, USB, WLAN, modem, GPU, touch, audio, camera | No |
 
-   What you should see: the boot logo goes away, a penguin and white-on-black
-   log lines appear within a few seconds of `fastboot boot`. If the screen
-   stays on the logo, the kernel died before the DRM device came up (or the
-   framebuffer discovery bailed out; the reason is in the pstore log below).
-   If the screen goes black, the display power domain or clocks were gated.
+## The panel console
 
-2. **ramoops.** The DT points pstore at the same window Android uses
-   (`0xfd3ff000`, 2 MiB console + 2 MiB pmsg), so a crash survives a reset.
-   Reboot into the stock kernel and read `/sys/fs/pstore/console-ramoops-0`
-   (needs root on the Android side, i.e. a rooted or debug build).
+There is no debug cable, so the port needs output that does not depend on one.
 
-## What is here
+The bootloader leaves the boot logo scanning out on DECON0 when it jumps to the
+kernel. `kernel/zumapro-bootfb.c` reads the DECON window and DPP read-DMA
+registers during early boot, works out where the framebuffer is, reserves it,
+and registers it as a `simple-framebuffer`. simpledrm binds, fbcon attaches,
+and with `console=tty0` the whole boot log lands on the screen.
+
+Measured on hardware:
+
+```
+DECON0 window 0 -> DPP read-DMA L0 (0x19900000)
+1080x2424, stride 4320, 4 bytes/pixel, BGRA8888, command mode
+framebuffer at 0x fac00000
+```
+
+**Pixel format.** The bootloader hands over BGRA8888. simplefb has no name for
+that channel order, so this tree adds `b8g8r8x8` to its table and reports the
+truth; alpha is meaningless for a scanout-only layer and DRM already knows how
+to convert into BGRX8888. Do **not** try to fix this by reprogramming the
+scanout engine instead: those registers are shadowed and only latch on a frame
+boundary, so the writes silently do nothing, and poking a live display engine
+mid-boot destabilises it. That mistake cost several boot cycles.
+
+## Debugging a device with almost no output
+
+This is the part worth reading before changing anything.
+
+**Staged reset probes.** `zumapro_bootfb=<n>` issues a PSCI `SYSTEM_RESET` the
+moment boot reaches stage `<n>`. Boot once per stage: a reset means the stage
+was reached, a hang means it was not. That turns the single bit this device can
+signal into a bisect, and it is what located the device-tree match bug with no
+console at all. Stages are listed in the driver.
+
+**The early stripe.** The driver paints a white bar across the top of the panel
+as soon as it has found the framebuffer, before any driver exists. If the bar
+appears, the kernel started, the parameter ran, the registers read sanely, and
+the address is right — even if the kernel dies immediately after.
+
+**ramoops.** The device tree points pstore at Android's window
+(`0xfd3ff000`, 2 MiB console). Only readable with root on the Android side,
+which is why it was not used here.
+
+**Reading the panel.** Photographing a scrolling console is a poor instrument.
+Anything you want to read must be printed *late*, at `KERN_ERR`, or from the
+rescue userspace; early messages have always scrolled away by the time the
+screen can be photographed.
+
+## Hard-won facts about this device
+
+Things that are not documented anywhere and cost real time to discover:
+
+1. **The bootloader rewrites the device tree's identity.** A stock boot applies
+   its dtbo, whose board fragment overwrites the root node with
+   `compatible = "google,ZUMA PRO TEGU", "google,ZUMA PRO"` — spaces and
+   capitals. Every source file on disk says `google,zumapro`. Code matching on
+   the file's value silently never runs.
+
+2. **`boot.img`'s ramdisk is ignored.** On this generation the generic ramdisk
+   lives in the separate `init_boot` partition, and that is what the bootloader
+   hands the kernel. A `fastboot boot` of your own image runs *Android's* init,
+   which aborts immediately because a mainline kernel has no SELinux. The
+   initramfs therefore has to be linked into the kernel image
+   (`CONFIG_INITRAMFS_SOURCE`, see `initramfs.nix`).
+
+3. **Android's ramdisk is unpacked on top of ours,** and its root turns `/bin`
+   into a symlink. Anything in `/bin` can vanish underfoot. Hence `/tegu-bin`
+   and `/tegu-init`, names Android does not use.
+
+4. **The kernel image format is lz4 legacy frame,** byte-identical in magic to
+   the stock kernel (`02 21 4c 18`). This was verified against the stock image
+   rather than guessed.
+
+5. **Adding a USB controller node bootloops the device.** The block is almost
+   certainly powered down at hand-off, with no clock or power-domain driver to
+   bring it back, so probing it reads dead registers. Check the power state
+   from userspace via `/dev/mem` before letting the kernel touch it again.
+
+6. **The bootloader watchdog resets a hung kernel after roughly two minutes,**
+   which is easily mistaken for a successful reset. Time your observations.
+
+7. **An interactive shell on `/dev/console` prevents fbcon taking over the
+   panel,** leaving the boot splash up with no log. The panel is a log, not a
+   terminal.
+
+## Layout
 
 | File | Purpose |
 | --- | --- |
-| `dts/zumapro.dtsi` | SoC: 4xA520 + 3xA720 + 1xX4, PSCI, GIC-v3 @0x10400000, arch timer (24.576 MHz), debug UART @0x10870000 (SPI 641, 200 MHz clock), all firmware/modem/log carve-outs as `no-map`, Android's ramoops window |
-| `dts/zumapro-pixel-common.dtsi` | `chosen`/`stdout-path`, placeholder memory node (ABL patches in the real 8 GiB) |
-| `dts/zumapro-tegu.dts` | Board: `google,tegu` |
-| `kernel/zumapro-bootfb.c` (+ `.patch`) | Boot framebuffer adoption driver described above; applied as a kernel patch so the option survives nixpkgs' config generation |
-| `kernel.nix` | Linux 7.3-rc1 from kernel.org, arm64 defconfig with every other SoC off and media/sound/WLAN/ethernet trimmed; simpledrm + fbcon (Terminus 16x32), UFS-Exynos, DWC3-Exynos, pstore-ram built in |
-| `cross-kernel.nix` | Swaps in the same kernel cross-compiled from x86_64, used by the `x86_64-linux` package output |
-| `default.nix` | NixOS host: root on the `userdata` partition, systemd initrd with emergency shell on the panel, Plasma Mobile + SDDM autologin, NetworkManager, SSH, USB NCM gadget service |
-| `images.nix` | `boot.img` / `init_boot.img` / `vendor_boot.img` / `vendor_kernel_boot.img` (header v4, lz4 kernel, NixOS initrd, DTB), empty `dtbo.img`, unverified `vbmeta.img`, ext4 `rootfs.img`, `flash.sh` |
-
-Verified on the build host: the flake evaluates, the kernel `.config`
-generates with `ZUMAPRO_BOOTFB`/`DRM_SIMPLEDRM`/`FRAMEBUFFER_CONSOLE`, the
-device tree compiles, and the bootfb driver compiles warning-free (`W=1`)
-against 7.3-rc1 with the aarch64 cross toolchain.
-
-## What is missing
-
-Requested for the first build were touch, GPU and display. Here is why only
-the display (as a dumb framebuffer) made it:
-
-| Subsystem | State | Notes |
-| --- | --- | --- |
-| Display out | bootloader framebuffer via simpledrm | No mode setting, no brightness, no panel control; whatever ABL configured (1080x2424) stays. Real support needs a DPU/DSIM driver plus the `google,gs-tg4a/b/c` panel driver, none of which exist upstream |
-| Touch | none | Synaptics TouchCom over SPI (`synaptics,tcm-spi` on `spi@111d0000`, IRQ `gpn0-0`, reset `gpp1-1`). Mainline has no TouchCom driver (only RMI4, a different protocol); Google's is a large out-of-tree module tied to their touch-offload stack. Also needs the zumapro pinctrl bank table and the USI/SPI clocks |
-| GPU | none | Mali G715 (`mali@1f000000`, panthor-class) sits in the `g3d` power domain, which is off at kernel entry and is switched through ACPM firmware. Panthor is built as a module but has no DT node; probing it with the domain off faults the bus |
-| UART console | described, untested | Needs a USB-C debug cable (SBU pins, 3.3 V) and `fastboot oem uart enable` |
-| Clocks / pinctrl / PMIC (ACPM) | none | `samsung,zuma-clock` has no mainline driver; `clk_ignore_unused` + `pd_ignore_unused` keep bootloader state |
-| UFS storage | driver built, no DT node | `ufs@13200000`, sysreg `@13020000`; until it is described `/` cannot mount and stage 1 drops to a shell on the panel |
-| USB (DWC3) | driver built, no DT node | `usb@11210000`, PHY `@11100000`; needed for gadget networking and SSH |
-| WLAN/BT (bcmdhd4383), modem (S5300/S5400), GNSS | none | downstream-only drivers |
-| Audio, camera, NFC, haptics, fingerprint | none | |
+| `dts/zumapro.dtsi` | SoC: 4×A520 + 3×A720 + 1×X4, PSCI, GIC-v3, arch timer, debug UART, firmware/modem carve-outs, ramoops |
+| `dts/zumapro-pixel-common.dtsi` | `chosen`, placeholder memory node (the bootloader patches in the real 8 GiB) |
+| `dts/zumapro-tegu.dts` | Board |
+| `kernel/zumapro-bootfb.c` (+ `.patch`) | Boot framebuffer adoption, staged reset probes, early stripe |
+| `kernel.nix` | 7.3-rc1, arm64 defconfig with other SoCs and unused subsystems trimmed |
+| `initramfs.nix`, `rescue-init` | Rescue userspace, linked into the kernel image |
+| `cross-kernel.nix` | Cross-compiles the kernel from x86_64 instead of emulating |
+| `default.nix` | NixOS host (aspirational: needs a root filesystem) |
+| `images.nix` | Flashable images and `flash.sh` |
 
 ## Building
 
 ```sh
 cd ~/dotfiles/nixos
 nix build .#tegu-images -L
-ls -l result/
 ```
 
-From `mina` (x86_64) this cross-compiles the kernel natively and assembles the
-images natively; the NixOS closure is fetched from the binary cache and its
-~300 small derivations run under QEMU user emulation, which needs
-`boot.binfmt.emulatedSystems = [ "aarch64-linux" ]` switched in first. From
-an aarch64 host everything builds natively.
+From `mina` (x86_64) the kernel cross-compiles natively; the NixOS closure's
+small derivations run under emulation, which needs
+`boot.binfmt.emulatedSystems = [ "aarch64-linux" ]`.
 
-`result/rootfs.img` is the full Plasma Mobile closure; leave it out of a
-first panel-only test with `nix build .#tegu-images.kernel` if space is tight.
-
-## Flashing (bootloader unlocked, phone in fastboot)
-
-For the first attempts do not flash at all: `fastboot boot result/boot.img`
-runs the kernel once from RAM and a power-cycle brings Android back. Note
-that `fastboot boot` uses the DTB and cmdline embedded in the stock
-`vendor_boot`, so for the DT to take effect `vendor_boot` has to be flashed.
+For bring-up you usually only want the kernel:
 
 ```sh
-result/flash.sh            # boot, init_boot, vendor_boot, vendor_kernel_boot, dtbo, vbmeta
-result/flash.sh --rootfs   # additionally writes rootfs.img over userdata (destroys Android data)
+nix build .#tegu-images.kernel
 ```
 
-Restore Android afterwards with a stock factory image (`flash-all.sh`).
+## Running it
+
+The device tree must be flashed; `fastboot boot` alone uses the phone's own.
+
+```sh
+fastboot flash vendor_boot        result/vendor_boot.img
+fastboot flash vendor_kernel_boot result/vendor_boot.img
+fastboot flash dtbo               result/dtbo.img      # empty overlay
+fastboot boot                     result/boot.img      # RAM boot, nothing written
+```
+
+**Android will not boot after this.** It cannot run against this device tree.
+Restore with a GrapheneOS factory image.
+
+Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
 
 ## Next steps, in order
 
-1. Boot it. Expected outcome: log on the panel, ending in the initrd
-   emergency shell because there is no root device. Photograph the screen.
-2. Add the UFS controller + PHY nodes (`ufs@13200000`) so `/` mounts and
-   Plasma Mobile starts, rendering through llvmpipe on the same framebuffer.
-3. Add DWC3 + USB PHY nodes for NCM networking and SSH; from then on the
-   panel is no longer the only console.
-4. Port the zumapro pinctrl bank table and the USI/SPI clocks, then either
-   port Google's TouchCom driver or write a minimal one against the
-   TouchCom protocol so Plasma Mobile gets input.
-5. Port the zumapro clock controller (start from `drivers/clk/samsung/clk-gs101.c`)
-   and the ACPM power-domain interface; only then is panthor worth wiring up.
-6. Display stack proper: DPU/DSIM (downstream `gs-drm`) and the `tg4a/b/c`
-   panel driver.
+1. **Storage.** Add the UFS controller (`ufs@13200000`, sysreg `@13020000`) so a
+   root filesystem can mount. Mainline has `samsung,exynos-ufs` with gs101
+   support. Blocker: no clock driver, so it likely needs fixed-clock stubs in
+   the device tree standing in for the real controller.
+2. **USB.** `usb@11210000`, PHY `@11100000`. Establish the power state from
+   userspace first (item 5 above). A gadget serial console ends the
+   photograph-the-screen workflow; `USB_G_SERIAL` and `U_SERIAL_CONSOLE` are
+   already enabled in the config.
+3. **Clocks and power domains.** `samsung,zuma-clock` has no mainline driver.
+   Start from `drivers/clk/samsung/clk-gs101.c`. This unblocks nearly
+   everything else, including the GPU.
+4. **Touch.** Synaptics TouchCom over SPI (`spi@111d0000`, IRQ `gpn0-0`, reset
+   `gpp1-1`). No mainline driver exists; Google's is a large out-of-tree module.
+   Needs pinctrl and USI/SPI clocks first.
+5. **Display proper.** DPU/DSIM plus the `google,gs-tg4a/b/c` panel driver, to
+   replace the borrowed bootloader framebuffer.
+
+## Sources
+
+Downstream references used, all fetched at bring-up time:
+
+- GrapheneOS `kernel_devices_google_tegu` — board device tree sources
+- GrapheneOS `device_google_tegu-kernels_6.1` — prebuilt DTBs, `dtbo.img`, stock kernel
+- AOSP `kernel/google-modules/display/samsung`, branch `android-gs-tegu-6.1-android16` — DECON/DPP register maps (`cal_9865`)

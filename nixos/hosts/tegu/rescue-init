@@ -45,13 +45,11 @@ else
 	log "no /dev/ttyGS0; USB gadget not present"
 fi
 
-# A shell on the panel too, so the device is never left with nothing.
-if [ -c /dev/console ]; then
-	while true; do
-		$BB setsid $BB sh -i </dev/console >/dev/console 2>&1
-		$BB sleep 1
-	done &
-fi
+# Deliberately NOT starting a shell on /dev/console. fbcon defers taking the
+# panel over until something writes to the virtual terminal, and an
+# interactive shell holding /dev/console open stops that handover, leaving
+# the boot splash on screen with no log at all. The panel is a log, not a
+# terminal; input arrives over USB once the gadget works.
 
 log "rescue init ready"
 while true; do $BB sleep 30; done

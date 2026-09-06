@@ -1,6 +1,6 @@
 diff -Nur pa/drivers/video/Kconfig pb/drivers/video/Kconfig
 --- a/drivers/video/Kconfig	2026-08-30 18:04:40.000000000 -0230
-+++ b/drivers/video/Kconfig	2026-09-06 17:15:51.003542633 -0230
++++ b/drivers/video/Kconfig	2026-09-06 17:41:29.882358997 -0230
 @@ -93,3 +93,12 @@
  source "drivers/gpu/trace/Kconfig"
  
@@ -16,7 +16,7 @@ diff -Nur pa/drivers/video/Kconfig pb/drivers/video/Kconfig
 +	  pipeline has a real driver.
 diff -Nur pa/drivers/video/Makefile pb/drivers/video/Makefile
 --- a/drivers/video/Makefile	2026-08-30 18:04:40.000000000 -0230
-+++ b/drivers/video/Makefile	2026-09-06 17:15:51.001542632 -0230
++++ b/drivers/video/Makefile	2026-09-06 17:41:29.880358992 -0230
 @@ -21,3 +21,4 @@
  ifeq ($(CONFIG_OF),y)
  obj-$(CONFIG_VIDEOMODE_HELPERS) += of_display_timing.o of_videomode.o
@@ -24,7 +24,7 @@ diff -Nur pa/drivers/video/Makefile pb/drivers/video/Makefile
 +obj-$(CONFIG_ZUMAPRO_BOOTFB) += zumapro-bootfb.o
 diff -Nur pa/drivers/video/zumapro-bootfb.c pb/drivers/video/zumapro-bootfb.c
 --- a/drivers/video/zumapro-bootfb.c	1969-12-31 20:30:00.000000000 -0330
-+++ b/drivers/video/zumapro-bootfb.c	2026-09-06 17:15:51.001542632 -0230
++++ b/drivers/video/zumapro-bootfb.c	2026-09-06 17:41:29.880358992 -0230
 @@ -0,0 +1,502 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
@@ -530,7 +530,7 @@ diff -Nur pa/drivers/video/zumapro-bootfb.c pb/drivers/video/zumapro-bootfb.c
 +device_initcall(zumapro_bootfb_init);
 diff -Nur pa/include/linux/platform_data/simplefb.h pb/include/linux/platform_data/simplefb.h
 --- a/include/linux/platform_data/simplefb.h	2026-08-30 18:04:40.000000000 -0230
-+++ b/include/linux/platform_data/simplefb.h	2026-09-06 17:15:51.015549017 -0230
++++ b/include/linux/platform_data/simplefb.h	2026-09-06 17:41:29.895339110 -0230
 @@ -24,6 +24,7 @@
  	{ "a8r8g8b8", 32, {16, 8}, {8, 8}, {0, 8}, {24, 8}, DRM_FORMAT_ARGB8888 }, \
  	{ "x8b8g8r8", 32, {0, 8}, {8, 8}, {16, 8}, {0, 0}, DRM_FORMAT_XBGR8888 }, \
