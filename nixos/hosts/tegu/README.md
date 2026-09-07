@@ -32,7 +32,7 @@ sources, then tested by booting it.
 | Register access from userspace | **Yes**, `/dev/mem` (`STRICT_DEVMEM` deliberately off) |
 | Rescue userspace | **Yes**, linked into the kernel image |
 | Serial console | **Yes**, with a USB-C debug board (read-only) |
-| Storage | **Past the PHY.** Link startup fails: the UFS device does not answer. See "Next steps" |
+| Storage | **Past the PHY.** Link startup fails with `device_present=0`: the UFS device is silent. Needs regulators |
 | USB, WLAN, modem, GPU, touch, audio, camera | No |
 
 ## The panel console
@@ -349,29 +349,60 @@ Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
    Four link-startup attempts, roughly 110 ms apart, then the driver gives
    up. No SError. The kernel boots on to userspace normally.
 
-   So the host controller is alive and issuing `DME_LINKSTARTUP`, and the
-   **UFS device is not answering**. That is a different problem from
-   everything above it, and the candidates are:
+   The link state was then read at each attempt, identically all four times:
 
-   1. **The device's reset and reference-clock pins.**
-      `exynos_ufs_dev_hw_reset()` drives the device reset through
-      `HCI_GPIO_OUT` bit 0, but that output only reaches the physical pin if
-      the pin is muxed to it. gs101's UFS node does that with
-      `pinctrl-0 = <&ufs_rst_n &ufs_refclk_out>`; ours has no pinctrl at all,
-      because this SoC has no pinctrl driver. Same for the reference clock
-      the device needs.
-   2. **Regulators.** `vcc`/`vccq`/`vccq2` are still "assuming enabled".
-      These power the *device*, which is exactly what is now not responding.
-      mainline already ships `exynos-acpm-pmic` and the S2MPG10/11 MFD and
-      regulator drivers to adapt.
-   3. **UniPro attributes.** Google writes `0x3000`, `0x3001`, `0x4020` and
-      `0x4021` that mainline does not, and uses `0x2f = 0x79` where
-      mainline's gs101 uses `0x69`. These affect link startup specifically,
-      so they are now in scope where before they were not.
+       HCS 0x00000000 device_present=0, UECPA 0x00100000, UECDL 0x00000000,
+       GPIO_OUT 0x00000001 dev_rst_n=1
 
-   Note the bootloader had the device working moments earlier, which argues
-   the pins are muxed correctly at hand-off and weakens (1) somewhat --
-   though nothing has measured them.
+   Read carefully:
+
+   - **`device_present=0`.** The interconnect layer does not see a UFS
+     device at all. Whatever is wrong is not in the UniPro programming --
+     no attribute would make a silent device answer. This kills the third
+     candidate below outright.
+   - **`dev_rst_n=1`.** `HCI_GPIO_OUT` bit 0 is high, so the controller has
+     released the device's reset line. The device is not being held in
+     reset by anything we control.
+   - **`UECPA` bit 31 is clear**, so by the specification the latched value
+     is *not valid* and the `0x00100000` in it means nothing. Do not read
+     an error code out of it. `UECDL` is zero.
+   - `HCS` being zero also means `UIC_COMMAND_READY` is clear, but the probe
+     runs at PRE_CHANGE immediately after `ufshcd_hba_enable()`, so that is
+     expected timing rather than a fault.
+
+   No device, no reset asserted, and no error latched at any layer: the link
+   never got far enough to record a failure, which is what "nothing on the
+   other end" looks like.
+
+   ### What that leaves
+
+   Everything on the SoC side that this port can reach is now verified
+   correct: clocks running, PHY un-isolated and carrying the bootloader's
+   own calibration, reference clock not stopped, device reset released, two
+   lanes reported. The controller issues `DME_LINKSTARTUP` and the device
+   says nothing.
+
+   The remaining difference between this and a working Android boot is
+   **device power**. `vcc`, `vccq` and `vccq2` are still "assuming enabled"
+   because there is no PMIC driver, and those rails feed the UFS device
+   itself -- the component that is now demonstrably silent. The bootloader
+   powers the device to read the boot image; Android's kernel then owns
+   those regulators through its PMIC driver. Ours cannot, so if the
+   bootloader drops them on the way out, nothing turns them back on.
+
+   That makes regulators the next piece of work, and it is now supported by
+   measurement rather than chosen by elimination. It is not from scratch:
+   mainline already carries `drivers/firmware/samsung/exynos-acpm-pmic.c`
+   and the S2MPG10/11 MFD and regulator drivers for this SoC family, so the
+   job is adapting them to Tensor G4's PMICs and describing the UFS supplies
+   in the device tree.
+
+   Still unmeasured, and worth checking before committing to that: whether
+   the `ufs_rst_n` and `ufs_refclk_out` **pins** are muxed to the UFS block.
+   `REFCLKOUT_STOP` is clear, so the controller is driving the reference
+   clock, and `dev_rst_n` reads high -- but both of those are register-side
+   observations. If the pins are not muxed, neither signal reaches the
+   device, and this SoC has no pinctrl driver either.
 
 2. **USB.** `usb@11210000`, PHY `@11100000`. Establish the power state from
    userspace first (item 5 above). A gadget serial console ends the
