@@ -52,6 +52,12 @@ python3 "$src"/add-zumapro-ufs-phy.py
 # running at that moment instead of assuming ungate_clks did its job.
 python3 "$src"/dump-ufs-clkstop.py
 
+# --- UFS PHY: option to keep the bootloader's configuration --------------
+# Measured: the bootloader leaves every UFS clock running and reads the
+# kernel off UFS, so its PHY state works. This adds a switch to skip the
+# PRE_INIT calibration table and test whether overwriting it is the bug.
+python3 "$src"/keep-boot-phy.py
+
 hdr=include/linux/platform_data/simplefb.h
 anchor='DRM_FORMAT_ABGR8888'
 if ! grep -q "$anchor" "$hdr"; then

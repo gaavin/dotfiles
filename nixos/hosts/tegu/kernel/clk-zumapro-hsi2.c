@@ -31,11 +31,33 @@
  *
  * As on gs101, bit 21 of each gate register is the enable.
  *
- * The bootloader does NOT leave this path running: it brings UFS up, reads the
- * boot image, then tears it down. Enabling only the leaf gates in CMU_HSI2 is
- * therefore not enough, and was tried first — the PHY still failed to
- * calibrate. Two more things have to be turned back on, and this driver does
- * both before registering the gates:
+ * CORRECTION, measured on hardware 2026-09-07. This file used to claim that
+ * "the bootloader does NOT leave this path running: it brings UFS up, reads
+ * the boot image, then tears it down". That is false. Logging every one of
+ * these registers before writing them shows the bootloader leaves the entire
+ * path up:
+ *
+ *	TOP noc_gate 0x00200000   ufs_gate 0x00200000
+ *	HSI2 noc_user 0x00000010  ufs_user 0x00000010
+ *	all six leaf gates        0x00200000
+ *
+ * which is exactly what the code below sets them to. Every write here is a
+ * no-op on this hardware.
+ *
+ * The earlier observation behind the false claim — that the leaf gates read
+ * 0x00000000 — was real, but self-inflicted: the gates were registered
+ * without CLK_IS_CRITICAL, so the clock framework disabled the very clocks
+ * the bootloader had left running. CLK_IS_CRITICAL did not fix the
+ * bootloader's teardown, because there was no teardown; it stopped this
+ * driver from performing one.
+ *
+ * The driver is still needed, as a clock provider: the UFS node references
+ * these gates by phandle and will not probe without them, and CLK_IS_CRITICAL
+ * is still required to stop the framework gating them. But it is not the
+ * reason UFS fails, and the writes below are kept only so the state is
+ * asserted rather than assumed.
+ *
+ * What it sets, matching what the bootloader already has:
  *
  *   - the top-level gates that feed the block at all, in CMU_TOP:
  *       CLK_CON_GAT_GATE_CLKCMU_HSI2_UFS_EMBD  0x20e0
