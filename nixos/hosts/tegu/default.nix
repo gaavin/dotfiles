@@ -218,7 +218,13 @@ in
       RemainAfterExit = true;
       ExecStart = "${pkgs.runtimeShell} ${./touch-probe.sh}";
     };
-    path = [ devmem ];
+    # Both tools the probe uses. systemd replaces PATH for a unit when this
+    # is set, so listing devmem alone here left spi-pipe invisible to the
+    # script even though it was in systemPackages.
+    path = [
+      devmem
+      pkgs.spi-tools
+    ];
   };
 
   documentation = {

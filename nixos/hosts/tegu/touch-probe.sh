@@ -241,8 +241,14 @@ if [ -z "$dev" ]; then
 else
 	log "tegu-probe: using $dev"
 	log "tegu-probe: irq before transfer: DAT=$(devmem $GPN0_DAT 32)"
-	out=$(head -c 16 /dev/zero | spi-pipe -d "$dev" -s 1000000 2>&1 | od -An -tx1 | tr -s " \n" " ")
-	log "tegu-probe: spi read 16 bytes:$out"
+	# Keep stderr out of the hex. Last time spi-pipe was missing from the
+	# unit's PATH and its "command not found" got dumped as if it were the
+	# touchscreen's reply -- readable only because it happened to be ASCII.
+	if err=$(head -c 16 /dev/zero | spi-pipe -d "$dev" -s 1000000 2>&1 >/tmp/spi.bin); then
+		log "tegu-probe: spi read 16 bytes:$(od -An -tx1 < /tmp/spi.bin | tr -s " \n" " ")"
+	else
+		log "tegu-probe: spi-pipe failed: $err"
+	fi
 	log "tegu-probe: irq after transfer:  DAT=$(devmem $GPN0_DAT 32)"
 fi
 
