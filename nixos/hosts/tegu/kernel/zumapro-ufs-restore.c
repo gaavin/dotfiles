@@ -37,6 +37,7 @@
 
 #include <linux/init.h>
 #include <linux/delay.h>
+#include <linux/moduleparam.h>
 #include <linux/io.h>
 
 /*
@@ -78,6 +79,36 @@
 #define BANK_CON		0x00
 #define BANK_DAT		0x04
 #define BANK_PUD		0x08
+
+/*
+ * Re-pointing the M-PHY reference clock is OFF by default, because doing it
+ * hard-locked the phone.
+ *
+ * Setting mux=3 (PLL_SPARE_D1) and div=1 succeeded by every check available
+ * -- both fields read back the requested values and both BUSY bits cleared
+ * -- and then the UFS driver's first register access hung the interconnect:
+ *
+ *     zumapro-ufs-pins: UFS_EMBD mux 0x00000003 (settled) div 0x00000001 (settled)
+ *     ...
+ *     watchdog: CPU5: Watchdog detected hard LOCKUP on cpu 6
+ *
+ * PLL_SPARE_D1 is a member of cmucal_vclk_blk_cmu[], which ACPM owns, so on
+ * a mainline kernel that PLL is never started. Selecting a dead source gives
+ * the block no clock at all, and the first access to it never returns.
+ *
+ * Two things worth keeping from that:
+ *   - a CMU mux BUSY bit clearing means the switch completed, NOT that the
+ *     selected source is running. It is not a liveness check.
+ *   - the experiment still proves the lever is real: changing this mux
+ *     visibly changed the UFS block's behaviour, which no other register in
+ *     this port has done.
+ *
+ * Pass zumapro_ufs_restore.set_clock=1 to try it again once PLL_SPARE is
+ * actually running, or when targeting a source that is.
+ */
+static bool set_clock;
+module_param(set_clock, bool, 0444);
+MODULE_PARM_DESC(set_clock, "re-point the UFS M-PHY reference clock (hangs unless PLL_SPARE runs)");
 
 static void __init zumapro_rmw(void __iomem *reg, u32 clear, u32 set)
 {
@@ -125,7 +156,7 @@ static int __init zumapro_ufs_pins_init(void)
 	zumapro_rmw(hsi2 + BANK_PUD, 0x3, 0);
 
 	/* M-PHY reference clock: Google's VDD_INT normal-level settings. */
-	cmu_top = ioremap(ZUMAPRO_CMU_TOP_BASE, 0x8000);
+	cmu_top = set_clock ? ioremap(ZUMAPRO_CMU_TOP_BASE, 0x8000) : NULL;
 	if (cmu_top) {
 		zumapro_rmw(cmu_top + CLKCMU_HSI2_UFS_EMBD_DIV,
 			    CMU_DIV_RATIO_MASK, UFS_EMBD_DIV_BY_2);
@@ -141,7 +172,7 @@ static int __init zumapro_ufs_pins_init(void)
 			readl(cmu_top + CLKCMU_HSI2_UFS_EMBD_DIV),
 			div_ok ? "settled" : "STILL BUSY");
 		iounmap(cmu_top);
-	} else {
+	} else if (set_clock) {
 		pr_warn("zumapro-ufs-pins: could not map CMU_TOP\n");
 	}
 
