@@ -1,5 +1,41 @@
 #!/usr/bin/env python3
-"""Give Tensor G4 its own UniPro/PCS pre-link values.
+"""Correct gs101's UFS host-controller data where Tensor G4 differs.
+
+Two edits: the pre-link PCS values, and the controller quirks.
+
+QUIRKS. Google's driver assembles hba->quirks and then takes four of them
+back if the device tree node says so (ufs-exynos.c):
+
+	hba->quirks = UFSHCD_QUIRK_PRDT_BYTE_GRAN |
+			UFSHCI_QUIRK_SKIP_RESET_INTR_AGGR |
+			UFSHCI_QUIRK_BROKEN_REQ_LIST_CLR |
+			UFSHCD_QUIRK_BROKEN_OCS_FATAL_ERROR | ...;
+
+	if (of_find_property(np, "fixed-prdt-req_list-ocs", NULL))
+		hba->quirks &= ~(UFSHCD_QUIRK_PRDT_BYTE_GRAN |
+				UFSHCI_QUIRK_BROKEN_REQ_LIST_CLR |
+				UFSHCD_QUIRK_BROKEN_OCS_FATAL_ERROR |
+				UFSHCI_QUIRK_SKIP_RESET_INTR_AGGR);
+
+The stock Tensor G4 device tree does say so -- "fixed-prdt-req_list-ocs;" is
+a property of ufs@13200000 in zumapro-a1-ipop.dtb -- so on this SoC all four
+are wrong. mainline's gs101 drv_data sets three of them unconditionally, and
+this port inherits them.
+
+UFSHCD_QUIRK_PRDT_BYTE_GRAN is the one that shows. With it set, the driver
+writes response_upiu_offset and prd_table_offset in bytes; without it, in
+dwords. Tell a controller that wants dwords a byte offset and it puts the
+response UPIU four times too far along, so the driver reads its own zeroed
+buffer -- which is what the hardware said:
+
+	ufshcd_dev_cmd_completion: Invalid device management cmd response: 0
+	ufshcd_verify_dev_init: NOP OUT failed -22
+
+The link itself was up by then: PHY calibration completed on both lanes and
+link startup passed on the first attempt.
+
+The pre-link edits follow.
+
 
 The device tree binds this SoC's UFS controller to "google,gs101-ufs", so
 gs101_ufs_pre_link() runs on Tensor G4. That is right for almost all of it:
@@ -85,5 +121,29 @@ new_2f = "\t\t/* 0x79 on Tensor G4; gs101's value is 0x69. */\n" \
 body = body.replace(old_2f, new_2f, 1)
 
 s = s[:start] + body + s[end:]
+
+# Drop the four quirks that "fixed-prdt-req_list-ocs" takes back on this SoC.
+old_init = """	/* set ACG to be controlled by UFS_ACG_DISABLE */
+	reg = hci_readl(ufs, HCI_IOP_ACG_DISABLE);"""
+if s.count(old_init) != 1:
+    sys.exit("zumapro-ufs-host: gs101_ufs_drv_init() body moved or ambiguous")
+new_init = """	/*
+	 * Tensor G4's controller has none of these faults. Its stock device
+	 * tree carries "fixed-prdt-req_list-ocs", the property Google's driver
+	 * reads to clear exactly this set. PRDT_BYTE_GRAN is the one that
+	 * shows: with it set the driver states the response UPIU offset in
+	 * bytes to a controller that reads dwords, so the response lands four
+	 * times too far along and every device management command comes back
+	 * as an all-zero UPIU.
+	 */
+	hba->quirks &= ~(UFSHCD_QUIRK_PRDT_BYTE_GRAN |
+			 UFSHCI_QUIRK_BROKEN_REQ_LIST_CLR |
+			 UFSHCD_QUIRK_BROKEN_OCS_FATAL_ERROR |
+			 UFSHCI_QUIRK_SKIP_RESET_INTR_AGGR);
+
+""" + old_init
+s = s.replace(old_init, new_init, 1)
+
 open(p, "w").write(s)
-print("zumapro-ufs-prelink: PCS 0x202=0x22 (38.4 MHz refclk), 0x2f=0x79")
+print("zumapro-ufs-host: PCS 0x202=0x22 (38.4 MHz refclk), 0x2f=0x79, "
+      "quirks cleared per fixed-prdt-req_list-ocs")
