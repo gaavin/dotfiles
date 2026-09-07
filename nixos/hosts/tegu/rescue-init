@@ -100,14 +100,30 @@ log "$(c 'GAT SYSREG_HSI2 PCLK     0x20e8' 0x130020e8)"
 # per pin (1 = output), DAT at +0x04 with one bit per pin. gpp0 is the first
 # bank, at offset 0 of the block. Pin 1 is therefore CON bits [7:4] and DAT
 # bit 1.
-# Read-only first: the other two UFS pins. ufs-refclk-out is gph5-0 and
-# ufs-rst-n is gph5-1, both at pin-function 2, in pinctrl@13060000 where
-# gph5 is the first (and only) bank, so CON is at +0x00. Four bits per pin
-# means pin 0 is CON[3:0] and pin 1 is CON[7:4]; both reading 2 means the
-# bootloader left the reference clock and device reset muxed to the UFS
-# block, and only the VCC rail is missing. Not written, only reported --
-# these are the pins the device is actually talking over.
-log "gph5 (ufs refclk/rst): CON=$($BB devmem 0x13060000 2>/dev/null) DAT=$($BB devmem 0x13060004 2>/dev/null)"
+# The other two UFS pins, in pinctrl@13060000 where gph5 is the first (and
+# only) bank, so CON is at +0x00 with four bits per pin.
+#
+#     ufs-refclk-out = gph5-0, samsung,pin-function = <2>
+#     ufs-rst-n      = gph5-1, samsung,pin-function = <2>
+#
+# Measured: CON reads 0x21, so pin 1 (device reset) is at function 2 as the
+# stock tree wants, but pin 0 (reference clock out) is at function 1 -- a
+# plain GPIO output -- and DAT has it driven LOW. The bootloader parked the
+# reference clock rather than leaving it muxed to the UFS block, which is
+# the same teardown as dropping VCC: the device is off and unclocked.
+#
+# Restore just that nibble to function 2. Everything else in the register,
+# including the reset pin, is preserved.
+GPH5_CON=0x13060000
+gcon=$($BB devmem $GPH5_CON 2>/dev/null)
+log "gph5 before: CON=$gcon DAT=$($BB devmem 0x13060004 2>/dev/null) PUD=$($BB devmem 0x13060008 2>/dev/null) DRV=$($BB devmem 0x1306000c 2>/dev/null)"
+if [ -n "$gcon" ]; then
+	newgcon=$(( ($gcon & 0xFFFFFFF0) | 0x2 ))
+	$BB devmem $GPH5_CON 32 $newgcon 2>/dev/null
+	log "gph5 after:  CON=$($BB devmem $GPH5_CON) (pin0 -> function 2, refclk to UFS)"
+else
+	log "gph5 read failed; not writing"
+fi
 
 GPP0_CON=0x10840000
 GPP0_DAT=0x10840004
