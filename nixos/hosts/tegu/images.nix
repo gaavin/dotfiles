@@ -46,29 +46,48 @@ stdenvNoCC.mkDerivation {
     cp ${dtb} zumapro-tegu.dtb
     cp ${initrd} initrd.img
 
-    # A vendor ramdisk must exist in the v4 vendor_boot header; ship an empty one.
+    # An empty ramdisk, for the headers that must carry one but must not
+    # contribute any files.
     mkdir empty
     (cd empty && find . | cpio -o -H newc --quiet) > vendor_ramdisk.cpio
 
+    # boot.img carries the kernel only. Its ramdisk is never used: ABL says
+    # "using init_boot ramdisk" and assembles the initramfs from the vendor
+    # and init_boot images instead, so shipping one here only wastes space.
     mkbootimg --header_version 4 --pagesize 4096 \
       --os_version 16.0.0 --os_patch_level 2026-09 \
-      --kernel Image.lz4 --ramdisk initrd.img \
+      --kernel Image.lz4 --ramdisk vendor_ramdisk.cpio \
       --cmdline ${lib.escapeShellArg cmdline} \
       -o boot.img
 
-    # Pixel 8+ take the generic ramdisk from init_boot, not boot.img.
+    # init_boot is where Android keeps the generic ramdisk, and it is where
+    # ours would go if it fitted -- but the partition is only 8 MiB on this
+    # phone (fastboot getvar partition-size:init_boot_a = 0x800000) and the
+    # NixOS initrd is 25 MiB. Flashing the real thing here fails with
+    # "not big enough". So this image exists purely to displace Android's
+    # ramdisk, which is otherwise concatenated after ours and takes /init back.
     mkbootimg --header_version 4 --pagesize 4096 \
       --os_version 16.0.0 --os_patch_level 2026-09 \
-      --ramdisk initrd.img \
+      --ramdisk vendor_ramdisk.cpio \
       -o init_boot.img
 
-    # DTB + vendor cmdline live in vendor_boot; Pixel 8+ also carry a copy in
-    # vendor_kernel_boot, and ABL prefers whichever it finds there.
+    # ABL loads three ramdisks and concatenates them in this order:
+    #
+    #   vendor_kernel_boot, then vendor_boot, then init_boot
+    #
+    # so the real initrd goes in the first of them, where nothing that follows
+    # can overwrite its /init. Both vendor images are 64 MiB partitions, with
+    # room for a 25 MiB zstd initrd. The DTB and vendor cmdline are carried by
+    # both, as before; ABL prefers vendor_kernel_boot's.
     mkbootimg --header_version 4 --pagesize 4096 \
       --dtb zumapro-tegu.dtb --vendor_ramdisk vendor_ramdisk.cpio \
       --vendor_cmdline ${lib.escapeShellArg cmdline} \
       --vendor_boot vendor_boot.img
-    cp vendor_boot.img vendor_kernel_boot.img
+
+    mkbootimg --header_version 4 --pagesize 4096 \
+      --dtb zumapro-tegu.dtb --vendor_ramdisk initrd.img \
+      --vendor_cmdline ${lib.escapeShellArg cmdline} \
+      --vendor_boot vendor_kernel_boot.img
 
     # The stock dtbo targets downstream phandles; replace it with a no-op overlay.
     printf '/dts-v1/;\n/plugin/;\n/ { };\n' > empty.dts
