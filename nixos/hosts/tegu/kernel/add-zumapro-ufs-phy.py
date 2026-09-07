@@ -62,8 +62,79 @@ static int zumapro_phy_wait_for_calibration(struct phy *phy, u8 lane)
 /* Tensor G4 (zumapro): as gs101, but PHY isolation control sits at 0x3ec0. */
 #define TENSOR_ZUMAPRO_PHY_CTRL		0x3ec0
 
+
+/*
+ * Tensor G4 analogue PHY configuration.
+ *
+ * Transcribed mechanically from Google's calibration table for this SoC
+ * (google-modules/soc/gs, drivers/ufs/zuma/ufs-cal.h, init_cfg_evt1), taking
+ * the PHY_PMA_COMN and PHY_PMA_TRSV entries in order. Google addresses the
+ * PMA in bytes; mainline addresses it in registers and shifts by two, so each
+ * offset here is Google's divided by four. The lane stride agrees too:
+ * Google's 0x800 bytes is mainline's 0x200 registers, so gs101's TRSV macro
+ * applies unchanged.
+ *
+ * The last two entries are the calibration trigger: writing 0x0c then 0x00 to
+ * COMN register 0x50 is what starts it, and the wait that follows is what was
+ * timing out with gs101's (different) sequence loaded.
+ *
+ * Only the PMA entries belong here. Google's table also carries PCS and
+ * UNIPRO writes, which in mainline are the host controller driver's job
+ * (exynos-ufs pre_link/post_link), not the PHY's.
+ */
+static const struct samsung_ufs_phy_cfg tensor_zumapro_pre_init_cfg[] = {
+	PHY_COMN_REG_CFG(0x50, 0x08, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x05, 0x19, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x0b, 0x44, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x0c, 0xc4, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x0d, 0xc3, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x0f, 0x88, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x16, 0x1a, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x19, 0x04, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x54, 0x88, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x67, 0x4c, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x68, 0x4c, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x201, 0x44, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x202, 0x44, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x203, 0x00, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x204, 0x18, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x205, 0xc0, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x207, 0x1c, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x2ec, 0x8c, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x27c, 0xd0, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x288, 0xfa, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x289, 0x60, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x234, 0x30, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x239, 0x05, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x23d, 0x05, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x24d, 0x1a, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x24e, 0x12, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x24f, 0x5e, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x259, 0x2a, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x260, 0x54, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x266, 0x54, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x273, 0x00, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x274, 0x00, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x2ab, 0x00, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x2ac, 0x02, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x50, 0x0c, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x50, 0x00, PWR_MODE_ANY),
+	END_UFS_PHY_CFG,
+};
+
+static const struct samsung_ufs_phy_cfg *tensor_zumapro_ufs_phy_cfgs[CFG_TAG_MAX] = {
+	[CFG_PRE_INIT]		= tensor_zumapro_pre_init_cfg,
+	/*
+	 * The high-speed power-mode tables are gs101's for now. They are only
+	 * reached once the link is up, so they cannot be tested until
+	 * calibration succeeds; revisit with zuma's pwr_change tables then.
+	 */
+	[CFG_PRE_PWR_HS]	= tensor_gs101_pre_pwr_hs_config,
+	[CFG_POST_PWR_HS]	= tensor_gs101_post_pwr_hs_config,
+};
+
 const struct samsung_ufs_phy_drvdata tensor_zumapro_ufs_phy = {
-	.cfgs = tensor_gs101_ufs_phy_cfgs,
+	.cfgs = tensor_zumapro_ufs_phy_cfgs,
 	.cfgs_hibern8 = tensor_gs101_hibern8_cfgs,
 	.isol = {
 		.offset = TENSOR_ZUMAPRO_PHY_CTRL,
