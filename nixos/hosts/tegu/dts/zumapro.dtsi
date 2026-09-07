@@ -525,12 +525,32 @@
 				clock-names = "spi", "spi_busclk0";
 				interrupts = <GIC_SPI 408 IRQ_TYPE_LEVEL_HIGH 0>;
 				/*
-				 * No pinctrl and no child yet. The pins are
-				 * still GPIOs -- zumapro's gpb10 bank is not
-				 * in gs101's pinctrl data -- so nothing can be
-				 * driven off this bus. Registering the
-				 * controller is the step being tested here.
+				 * No pinctrl: the SPI pads of this USI group
+				 * are fixed-function. Google's tree calls them
+				 * GPB10[4..7], a datasheet pad name with no
+				 * Linux bank behind it, and none of the five
+				 * USIs sharing sysreg 0x11020000 declare
+				 * pinctrl at all -- yet touch works on Android.
+				 *
+				 * spidev, deliberately, and temporarily. There
+				 * is no synaptics,tcm-spi driver in mainline to
+				 * bind here, and before writing one it is worth
+				 * establishing from userspace that the part
+				 * answers at all. "rohm,dh2228fv" is the
+				 * conventional stand-in compatible for exactly
+				 * this; it names nothing real and should go
+				 * when a genuine driver exists.
+				 *
+				 * 10 MHz and SPI mode 0 are the touch part's
+				 * own numbers, from Google's board file:
+				 * spi-max-frequency = <10000000> and
+				 * synaptics,spi-mode = <0>.
 				 */
+				touch_spidev: spidev@0 {
+					compatible = "rohm,dh2228fv";
+					reg = <0>;
+					spi-max-frequency = <10000000>;
+				};
 			};
 		};
 

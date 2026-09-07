@@ -120,6 +120,7 @@ let
             SPI = yes;
             SPI_MASTER = yes;
             SPI_S3C64XX = yes;
+            SPI_SPIDEV = yes;
             EXYNOS_USI = yes;
 
             # BL2 arms a 60s cluster watchdog on every boot and nothing in

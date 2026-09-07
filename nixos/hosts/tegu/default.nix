@@ -199,6 +199,10 @@ in
     htop
 
     devmem
+
+    # spi-pipe and spi-config, to talk to the touchscreen from a shell before
+    # committing to a driver for it.
+    spi-tools
   ];
 
   # Read the touchscreen stack's registers at boot and put them in the kernel

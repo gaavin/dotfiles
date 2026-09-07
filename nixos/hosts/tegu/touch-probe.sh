@@ -224,4 +224,26 @@ while [ "$i" -lt 10 ]; do
 	i=$((i + 1))
 done
 
+# Now ask the part directly. The interrupt has been held low since the reset
+# pulse, which is what a TouchComm device does when it has a message waiting
+# and is what the pull-up test says is happening -- but a line held low by an
+# unpowered pad and a line held low by a live part still look the same from a
+# GPIO register. Clocking the bus does not.
+#
+# If the part is there, the first byte of a TouchComm v1 message is the marker
+# 0xA5, followed by a status code and a 16-bit length. Anything that is not
+# uniformly 0x00 or 0xff is already proof the rails are on and the bus is
+# wired correctly; 0xA5 would be proof it is a TouchComm part talking.
+log "tegu-probe: --- talk to the touch part over SPI ---"
+dev=$(ls /dev/spidev* 2>/dev/null | head -1)
+if [ -z "$dev" ]; then
+	log "tegu-probe: no /dev/spidev* -- spidev did not bind"
+else
+	log "tegu-probe: using $dev"
+	log "tegu-probe: irq before transfer: DAT=$(devmem $GPN0_DAT 32)"
+	out=$(head -c 16 /dev/zero | spi-pipe -d "$dev" -s 1000000 2>&1 | od -An -tx1 | tr -s " \n" " ")
+	log "tegu-probe: spi read 16 bytes:$out"
+	log "tegu-probe: irq after transfer:  DAT=$(devmem $GPN0_DAT 32)"
+fi
+
 log "tegu-probe: END (all regions survived)"
