@@ -48,7 +48,7 @@ printf 'obj-y\t+= clk-zumapro-hsi2.o\n' >> drivers/clk/samsung/Makefile
 # and parks the reference clock output (gph5[0]) as a low GPIO. A bring-up
 # shim until this SoC has a pinctrl driver; see the file for why it cannot
 # be done from userspace.
-install -m444 "$src"/zumapro-ufs-restore.c drivers/soc/samsung/zumapro-ufs-restore.c
+install -m644 "$src"/zumapro-ufs-restore.c drivers/soc/samsung/zumapro-ufs-restore.c
 printf 'obj-y\t+= zumapro-ufs-restore.o\n' >> drivers/soc/samsung/Makefile
 
 # --- UFS PHY: Tensor G4 variant -----------------------------------------
@@ -71,6 +71,12 @@ python3 "$src"/keep-boot-phy.py
 # when the trigger is written; every earlier probe only sampled registers
 # chosen in advance. Must run after keep-boot-phy.py, whose anchor it uses.
 python3 "$src"/pma-dump.py
+
+# --- UFS: dump the register regions this port does not map ---------------
+# The PMA register file answers but nothing executes behind it, so whatever
+# gates the engine is outside the PHY. vs_hci is mapped here at 1/16th of
+# its stock size and has never been looked at. Read-only.
+python3 "$src"/region-dump.py
 
 hdr=include/linux/platform_data/simplefb.h
 anchor='DRM_FORMAT_ABGR8888'
