@@ -120,6 +120,32 @@ new_2f = "\t\t/* 0x79 on Tensor G4; gs101's value is 0x69. */\n" \
          "\t\tufshcd_dme_set(hba, UIC_ARG_MIB_SEL(0x2f, i), 0x79);\n"
 body = body.replace(old_2f, new_2f, 1)
 
+# The gear-4 adapt type. Google's HS tables open with
+#
+#	{0x15D4, 0x3350, 0x1, PMD_HS, UNIPRO_STD_MIB, BRD_ALL}
+#
+# which is PA_TXHSADAPTTYPE = PA_INITIAL_ADAPT. gs101's pre_pwr_change never
+# writes it, so the attribute keeps whatever it held. The stock tree asks for
+# gear 4 here ("ufs,pmd-attr-gear = [04]"), and at G4 adaptation is not
+# optional. ufshcd_dme_configure_adapt() is the core helper for exactly this
+# and downgrades itself to PA_NO_ADAPT below G4, so it is safe at any gear.
+# PA_PWRMODEUSERDATA0 is written by several SoCs in this file, so scope the
+# edit to gs101_ufs_pre_pwr_change() the same way as the pre-link one.
+pstart = s.find("static int gs101_ufs_pre_pwr_change(struct exynos_ufs *ufs,")
+if pstart < 0:
+    sys.exit("zumapro-ufs-host: gs101_ufs_pre_pwr_change() not found")
+pend = s.find("\n}\n", pstart)
+if pend < 0:
+    sys.exit("zumapro-ufs-host: end of gs101_ufs_pre_pwr_change() not found")
+pbody = s[pstart:pend]
+
+old_pwr = "\tufshcd_dme_set(hba, UIC_ARG_MIB(PA_PWRMODEUSERDATA0), 12000);\n"
+if pbody.count(old_pwr) != 1:
+    sys.exit("zumapro-ufs-host: pre_pwr_change anchor moved or ambiguous")
+new_pwr = "\tufshcd_dme_configure_adapt(hba, pwr->gear_rx, PA_INITIAL_ADAPT);\n\n" + old_pwr
+pbody = pbody.replace(old_pwr, new_pwr, 1)
+s = s[:pstart] + pbody + s[pend:]
+
 s = s[:start] + body + s[end:]
 
 # Drop the four quirks that "fixed-prdt-req_list-ocs" takes back on this SoC.

@@ -242,15 +242,37 @@ static const struct samsung_ufs_phy_cfg tensor_zumapro_pre_init_cfg[] = {
 	END_UFS_PHY_CFG,
 };
 
+/*
+ * Nothing to do to the PMA at a power-mode change on this SoC.
+ *
+ * That is not an omission, it is what Google's tables say. ufs_cal_pre_pmc()
+ * selects calib_of_hs_rate_a or calib_of_hs_rate_b, and for Tensor G4 both
+ * hold only UNIPRO_STD_MIB and UNIPRO_DBG_APB entries -- the L2 timer and
+ * PA_PWRMODEUSERDATA values that exynos-ufs already writes from
+ * gs101_ufs_pre_pwr_change(). Not one PHY_PMA_COMN or PHY_PMA_TRSV entry
+ * between them. ufs_cal_post_pmc() picks post_calib_of_hs_rate_a or _b, and
+ * on this SoC both are empty:
+ *
+ *	static struct ufs_cal_phy_cfg post_calib_of_hs_rate_a[] = {
+ *		{0, 0, 0, 0, PHY_CFG_NONE, BRD_ALL}
+ *	};
+ *
+ * These slots used to carry gs101's tables, which do write the PMA. That put
+ * Tensor G1's analogue values into a Tensor G4 PHY at the moment of the gear
+ * switch, and the switch came back PWR_FATAL_ERROR:
+ *
+ *	pwr ctrl cmd 0x2 with (MIBattribute 0x1571, mode 0x11) failed,
+ *		host upmcrs:0x5
+ *	ufshcd_dme_change_power_mode: power mode change failed 5
+ */
+static const struct samsung_ufs_phy_cfg tensor_zumapro_pwr_hs_cfg[] = {
+	END_UFS_PHY_CFG,
+};
+
 static const struct samsung_ufs_phy_cfg *tensor_zumapro_ufs_phy_cfgs[CFG_TAG_MAX] = {
 	[CFG_PRE_INIT]		= tensor_zumapro_pre_init_cfg,
-	/*
-	 * The high-speed power-mode tables are gs101's for now. They are only
-	 * reached once the link is up, so they cannot be tested until
-	 * calibration succeeds; revisit with zuma's pwr_change tables then.
-	 */
-	[CFG_PRE_PWR_HS]	= tensor_gs101_pre_pwr_hs_config,
-	[CFG_POST_PWR_HS]	= tensor_gs101_post_pwr_hs_config,
+	[CFG_PRE_PWR_HS]	= tensor_zumapro_pwr_hs_cfg,
+	[CFG_POST_PWR_HS]	= tensor_zumapro_pwr_hs_cfg,
 };
 
 const struct samsung_ufs_phy_drvdata tensor_zumapro_ufs_phy = {
