@@ -46,6 +46,12 @@ printf 'obj-y\t+= clk-zumapro-hsi2.o\n' >> drivers/clk/samsung/Makefile
 # --- UFS PHY: Tensor G4 variant -----------------------------------------
 python3 "$src"/add-zumapro-ufs-phy.py
 
+# --- UFS host controller: report clock-stop state before calibration -----
+# Diagnostic. The PHY takes our register writes but never finishes
+# calibrating, so print whether the M-PHY reference clock is actually
+# running at that moment instead of assuming ungate_clks did its job.
+python3 "$src"/dump-ufs-clkstop.py
+
 hdr=include/linux/platform_data/simplefb.h
 anchor='DRM_FORMAT_ABGR8888'
 if ! grep -q "$anchor" "$hdr"; then

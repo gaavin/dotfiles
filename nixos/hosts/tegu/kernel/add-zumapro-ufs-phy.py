@@ -76,6 +76,17 @@ static void zumapro_phy_report_cal_failure(struct samsung_ufs_phy *ufs_phy,
 		"zumapro: lane %u of %u, pll_lock_status 0x%02x (locked %d)\\n",
 		lane, ufs_phy->lane_cnt, val, !!(val & PHY_PLL_LOCK_BIT));
 
+	/*
+	 * Is the PHY actually out of isolation? The registers answering at all
+	 * says the digital domain is alive, but isolation is what gates the
+	 * analogue side, and that is where calibration runs.
+	 */
+	if (!regmap_read(ufs_phy->reg_pmu, ufs_phy->isol.offset, &val))
+		dev_err(ufs_phy->dev,
+			"zumapro: pmu isol reg 0x%04x reads 0x%08x (mask 0x%x en 0x%x)\\n",
+			ufs_phy->isol.offset, val, ufs_phy->isol.mask,
+			ufs_phy->isol.en);
+
 	off = PHY_PMA_TRSV_ADDR(TENSOR_ZUMAPRO_CAL_DONE_REG, lane);
 	dev_err(ufs_phy->dev, "zumapro: cal_done reg (0x%03x) reads 0x%02x\\n",
 		TENSOR_ZUMAPRO_CAL_DONE_REG,
