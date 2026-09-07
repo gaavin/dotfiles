@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Send a shell command to the tegu phone and get the answer over UART.
+#
+# Usage:  tools/tegu-cmd 'cat /proc/cmdline'
+#         tools/tegu-cmd -f script.sh
+#
+# Rebuilds only vendor_boot -- 24 KB, about ten milliseconds to flash -- with
+# the command base64'd onto its vendor_cmdline, and flashes it. Reboot the
+# phone and the reply comes back on the UART, prefixed "tegu-cmd:".
+#
+# This exists because the debug loop was otherwise a four-minute rootfs
+# reflash for every question, and the UART on this board cannot be typed into.
+set -euo pipefail
+
+fastboot=$(command -v fastboot || echo /nix/store/mcbpd0lzv6gl5pan8njd72wzczi3v3r2-android-tools-37.0.0/bin/fastboot)
+mkbootimg=$(command -v mkbootimg || echo /nix/store/mcbpd0lzv6gl5pan8njd72wzczi3v3r2-android-tools-37.0.0/bin/mkbootimg)
+
+if [ "${1:-}" = "-f" ]; then
+	cmd=$(cat "$2")
+else
+	cmd="${1:?usage: tegu-cmd '<shell command>' | tegu-cmd -f script.sh}"
+fi
+
+here=$(cd "$(dirname "$0")/.." && pwd)
+img=$(nix build --no-link --print-out-paths "$here/nixos#tegu-images")
+base=$(cat "$img/cmdline.txt")
+enc=$(printf '%s' "$cmd" | base64 -w0)
+
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+mkdir "$work/empty"
+(cd "$work/empty" && find . | cpio -o -H newc --quiet) > "$work/vr.cpio"
+
+"$mkbootimg" --header_version 4 --pagesize 4096 \
+	--dtb "$img/zumapro-tegu.dtb" --vendor_ramdisk "$work/vr.cpio" \
+	--vendor_cmdline "$base tegu.cmd=$enc" \
+	--vendor_boot "$work/vendor_boot.img"
+
+echo "tegu-cmd: $cmd"
+"$fastboot" flash vendor_boot "$work/vendor_boot.img"
+echo "tegu-cmd: flashed. reboot the phone; the reply appears on the UART."

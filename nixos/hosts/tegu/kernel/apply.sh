@@ -43,6 +43,15 @@ printf 'obj-y += zumapro-bootfb.o\n' >> drivers/video/Makefile
 install -m444 "$src"/clk-zumapro-hsi2.c drivers/clk/samsung/clk-zumapro-hsi2.c
 printf 'obj-y\t+= clk-zumapro-hsi2.o\n' >> drivers/clk/samsung/Makefile
 
+# The USI11 divider in CMU_PERIC1, which the touchscreen's SPI needs. Not a
+# gate driver: every gate on that path is already open at boot. mainline's
+# gs101 SPI data sets clk_from_cmu, so the controller has no prescaler and
+# spi-s3c64xx sets the bit rate with clk_set_rate() -- against a fixed-clock
+# that does nothing and the transfer fails with -EIO, which is how this was
+# found.
+install -m444 "$src"/clk-zumapro-peric1.c drivers/clk/samsung/clk-zumapro-peric1.c
+printf 'obj-y\t+= clk-zumapro-peric1.o\n' >> drivers/clk/samsung/Makefile
+
 # --- UFS pins: restore what the bootloader parked ------------------------
 # Measured: the bootloader switches the UFS device's VCC rail off (gpp0[1])
 # and parks the reference clock output (gph5[0]) as a low GPIO. A bring-up

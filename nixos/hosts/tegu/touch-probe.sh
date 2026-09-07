@@ -239,12 +239,19 @@ dev=$(ls /dev/spidev* 2>/dev/null | head -1)
 if [ -z "$dev" ]; then
 	log "tegu-probe: no /dev/spidev* -- spidev did not bind"
 else
+	# 10 MHz, not 1. The controller has no prescaler (gs101's port config
+	# sets clk_from_cmu), so the bit rate comes from the CMU divider alone:
+	# 400 MHz through a 4-bit DIVRATIO and the controller's fixed /4 reaches
+	# 6.25 MHz to 100 MHz, and lands exactly on 10 MHz -- the touch part's
+	# own maximum from Google's board file -- at ratio 9. 1 MHz is not
+	# reachable, which is why the last attempt ran the bus at 100 MHz and
+	# failed with -EIO.
 	log "tegu-probe: using $dev"
 	log "tegu-probe: irq before transfer: DAT=$(devmem $GPN0_DAT 32)"
 	# Keep stderr out of the hex. Last time spi-pipe was missing from the
 	# unit's PATH and its "command not found" got dumped as if it were the
 	# touchscreen's reply -- readable only because it happened to be ASCII.
-	if err=$(head -c 16 /dev/zero | spi-pipe -d "$dev" -s 1000000 2>&1 >/tmp/spi.bin); then
+	if err=$(head -c 16 /dev/zero | spi-pipe -d "$dev" -s 10000000 2>&1 >/tmp/spi.bin); then
 		log "tegu-probe: spi read 16 bytes:$(od -An -tx1 < /tmp/spi.bin | tr -s " \n" " ")"
 	else
 		log "tegu-probe: spi-pipe failed: $err"

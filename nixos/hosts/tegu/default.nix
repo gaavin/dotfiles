@@ -205,6 +205,28 @@ in
     spi-tools
   ];
 
+  # Run whatever command the kernel command line carries. This is the write
+  # half of the debug loop: the UART is receive-only and there is no USB
+  # gadget yet, so without it the only way to change what the phone does is to
+  # rebuild and reflash an 11 GB rootfs. vendor_boot is 24 KB and flashes in
+  # milliseconds, and ABL appends its vendor_cmdline, so a command can ride in
+  # there. See tools/tegu-cmd on the build host.
+  systemd.services.tegu-cmd = {
+    description = "Run a command passed on the kernel command line";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "tegu-touch-probe.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${pkgs.runtimeShell} ${./tegu-cmd.sh}";
+    };
+    path = [
+      devmem
+      pkgs.spi-tools
+      pkgs.util-linux
+    ];
+  };
+
   # Read the touchscreen stack's registers at boot and put them in the kernel
   # log. There is no ssh on this phone and the only way off it is the UART, so
   # a boot-time dump is how hardware gets measured here. See touch-probe.sh for
