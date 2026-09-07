@@ -1,9 +1,10 @@
 # tegu — Google Pixel 9a (Tensor G4) on mainline NixOS
 
 Status: **mainline Linux boots on this phone.** 7.3-rc1 comes up on a Tensor G4
-(`zumapro`), runs to userspace, and prints its log on the panel with no debug
-cable. There is no root filesystem yet, so it is not a usable system. See
-"What works" for the honest boundary.
+(`zumapro`), runs to userspace, and prints its log over UART and on the panel.
+There is no root filesystem yet, so it is not a usable system: UFS storage
+still fails to bring its link up. See "What works" for the honest boundary and
+"Storage" for exactly where that stands.
 
 Everything below was established on hardware. Where something is inferred
 rather than observed it says so.
@@ -26,16 +27,17 @@ sources, then tested by booting it.
 | Boot to userspace | **Yes.** Memory, interrupts, timers, SMP, driver model, initramfs |
 | Panel as console | **Yes**, via the bootloader's framebuffer (see below) |
 | Our own device tree | **Yes.** Bootloader fills in the real 8 GiB; machine reports as "Google Pixel 9a" |
-| Debug UART | **Probes and binds** (`ttySAC0` at `0x10870000`). Untested for output: no cable |
+| Debug UART | **Yes** (`ttySAC0` at `0x10870000`), with a USB-C debug board; read-only |
 | Register access from userspace | **Yes**, `/dev/mem` (`STRICT_DEVMEM` deliberately off) |
 | Rescue userspace | **Yes**, linked into the kernel image |
 | Serial console | **Yes**, with a USB-C debug board (read-only) |
-| Storage | Described, probes, **link does not come up**: PHY calibration times out. Blocked on clocks |
+| Storage | Described, probes, **link does not come up**: PHY calibration times out. Cause unknown; see "Storage" |
 | USB, WLAN, modem, GPU, touch, audio, camera | No |
 
 ## The panel console
 
-There is no debug cable, so the port needs output that does not depend on one.
+This predates the UART and is still the fastest signal when the kernel dies
+before the serial console comes up.
 
 The bootloader leaves the boot logo scanning out on DECON0 when it jumps to the
 kernel. `kernel/zumapro-bootfb.c` reads the DECON window and DPP read-DMA
@@ -137,6 +139,25 @@ Things that are not documented anywhere and cost real time to discover:
    panel,** leaving the boot splash up with no log. The panel is a log, not a
    terminal.
 
+8. **The bootloader leaves the UFS clock path fully running.** Measured
+   2026-09-07 by logging every register before writing it: the CMU_TOP gates
+   read `0x00200000`, both CMU_HSI2 user muxes read `0x00000010`, and all six
+   leaf gates read `0x00200000` — exactly the values `clk-zumapro-hsi2.c`
+   sets. This file previously asserted the opposite, that the bootloader
+   "tears the path down", and that false claim survived several rounds of
+   debugging because it was written down as though it were measured.
+
+   The evidence behind it was self-inflicted. The leaf gates *were* observed
+   reading `0x00000000`, but only because they had been registered without
+   `CLK_IS_CRITICAL`, so the clock framework disabled the clocks the
+   bootloader had left on. `CLK_IS_CRITICAL` did not undo a teardown by the
+   bootloader; it stopped this port performing one.
+
+9. **The bootloader hands over a working UFS.** Its command line includes
+   `ufs_pixel_fips140.fips_first_lba=...`, and it reads the kernel off the
+   flash immediately before jumping to it. Anything that fails afterwards is
+   something Linux does to a working block, not setup that was never done.
+
 ## Layout
 
 | File | Purpose |
@@ -144,7 +165,12 @@ Things that are not documented anywhere and cost real time to discover:
 | `dts/zumapro.dtsi` | SoC: 4×A520 + 3×A720 + 1×X4, PSCI, GIC-v3, arch timer, debug UART, firmware/modem carve-outs, ramoops |
 | `dts/zumapro-pixel-common.dtsi` | `chosen`, placeholder memory node (the bootloader patches in the real 8 GiB) |
 | `dts/zumapro-tegu.dts` | Board |
-| `kernel/zumapro-bootfb.c` (+ `.patch`) | Boot framebuffer adoption, staged reset probes, early stripe |
+| `kernel/zumapro-bootfb.c` | Boot framebuffer adoption, staged reset probes, early stripe |
+| `kernel/apply.sh` | Grafts everything below into the kernel tree; fails loudly if an upstream anchor moves |
+| `kernel/clk-zumapro-hsi2.c` | CMU_HSI2 clock provider for UFS. Its writes are no-ops (see fact 8); needed so the UFS node can resolve its clocks |
+| `kernel/add-zumapro-ufs-phy.py` | Adds the `google,zumapro-ufs-phy` variant: isolation offset, calibration-done register, Tensor G4 PMA table, failure diagnostics |
+| `kernel/dump-ufs-clkstop.py` | Diagnostic: prints `HCI_CLKSTOP_CTRL` at calibration time |
+| `kernel/keep-boot-phy.py` | Adds `phy_exynos_ufs.keep_boot_phy=1` to skip the PRE_INIT table |
 | `kernel.nix` | 7.3-rc1, arm64 defconfig with other SoCs and unused subsystems trimmed |
 | `initramfs.nix`, `rescue-init` | Rescue userspace, linked into the kernel image |
 | `cross-kernel.nix` | Cross-compiles the kernel from x86_64 instead of emulating |
@@ -171,13 +197,42 @@ nix build .#tegu-images.kernel
 ## Running it
 
 The device tree must be flashed; `fastboot boot` alone uses the phone's own.
+`images.nix` produces a `flash.sh` that writes the full set:
 
 ```sh
-fastboot flash vendor_boot        result/vendor_boot.img
-fastboot flash vendor_kernel_boot result/vendor_boot.img
-fastboot flash dtbo               result/dtbo.img      # empty overlay
-fastboot boot                     result/boot.img      # RAM boot, nothing written
+nix build .#tegu-images
+result/flash.sh                   # boot, init_boot, vendor_boot, dtbo, vbmeta
 ```
+
+### The bring-up loop actually used
+
+For kernel work, only `boot` needs rewriting, and the boot image is just the
+lz4 kernel — the ramdisk is linked into it (fact 2), so `mkbootimg` needs
+nothing else:
+
+```sh
+K=$(nix build .#tegu-images --no-link --print-out-paths)
+test -s "$K/Image.lz4" || exit 1          # see below
+mkbootimg --kernel "$K/Image.lz4" --header_version 4 \
+  --cmdline "console=tty0 console=ttySAC0,115200n8 earlycon zumapro_bootfb \
+             fbcon=nodefer clk_ignore_unused pd_ignore_unused panic=0 \
+             loglevel=7 no_console_suspend rdinit=/tegu-init" \
+  --out boot.img
+fastboot flash boot boot.img
+```
+
+**Always check the image exists before flashing.** `nix build` prints the
+output path it *would* have produced inside its error text, so scraping that
+path is not evidence the build succeeded. Two builds were reported as
+successful in this port that had in fact failed.
+
+Because the boot image carries the command line, a kernel parameter can be
+changed with a `mkbootimg` and a flash — no rebuild. That is how
+`phy_exynos_ufs.keep_boot_phy=1` and `clk_zumapro_hsi2.keep_boot_mux=1` are
+meant to be tested.
+
+Note the debug board occupies the USB-C port: flash first, then attach it and
+power on.
 
 **Android will not boot after this.** It cannot run against this device tree.
 Restore with a GrapheneOS factory image.
@@ -186,46 +241,115 @@ Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
 
 ## Next steps, in order
 
-1. **Storage, blocked on clocks.** The controller and PHY are described and
-   enabled. They no longer panic, but the link does not come up:
+1. **Storage. This is the blocker, and the cause is not yet known.**
 
-       samsung-ufs-phy 13204000.phy: failed to get phy cal done -110
+       samsung-ufs-phy 13204000.phy: zumapro: failed to get phy cal done -110
        exynos-ufshc 13200000.ufs: link startup failed 1
 
-   What is established, on hardware:
+   Three real bugs were found and fixed on the way here. None of them made
+   the link come up, and it is worth being explicit that each was believed to
+   be *the* fix at the time:
 
-   - The PHY isolation offset was wrong and is fixed. Mainline's gs101 data
-     writes PMU 0x3ec8; zumapro's control is at 0x3ec0 (`kernel/apply.sh`
-     adds a `google,zumapro-ufs-phy` variant). Before this the first PHY
-     access raised an SError and panicked the kernel.
-   - The PHY is now reachable: its registers read back real values, and the
-     calibration poll returns a clean timeout rather than faulting.
-   - Calibration genuinely does not complete. Skipping the wait was tried
-     and is **wrong**: the driver then writes registers that are not ready
-     and the kernel panics with an SError in `phy_power_off`. The timeout is
-     the honest signal.
-   - The addresses are not the problem. `ufsp` is never touched at all,
-     because gs101 sets `EXYNOS_UFS_OPT_UFSPR_SECURE`, which skips that block.
+   - **PHY isolation offset.** Mainline's gs101 data writes PMU `0x3ec8`;
+     zumapro's control is `0x3ec0`. Before this the first PHY access raised
+     an SError and panicked the kernel. Fixed; necessary, not sufficient.
+   - **Calibration-done register.** gs101 polls TRSV `0x338` bit 3. This SoC
+     reports in TRSV `0x31d` bit 0 (Google's `PHY_EMB_CAL_WAIT` entry,
+     `{0x0000, 0xC74, 0x01, ...}`). Fixed; necessary, not sufficient.
+   - **The PMA calibration table was Tensor G1's.** Mainline ships only
+     gs101's analogue table. Replaced with this SoC's, transcribed from
+     Google's `init_cfg_evt1` and verified entry-for-entry by script.
+     Necessary, not sufficient.
 
-   That leaves power/clocking. The clocks in the device tree are fixed-clock
-   stubs standing in for a clock controller that has no mainline driver, so
-   the kernel believes clocks are enabled when the hardware has them gated.
-   The bootloader brings UFS fully up (it reads the boot image from it) and
-   then tears it down before handing over, including re-isolating the PHY,
-   which is consistent with everything above.
+   ### What the hardware now says
 
-   **So the real next step is a clock driver.** On this SoC clocks are
-   managed through ACPM firmware (`google,gs-acpm`), which mainline does not
-   support either; `drivers/clk/samsung/clk-gs101.c` is the closest starting
-   point. This is a substantial project, and it is the same dependency that
-   gates the GPU and touch, so it is the single highest-value thing to build.
+   Every input to calibration that this port can reach is correct, and
+   calibration still never completes:
+
+   | Probe | Reading |
+   | --- | --- |
+   | PMA register readback | all five sampled registers hold what we wrote (`ok`) |
+   | `cal_done` (TRSV `0x31d`) | `0x38` — a live value, but bit 0 never sets |
+   | `HCI_CLKSTOP_CTRL` | `0x00000000` — `REFCLK_STOP`, `REFCLKOUT_STOP`, `MPHY_APBCLK_STOP` all clear |
+   | `HCI_MISC` | `0x00000d10` — `CLK_CTRL_EN_MASK` cleared, as `ungate_clks` intends |
+   | PMU isolation `0x3ec0` | `0x00000001` with `en=0x1` — PHY genuinely un-isolated |
+   | Lanes | `rx=2 tx=2` — UniPro answers capability queries |
+   | Clock tree | bootloader already had it all running (fact 8) |
+
+   Read together: the PHY's **digital domain is alive and correctly
+   addressed**, and the **calibration state machine never starts**. That is
+   not a register-programming fault, which is why three rounds of register
+   fixes did not move it.
+
+   ### Eliminated, with the evidence
+
+   Recorded so none of this is repeated:
+
+   - *Timeout too short* — Google allows `100 * 40us` = 4 ms; we allow 40 ms.
+   - *Missing probe-time setup* — Google's `ufs_cal_init` only stores a
+     pointer; it does nothing to the hardware.
+   - *Lane iteration differences* — Google skips COMN registers on lane 1
+     exactly as mainline does.
+   - *M-PHY APB gating around PMA access* — Google only does that under
+     `__UFS_CAL_FW__`, a bootloader-only build; the kernel path is plain.
+   - *Transcription error in the table* — gs101's own table has the identical
+     shape (enter cal, configure, trigger, clear) on register `0x43` with
+     `0x10/0x18/0x00` against our `0x50` and `0x08/0x0c/0x00`.
+   - *Wrong clocks, or our clock driver breaking them* — fact 8. The
+     bootloader's values and ours are identical.
+   - *`unipro` region too small* — the driver's highest offset is `0x78c0`;
+     we map `0x8000`.
+   - *`pll_lock_status`* was quoted as evidence in earlier working notes.
+     Disregard it: this SoC's tables contain no `PHY_PLL_WAIT` entry, so
+     register `0x1e` is not the PLL status here.
+
+   ### Current hypothesis (untested as of this commit)
+
+   The bootloader hands over a *working* PHY (fact 9). Mainline's first act is
+   to overwrite it with a calibration table and wait for a calibration that
+   never finishes. **Re-running calibration may itself be the bug** — the
+   sequence opens by writing `0x50 = 0x08` to enter calibration mode, which
+   plausibly requires a PHY power-cycle the bootloader performed and we do
+   not.
+
+   `kernel/keep-boot-phy.py` adds `phy_exynos_ufs.keep_boot_phy=1`, which
+   skips the PRE_INIT table and leaves the bootloader's configuration alone.
+   The existing wait then answers the question either way:
+
+   - calibration already done → the wait returns immediately and link startup
+     continues;
+   - not done → it times out and prints `cal_done`'s pristine value, a number
+     never yet observed, because every reading so far was taken *after* the
+     PHY had been overwritten.
+
+   **This is the next thing to run.** The build was in progress when the
+   session ended; nothing in the repository depends on its outcome.
+
+   ### If that fails, in order of promise
+
+   - **Regulators.** `vcc`/`vccq`/`vccq2` are all "assuming enabled" because
+     there is no PMIC driver. `vccq` feeds the M-PHY, and a dead analogue rail
+     behind a live digital one produces exactly the observed signature. Not
+     from scratch: mainline already has `drivers/firmware/samsung/exynos-acpm-pmic.c`
+     and the S2MPG10/11 MFD and regulator drivers for this SoC family.
+   - **pinctrl.** mainline's gs101 UFS node carries
+     `pinctrl-0 = <&ufs_rst_n &ufs_refclk_out>` — device reset and the
+     reference-clock pin. Ours has none, because there is no pinctrl driver
+     for this SoC.
+   - **Host-controller sequence.** Google writes UniPro attributes mainline
+     does not (`0x3000`, `0x3001`, `0x4020`, `0x4021`), and uses `0x2f = 0x79`
+     where mainline's gs101 uses `0x69`. These affect link startup rather than
+     calibration, so they matter only once calibration succeeds.
+
 2. **USB.** `usb@11210000`, PHY `@11100000`. Establish the power state from
    userspace first (item 5 above). A gadget serial console ends the
    photograph-the-screen workflow; `USB_G_SERIAL` and `U_SERIAL_CONSOLE` are
    already enabled in the config.
-3. **Clocks and power domains.** `samsung,zuma-clock` has no mainline driver.
-   Start from `drivers/clk/samsung/clk-gs101.c`. This unblocks nearly
-   everything else, including the GPU.
+3. **Clocks and power domains, properly.** `clk-zumapro-hsi2.c` covers one
+   block and does not model the CMU_TOP mux/divider tree at all. A real
+   driver, starting from `drivers/clk/samsung/clk-gs101.c`, is still needed
+   for the GPU, touch and USB. Note this is **not** what blocks storage —
+   that belief was wrong, see fact 8.
 4. **Touch.** Synaptics TouchCom over SPI (`spi@111d0000`, IRQ `gpn0-0`, reset
    `gpp1-1`). No mainline driver exists; Google's is a large out-of-tree module.
    Needs pinctrl and USI/SPI clocks first.
