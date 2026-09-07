@@ -2,9 +2,10 @@
 
 Status: **mainline Linux boots on this phone.** 7.3-rc1 comes up on a Tensor G4
 (`zumapro`), runs to userspace, and prints its log over UART and on the panel.
-There is no root filesystem yet, so it is not a usable system: UFS storage
-still fails to bring its link up. See "What works" for the honest boundary and
-"Storage" for exactly where that stands.
+There is no root filesystem yet, so it is not a usable system: UFS gets past
+PHY calibration but the storage device does not answer link startup. See
+"What works" for the honest boundary and "Next steps" for exactly where that
+stands.
 
 Everything below was established on hardware. Where something is inferred
 rather than observed it says so.
@@ -31,7 +32,7 @@ sources, then tested by booting it.
 | Register access from userspace | **Yes**, `/dev/mem` (`STRICT_DEVMEM` deliberately off) |
 | Rescue userspace | **Yes**, linked into the kernel image |
 | Serial console | **Yes**, with a USB-C debug board (read-only) |
-| Storage | Described, probes, **link does not come up**: PHY calibration times out. Cause unknown; see "Storage" |
+| Storage | **Past the PHY.** Link startup fails: the UFS device does not answer. See "Next steps" |
 | USB, WLAN, modem, GPU, touch, audio, camera | No |
 
 ## The panel console
@@ -303,43 +304,74 @@ Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
      Disregard it: this SoC's tables contain no `PHY_PLL_WAIT` entry, so
      register `0x1e` is not the PLL status here.
 
-   ### Current hypothesis (untested as of this commit)
+   ### Resolved: calibration was never the problem
 
-   The bootloader hands over a *working* PHY (fact 9). Mainline's first act is
-   to overwrite it with a calibration table and wait for a calibration that
-   never finishes. **Re-running calibration may itself be the bug** — the
-   sequence opens by writing `0x50 = 0x08` to enter calibration mode, which
-   plausibly requires a PHY power-cycle the bootloader performed and we do
-   not.
+   Confirmed on hardware. Booting with `phy_exynos_ufs.keep_boot_phy=1`,
+   which skips the PRE_INIT table and the calibration wait, removes
+   `phy poweron failed --> -110` entirely -- it had appeared on every
+   previous boot.
 
-   `kernel/keep-boot-phy.py` adds `phy_exynos_ufs.keep_boot_phy=1`, which
-   skips the PRE_INIT table and leaves the bootloader's configuration alone.
-   The existing wait then answers the question either way:
+   With the table skipped, the PHY's trim registers read back values that
+   differ from the ones the table writes (COMN `0x05` reads `0x15` against
+   `0x19`, `0x0b` reads `0x4a` against `0x44`, `0x0c` reads `0xea` against
+   `0xc4`). Those are the table's values *as adjusted by a calibration that
+   already ran*: the bootloader calibrated this PHY and read the kernel over
+   it. `TRSV 0x201` matching exactly is consistent, since not every trim is
+   adjusted.
 
-   - calibration already done → the wait returns immediately and link startup
-     continues;
-   - not done → it times out and prints `cal_done`'s pristine value, a number
-     never yet observed, because every reading so far was taken *after* the
-     PHY had been overwritten.
+   `cal_done` bit 0 is clear even when nothing is written at all, so it is
+   not a persistent "this PHY is calibrated" flag; it does not survive the
+   UniPro/link software reset at `HCI_SW_RST`. That reset is not a mainline
+   bug -- mainline and Google use the identical `UFS_SW_RST_MASK` of
+   `UNIPRO|LINK`. **The wait was polling for an event that had already
+   happened and left no standing flag.**
 
-   **This is the next thing to run.** The build was in progress when the
-   session ended; nothing in the repository depends on its outcome.
+   Two follow-on bugs, both ours, both fixed:
 
-   ### If that fails, in order of promise
+   - `keep_boot_phy` initially skipped only configuration and the wait, not
+     teardown. On a link-startup retry `exynos_ufs_phy_init()` calls
+     `phy_power_off()`, which re-isolates the PHY through the PMU; isolating
+     a block the controller is still driving raised an SError and panicked
+     the kernel (`lr : phy_power_off+0x64`, with `x6 = 0x3ec0`, the isolation
+     offset). "Leave the PHY alone" has to hold on every path.
+   - The three earlier "fixes" (isolation offset aside) were solving a
+     problem that did not exist. The PMA table and the cal-done register are
+     correct as ported, but **should not be used on this SoC** while the
+     bootloader has already calibrated the PHY.
 
-   - **Regulators.** `vcc`/`vccq`/`vccq2` are all "assuming enabled" because
-     there is no PMIC driver. `vccq` feeds the M-PHY, and a dead analogue rail
-     behind a live digital one produces exactly the observed signature. Not
-     from scratch: mainline already has `drivers/firmware/samsung/exynos-acpm-pmic.c`
-     and the S2MPG10/11 MFD and regulator drivers for this SoC family.
-   - **pinctrl.** mainline's gs101 UFS node carries
-     `pinctrl-0 = <&ufs_rst_n &ufs_refclk_out>` — device reset and the
-     reference-clock pin. Ours has none, because there is no pinctrl driver
-     for this SoC.
-   - **Host-controller sequence.** Google writes UniPro attributes mainline
-     does not (`0x3000`, `0x3001`, `0x4020`, `0x4021`), and uses `0x2f = 0x79`
-     where mainline's gs101 uses `0x69`. These affect link startup rather than
-     calibration, so they matter only once calibration succeeds.
+   ### Where it stands now
+
+   Storage gets past the PHY and fails later, cleanly and without panicking:
+
+       exynos-ufshc 13200000.ufs: link startup failed 1
+       exynos-ufshc 13200000.ufs: probe with driver exynos-ufshc failed with error -5
+
+   Four link-startup attempts, roughly 110 ms apart, then the driver gives
+   up. No SError. The kernel boots on to userspace normally.
+
+   So the host controller is alive and issuing `DME_LINKSTARTUP`, and the
+   **UFS device is not answering**. That is a different problem from
+   everything above it, and the candidates are:
+
+   1. **The device's reset and reference-clock pins.**
+      `exynos_ufs_dev_hw_reset()` drives the device reset through
+      `HCI_GPIO_OUT` bit 0, but that output only reaches the physical pin if
+      the pin is muxed to it. gs101's UFS node does that with
+      `pinctrl-0 = <&ufs_rst_n &ufs_refclk_out>`; ours has no pinctrl at all,
+      because this SoC has no pinctrl driver. Same for the reference clock
+      the device needs.
+   2. **Regulators.** `vcc`/`vccq`/`vccq2` are still "assuming enabled".
+      These power the *device*, which is exactly what is now not responding.
+      mainline already ships `exynos-acpm-pmic` and the S2MPG10/11 MFD and
+      regulator drivers to adapt.
+   3. **UniPro attributes.** Google writes `0x3000`, `0x3001`, `0x4020` and
+      `0x4021` that mainline does not, and uses `0x2f = 0x79` where
+      mainline's gs101 uses `0x69`. These affect link startup specifically,
+      so they are now in scope where before they were not.
+
+   Note the bootloader had the device working moments earlier, which argues
+   the pins are muxed correctly at hand-off and weakens (1) somewhat --
+   though nothing has measured them.
 
 2. **USB.** `usb@11210000`, PHY `@11100000`. Establish the power state from
    userspace first (item 5 above). A gadget serial console ends the
