@@ -187,7 +187,41 @@ log "tegu-probe: gpp1 now CON=$(devmem $GPP1_CON 32) DAT=$(devmem $GPP1_DAT 32)"
 
 sleep 1
 log "tegu-probe: irq line 1s after reset release: DAT=$(devmem $GPN0_DAT 32)"
-sleep 2
-log "tegu-probe: irq line 3s after reset release: DAT=$(devmem $GPN0_DAT 32)"
+
+# The reading above cannot distinguish the two cases that matter. An
+# unpowered part leaves the line floating, and a floating CMOS input reads
+# low; a *powered* TouchComm part asserts this same active-low line after
+# reset to announce its identify report. Both give DAT bit 0 = 0.
+#
+# A pull-up separates them. A weak pull-up wins against a high-Z line and
+# loses against a transistor actively holding it down:
+#
+#	reads 1  ->  nothing is driving.  The part is not powered, and the
+#	             S2MPG14 rails have to come first, via ACPM.
+#	reads 0  ->  something is pulling it down against the pull-up. The
+#	             part is powered and asserting its interrupt, and the
+#	             rails are already on.
+log "tegu-probe: --- discriminator: pull the irq line up ---"
+pud=$(devmem $GPN0_PUD 32)
+devmem $GPN0_PUD 32 $(( (pud & ~0x3) | 0x3 ))
+log "tegu-probe: gpn0 PUD now $(devmem $GPN0_PUD 32) (3 = pull-up on pin 0)"
+sleep 1
+log "tegu-probe: irq with pull-up, reset released: DAT=$(devmem $GPN0_DAT 32)"
+
+# And a reset pulse to Google's own timing -- synaptics,reset-active-ms = 2,
+# synaptics,reset-delay-ms = 50 -- in case the part needs a real edge rather
+# than the level it has been sitting at since boot. Sampled repeatedly,
+# because the interrupt is a pulse if the part is talking.
+log "tegu-probe: --- proper reset pulse, 2ms low, then sample ---"
+dat=$(devmem $GPP1_DAT 32)
+devmem $GPP1_DAT 32 $(( dat & ~0x2 ))
+sleep 0.01
+devmem $GPP1_DAT 32 $(( dat | 0x2 ))
+i=0
+while [ "$i" -lt 10 ]; do
+	sleep 0.05
+	log "tegu-probe: irq sample $i: DAT=$(devmem $GPN0_DAT 32)"
+	i=$((i + 1))
+done
 
 log "tegu-probe: END (all regions survived)"
