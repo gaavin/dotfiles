@@ -115,4 +115,31 @@ one "spi SPI_STATUS"       0x111d0014
 one "spi PACKET_CNT"       0x111d0020
 one "spi FB_CLK_SEL"       0x111d002c
 
+# The decisive experiment, and it needs no kernel code at all.
+#
+# Every SPI register above reads 0x00000000. That is not a dead block: with
+# USI SW_CONF = NONE the USI holds whichever IP it fronts in reset, so the SPI
+# registers reading zero is exactly what an unconfigured USI looks like. If
+# that reading is right, writing SW_CONF = SPI should bring the block out of
+# reset and its registers should stop being uniformly zero.
+#
+# USI_V2_SW_CONF_SPI is BIT(1), from mainline drivers/soc/samsung/exynos-usi.c.
+# The pins are not muxed to the SPI function, so nothing outside the SoC can
+# be driven by this; the write only decides which IP the USI presents. A
+# reboot puts it back.
+log "tegu-probe: --- experiment: USI11 SW_CONF = SPI ---"
+before=$(devmem 0x1102101c 32)
+devmem 0x1102101c 32 0x2
+after=$(devmem 0x1102101c 32)
+log "tegu-probe: usi_mode $before -> $after (wanted 0x00000002)"
+
+log "tegu-probe: --- SPI controller again, after SW_CONF=SPI ---"
+one "spi CH_CFG"           0x111d0000
+one "spi MODE_CFG"         0x111d0008
+one "spi CS_REG"           0x111d000c
+one "spi SPI_INT_EN"       0x111d0010
+one "spi SPI_STATUS"       0x111d0014
+one "spi PACKET_CNT"       0x111d0020
+one "spi FB_CLK_SEL"       0x111d002c
+
 log "tegu-probe: END (all regions survived)"
