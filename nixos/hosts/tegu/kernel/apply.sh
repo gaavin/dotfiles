@@ -66,6 +66,12 @@ python3 "$src"/dump-ufs-clkstop.py
 # PRE_INIT calibration table and test whether overwriting it is the bug.
 python3 "$src"/keep-boot-phy.py
 
+# --- UFS PMA: snapshot the register space around the calibration trigger -
+# Diagnostic. Establishes whether the analogue block does anything at all
+# when the trigger is written; every earlier probe only sampled registers
+# chosen in advance. Must run after keep-boot-phy.py, whose anchor it uses.
+python3 "$src"/pma-dump.py
+
 hdr=include/linux/platform_data/simplefb.h
 anchor='DRM_FORMAT_ABGR8888'
 if ! grep -q "$anchor" "$hdr"; then

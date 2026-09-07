@@ -71,10 +71,29 @@ static void zumapro_phy_report_cal_failure(struct samsung_ufs_phy *ufs_phy,
 	u32 off, val;
 	int i;
 
-	val = readl(ufs_phy->reg_pma + PHY_APB_ADDR(PHY_PLL_LOCK_STATUS));
-	dev_err(ufs_phy->dev,
-		"zumapro: lane %u of %u, pll_lock_status 0x%02x (locked %d)\\n",
-		lane, ufs_phy->lane_cnt, val, !!(val & PHY_PLL_LOCK_BIT));
+	/*
+	 * Deliberately not reporting COMN 0x1e as a PLL lock status any more.
+	 *
+	 * This used to print it as "pll_lock_status", read 0x0c every boot, and
+	 * that number was carried for several rounds as the one unexplained
+	 * reading. It explains nothing, because nothing uses the register:
+	 *
+	 *   - mainline defines PHY_PLL_LOCK_STATUS 0x1e and
+	 *     samsung_ufs_phy_wait_for_lock_acq(), but no SoC variant assigns
+	 *     that function to .wait_for_cdr or anything else. It is dead code;
+	 *   - Google's tables for this SoC never read or write COMN byte 0x78,
+	 *     which is what register 0x1e is;
+	 *   - their PHY_PLL_WAIT operation exists only as an enum member and
+	 *     appears in no table entry, so nothing waits on a PMA PLL here at
+	 *     all;
+	 *   - gs101's real lock check is CDR, on TRSV 0x339 bit 3, and it runs
+	 *     after the link is up, not during calibration.
+	 *
+	 * So 0x0c was a read of a register this SoC does not use, printed under
+	 * a borrowed name. Reporting it invited exactly the reading it got.
+	 */
+	dev_err(ufs_phy->dev, "zumapro: lane %u of %u\\n",
+		lane, ufs_phy->lane_cnt);
 
 	/*
 	 * Is the PHY actually out of isolation? The registers answering at all
