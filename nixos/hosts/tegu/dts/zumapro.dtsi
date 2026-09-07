@@ -408,6 +408,45 @@
 			clocks = <&ufs_clk_stub>;
 		};
 
+		/*
+		 * Cluster watchdogs. BL2 arms cluster 0 at 60 seconds on every
+		 * boot -- "WD: enabled(60s, 1/3)" in its log -- and until these
+		 * nodes existed nothing petted it, so a fully working system was
+		 * reset on a timer and ABL recorded CLUSTER0_NONCPU_WDTRESET.
+		 *
+		 * Addresses match gs101. The interrupts do not: the stock tree has
+		 * 0x2ff and 0x300 here, two higher than gs101's 765 and 766.
+		 *
+		 * The compatible is this port's own, not "google,gs101-wdt",
+		 * because gs101's driver data reaches into the PMU at offsets this
+		 * port has not verified for zumapro. See kernel/add-zumapro-wdt.py.
+		 *
+		 * Clocks are the oscillator both times. Mainline uses "watchdog"
+		 * for register access and "watchdog_src" for the count rate, and
+		 * the count really is the 24.576 MHz oscillator; the bootloader
+		 * leaves the register clock running, so a stub is honest here in
+		 * the same way it is for UFS.
+		 */
+		watchdog_cl0: watchdog@10060000 {
+			compatible = "google,zumapro-wdt";
+			reg = <0x10060000 0x100>;
+			clocks = <&ext_24_5m>, <&ext_24_5m>;
+			clock-names = "watchdog", "watchdog_src";
+			interrupts = <GIC_SPI 767 IRQ_TYPE_LEVEL_HIGH 0>;
+			samsung,cluster-index = <0>;
+			timeout-sec = <30>;
+		};
+
+		watchdog_cl1: watchdog@10070000 {
+			compatible = "google,zumapro-wdt";
+			reg = <0x10070000 0x100>;
+			clocks = <&ext_24_5m>, <&ext_24_5m>;
+			clock-names = "watchdog", "watchdog_src";
+			interrupts = <GIC_SPI 768 IRQ_TYPE_LEVEL_HIGH 0>;
+			samsung,cluster-index = <1>;
+			timeout-sec = <30>;
+		};
+
 		sysreg_ufs: syscon@13020000 {
 			compatible = "google,zuma-sysreg-ufs", "syscon";
 			reg = <0x13020000 0x1000>;

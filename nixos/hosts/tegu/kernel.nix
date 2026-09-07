@@ -112,6 +112,13 @@ let
           // {
             ARCH_EXYNOS = yes;
 
+            # BL2 arms a 60s cluster watchdog on every boot and nothing in
+            # this port used to pet it, so the phone reset on a timer.
+            WATCHDOG = yes;
+            WATCHDOG_SYSFS = yes;
+            S3C2410_WATCHDOG = yes;
+            WATCHDOG_HANDLE_BOOT_ENABLED = yes;
+
             # Debug UART (samsung_tty, google,gs101-uart binding + earlycon)
             SERIAL_SAMSUNG = yes;
             SERIAL_SAMSUNG_CONSOLE = yes;

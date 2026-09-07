@@ -92,6 +92,12 @@ python3 "$src"/hcs-trace.py
 # this SoC; PRDT_BYTE_GRAN is the one that misplaces every response UPIU.
 python3 "$src"/zumapro-ufs-host.py
 
+# --- Watchdog: let Linux pet the one BL2 arms ----------------------------
+# "WD: enabled(60s, 1/3)" in the bootloader log, and nothing petted it, so a
+# working system was reset on a timer. Adds a variant with no PMU access,
+# because zumapro's PMU offsets are not established and gs101's differ.
+python3 "$src"/add-zumapro-wdt.py
+
 hdr=include/linux/platform_data/simplefb.h
 anchor='DRM_FORMAT_ABGR8888'
 if ! grep -q "$anchor" "$hdr"; then
