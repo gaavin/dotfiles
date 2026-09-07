@@ -31,9 +31,26 @@
  *
  * As on gs101, bit 21 of each gate register is the enable.
  *
- * The upstream muxes and dividers in CMU_TOP are not modelled. The bootloader
- * configures them before handing over and clk_ignore_unused keeps them, so
- * the parent rate is taken from the device tree.
+ * The bootloader does NOT leave this path running: it brings UFS up, reads the
+ * boot image, then tears it down. Enabling only the leaf gates in CMU_HSI2 is
+ * therefore not enough, and was tried first — the PHY still failed to
+ * calibrate. Two more things have to be turned back on, and this driver does
+ * both before registering the gates:
+ *
+ *   - the top-level gates that feed the block at all, in CMU_TOP:
+ *       CLK_CON_GAT_GATE_CLKCMU_HSI2_UFS_EMBD  0x20e0
+ *       CLK_CON_GAT_GATE_CLKCMU_HSI2_NOC       0x20d8
+ *   - the "user" multiplexers inside CMU_HSI2, which otherwise select the
+ *     24.576 MHz oscillator rather than the clock from CMU_TOP:
+ *       PLL_CON0_MUX_CLKCMU_HSI2_UFS_EMBD_USER 0x630, bit 4
+ *       PLL_CON0_MUX_CLKCMU_HSI2_NOC_USER      0x610, bit 4
+ *
+ * (zumapro calls the bus clock NOC where gs101 calls it BUS; the mux bit
+ * position, 4, is the same as gs101's.)
+ *
+ * The dividers are left as the bootloader programmed them: the rate only has
+ * to be plausible for the UFS driver's timing arithmetic, and the device tree
+ * states it.
  */
 
 #include <linux/clk-provider.h>
@@ -45,6 +62,20 @@
 #include <linux/spinlock.h>
 
 #define ZUMAPRO_GATE_ENABLE_BIT		21
+
+/* CMU_TOP: gates feeding the HSI2 block. */
+#define CLK_CON_GAT_GATE_CLKCMU_HSI2_NOC	0x20d8
+#define CLK_CON_GAT_GATE_CLKCMU_HSI2_UFS_EMBD	0x20e0
+
+/* CMU_HSI2: user muxes. Bit 4 picks CMU_TOP over the oscillator. */
+#define PLL_CON0_MUX_CLKCMU_HSI2_NOC_USER	0x610
+#define PLL_CON0_MUX_CLKCMU_HSI2_UFS_EMBD_USER	0x630
+#define ZUMAPRO_USER_MUX_SEL_BIT		BIT(4)
+
+static void zumapro_set_bits(void __iomem *reg, u32 bits)
+{
+	writel(readl(reg) | bits, reg);
+}
 
 struct zumapro_gate_desc {
 	const char *name;
@@ -71,12 +102,32 @@ static int zumapro_cmu_hsi2_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct clk_hw_onecell_data *data;
 	const char *parent;
-	void __iomem *base;
+	void __iomem *base, *top;
 	unsigned int i;
 
 	base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
+
+	top = devm_platform_ioremap_resource(pdev, 1);
+	if (IS_ERR(top))
+		return PTR_ERR(top);
+
+	/*
+	 * Re-open the path the bootloader closed, before anything downstream
+	 * asks for a clock: the CMU_TOP gates first, then point the user muxes
+	 * at CMU_TOP rather than the oscillator.
+	 */
+	zumapro_set_bits(top + CLK_CON_GAT_GATE_CLKCMU_HSI2_NOC,
+			 BIT(ZUMAPRO_GATE_ENABLE_BIT));
+	zumapro_set_bits(top + CLK_CON_GAT_GATE_CLKCMU_HSI2_UFS_EMBD,
+			 BIT(ZUMAPRO_GATE_ENABLE_BIT));
+	zumapro_set_bits(base + PLL_CON0_MUX_CLKCMU_HSI2_NOC_USER,
+			 ZUMAPRO_USER_MUX_SEL_BIT);
+	zumapro_set_bits(base + PLL_CON0_MUX_CLKCMU_HSI2_UFS_EMBD_USER,
+			 ZUMAPRO_USER_MUX_SEL_BIT);
+
+	dev_info(dev, "HSI2 clock path enabled (top gates + user muxes)\n");
 
 	/*
 	 * One parent for all of them. Modelling the CMU_TOP mux/divider tree

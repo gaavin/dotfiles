@@ -394,13 +394,16 @@
 		 * ../kernel/clk-zumapro-hsi2.c for why gs101's driver cannot be
 		 * reused here (the gate offsets differ by 0x3c).
 		 *
-		 * The upstream mux/divider tree in CMU_TOP (0x26040000) is not
-		 * modelled: the bootloader configures it and clk_ignore_unused
-		 * preserves it, so a fixed parent rate is stated instead.
+		 * The bootloader tears this path down before handing over, so
+		 * the driver re-enables the CMU_TOP gates and repoints the user
+		 * muxes away from the oscillator. Dividers are left alone; the
+		 * rate only has to be plausible, and is stated here.
 		 */
 		cmu_hsi2: clock-controller@13000000 {
 			compatible = "google,zumapro-cmu-hsi2";
-			reg = <0x13000000 0x8000>;
+			/* CMU_HSI2, then CMU_TOP: the top-level gates that feed
+			 * this block live in the latter. */
+			reg = <0x13000000 0x8000>, <0x26040000 0x8000>;
 			#clock-cells = <1>;
 			clocks = <&ufs_clk_stub>;
 		};
