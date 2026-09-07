@@ -15,6 +15,7 @@
  */
 
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/soc/samsung,exynos-usi.h>
 
 / {
 	compatible = "google,zumapro";
@@ -162,6 +163,40 @@
 		#clock-cells = <0>;
 		clock-frequency = <166666666>;
 		clock-output-names = "ufs-core-stub";
+	};
+
+	/*
+	 * The two clocks the touchscreen's USI and SPI run on. Both rates were
+	 * computed from the CMU as the bootloader leaves it, read on hardware
+	 * rather than assumed:
+	 *
+	 *   ipclk: CMU_TOP PERIC1_IP mux = 1 -> PLL_SHARED2_D2, div = 0.
+	 *          pll_shared2_rate_table[] is 800 MHz, D2 halves it, and
+	 *          CMU_PERIC1's USI11 divider is also 0. So 400 MHz.
+	 *   pclk:  CMU_TOP PERIC1_NOC mux = 0 -> PLL_SHARED0_D4, div = 7.
+	 *          pll_shared0_rate_table[] is 2132999936 Hz, D4 gives
+	 *          533249984, and ratio 7 divides by 8. So 66656248 Hz.
+	 *
+	 * These are fixed-clocks rather than a gate-modelling driver on
+	 * purpose. Every gate on this path already reads open at boot, so a
+	 * driver would have nothing to turn on -- and registering gates this
+	 * port has not positively attributed to *this* USI would risk the
+	 * framework switching off the wrong ones, which is exactly the
+	 * self-inflicted failure that cost days on UFS. Clocks the kernel does
+	 * not know about cannot be gated by it.
+	 */
+	usi_touch_pclk: clock-4 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <66656248>;
+		clock-output-names = "usi-touch-pclk";
+	};
+
+	usi_touch_ipclk: clock-5 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <400000000>;
+		clock-output-names = "usi-touch-ipclk";
 	};
 
 	pmu {
@@ -445,6 +480,58 @@
 			interrupts = <GIC_SPI 768 IRQ_TYPE_LEVEL_HIGH 0>;
 			samsung,cluster-index = <1>;
 			timeout-sec = <30>;
+		};
+
+		/*
+		 * The syscon holding SW_CONF for the USI block that carries
+		 * the touchscreen's SPI. The stock tree reaches it by phandle
+		 * and calls it sysreg_hsi0, which does not match where these
+		 * peripherals live; what matters is measured, not the name.
+		 * Writing USI_V2_SW_CONF_SPI to +0x101c from userspace took
+		 * the SPI controller at 0x111d0000 out of reset on hardware --
+		 * its CS_REG went 0 -> 1, S3C64XX_SPI_CS_SIG_INACT -- so this
+		 * address is confirmed, not inferred.
+		 */
+		sysreg_peric_usi: syscon@11020000 {
+			compatible = "google,zumapro-sysreg", "syscon";
+			reg = <0x11020000 0x10000>;
+		};
+
+		/*
+		 * Touchscreen SPI. The stock tree has both hsi2c@111D0000 and
+		 * spi@111D0000 sharing SW_CONF offset 0x101c, because they are
+		 * the same USI in two different modes; touch uses SPI.
+		 *
+		 * The USI register block sits at the peripheral base + 0xc0,
+		 * as it does on gs101.
+		 */
+		usi_touch: usi@111d00c0 {
+			compatible = "google,gs101-usi", "samsung,exynos850-usi";
+			reg = <0x111d00c0 0x20>;
+			ranges;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			clocks = <&usi_touch_pclk>, <&usi_touch_ipclk>;
+			clock-names = "pclk", "ipclk";
+			samsung,sysreg = <&sysreg_peric_usi 0x101c>;
+			samsung,mode = <USI_V2_SPI>;
+
+			spi_touch: spi@111d0000 {
+				compatible = "google,gs101-spi";
+				reg = <0x111d0000 0x30>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				clocks = <&usi_touch_pclk>, <&usi_touch_ipclk>;
+				clock-names = "spi", "spi_busclk0";
+				interrupts = <GIC_SPI 408 IRQ_TYPE_LEVEL_HIGH 0>;
+				/*
+				 * No pinctrl and no child yet. The pins are
+				 * still GPIOs -- zumapro's gpb10 bank is not
+				 * in gs101's pinctrl data -- so nothing can be
+				 * driven off this bus. Registering the
+				 * controller is the step being tested here.
+				 */
+			};
 		};
 
 		sysreg_ufs: syscon@13020000 {

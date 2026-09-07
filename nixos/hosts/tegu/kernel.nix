@@ -112,6 +112,16 @@ let
           // {
             ARCH_EXYNOS = yes;
 
+            # Touchscreen SPI. The controller and the USI in front of it are
+            # both drivers mainline already ships; what this port has to
+            # supply is the device tree. Measured on hardware: the USI's
+            # SW_CONF is NONE at boot, and setting it to SPI brings the
+            # controller out of reset.
+            SPI = yes;
+            SPI_MASTER = yes;
+            SPI_S3C64XX = yes;
+            EXYNOS_USI = yes;
+
             # BL2 arms a 60s cluster watchdog on every boot and nothing in
             # this port used to pet it, so the phone reset on a timer.
             WATCHDOG = yes;
