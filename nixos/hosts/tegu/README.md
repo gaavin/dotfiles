@@ -1,11 +1,21 @@
 # tegu — Google Pixel 9a (Tensor G4) on mainline NixOS
 
-Status: **mainline Linux boots on this phone.** 7.3-rc1 comes up on a Tensor G4
-(`zumapro`), runs to userspace, and prints its log over UART and on the panel.
-There is no root filesystem yet, so it is not a usable system: UFS gets past
-PHY calibration but the storage device does not answer link startup. See
-"What works" for the honest boundary and "Next steps" for exactly where that
-stands.
+Status: **mainline Linux boots on this phone and sees its storage.** 7.3-rc1
+comes up on a Tensor G4 (`zumapro`), runs to userspace, prints its log over
+UART and on the panel, and brings UFS all the way up:
+
+```
+Power mode changed to : FAST series_B G_4 L_2
+scsi 0:0:0:0: Direct-Access  SAMSUNG  KLUDG4UHGC-B0E1  3303
+sd 0:0:0:0: [sda] 31147008 4096-byte logical blocks: (128 GB/119 GiB)
+ sda: sda1 sda2 ... sda34
+```
+
+Gear 4, two lanes, HS rate B, with the partition table read. It is not yet a
+usable system: the phone still carries Android's `init_boot` ramdisk, so
+Android's init runs instead of ours and panics. Flashing this build's
+`init_boot.img` and `rootfs.img` is the remaining step. See "What works" for
+the honest boundary.
 
 Everything below was established on hardware. Where something is inferred
 rather than observed it says so.
