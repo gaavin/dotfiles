@@ -51,6 +51,15 @@
  * The dividers are left as the bootloader programmed them: the rate only has
  * to be plausible for the UFS driver's timing arithmetic, and the device tree
  * states it.
+ *
+ * The gates are registered CLK_IS_CRITICAL, as gs101 does for the same
+ * clocks. Without it they are registered disabled and stay that way: a dump
+ * of the live registers on hardware showed the CMU_TOP gates and both user
+ * muxes correctly set by the code above, while every leaf gate in CMU_HSI2
+ * still read 0x00000000. Storage cannot calibrate its PHY with its own
+ * clocks switched off. Marking them critical has the framework enable them
+ * at registration and never gate them again, which is the behaviour this
+ * block needs and what the bootloader had before it tore the path down.
  */
 
 #include <linux/clk-provider.h>
@@ -150,7 +159,8 @@ static int zumapro_cmu_hsi2_probe(struct platform_device *pdev)
 		struct clk_hw *hw;
 
 		hw = devm_clk_hw_register_gate(dev, g->name, parent,
-					       CLK_SET_RATE_PARENT,
+					       CLK_SET_RATE_PARENT |
+					       CLK_IS_CRITICAL,
 					       base + g->offset,
 					       ZUMAPRO_GATE_ENABLE_BIT,
 					       0, &zumapro_clk_lock);
