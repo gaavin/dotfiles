@@ -36,6 +36,9 @@ printf 'obj-y += zumapro-bootfb.o\n' >> drivers/video/Makefile
 # inaccurately and the console renders with red and blue swapped. Alpha is
 # meaningless for a scanout-only layer, so BGRX8888 is the honest description
 # and DRM can already convert into it.
+# --- UFS PHY: Tensor G4 variant -----------------------------------------
+python3 "$src"/add-zumapro-ufs-phy.py
+
 hdr=include/linux/platform_data/simplefb.h
 anchor='DRM_FORMAT_ABGR8888'
 if ! grep -q "$anchor" "$hdr"; then
