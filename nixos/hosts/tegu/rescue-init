@@ -28,43 +28,6 @@ $BB mount -t devtmpfs dev /dev 2>/dev/null
 [ -c /dev/mem ] || $BB mknod /dev/mem c 1 1 2>/dev/null
 [ -c /dev/console ] || $BB mknod /dev/console c 5 1 2>/dev/null
 
-# Stage 21: userspace reached. Reboot, unambiguously, when asked to.
-#
-# Same reasoning as the kernel-side reset probes: the panel cannot tell us
-# whether init ran, so make the answer a reboot instead of a pixel. Boot with
-# tegu_probe_userspace on the command line; if the phone resets within a few
-# seconds, this line was reached.
-if $BB grep -q tegu_probe_userspace /proc/cmdline 2>/dev/null; then
-	# Paint the framebuffer through its physical address rather than
-	# /dev/fb0. Two earlier proof-of-life attempts were inconclusive
-	# because they depended on things that can fail silently: /dev/fb0
-	# existing, and reboot(2) reaching a restart handler. Physical memory
-	# writes need neither. 0xfac00000 is where the bootloader's buffer
-	# lives, as reported by the driver on this hardware; 1080*2424*4 is
-	# just over 10 MiB.
-	$BB dd if=/dev/zero of=/dev/mem bs=1M count=11 \
-		seek=4012 conv=notrunc 2>/dev/null
-	log "userspace probe: framebuffer blanked from /dev/mem"
-	$BB sync
-	$BB reboot -f
-fi
-
-# Unmistakable proof-of-life, painted straight into the framebuffer.
-#
-# The console has repeatedly drawn the boot logo and then shown no text, and
-# there was no way to tell "kernel hung before userspace" from "userspace ran
-# but the console never rendered". Filling the screen from /dev/fb0 bypasses
-# printk, the VT layer and fbcon entirely: if the display changes, userspace
-# reached this line.
-if [ -c /dev/fb0 ]; then
-	$BB dd if=/dev/zero of=/dev/fb0 bs=65536 count=160 2>/dev/null
-	log "painted /dev/fb0 black: userspace is alive"
-else
-	# Absence of the node is itself a finding: without it the paint test
-	# silently does nothing and looks identical to a hung kernel.
-	log "no /dev/fb0; cannot paint proof-of-life"
-fi
-
 # Dump the whole kernel ring buffer to the panel explicitly.
 #
 # printk hands console output to a kthread, so messages queued before the
@@ -102,6 +65,23 @@ fi
 # interactive shell holding /dev/console open stops that handover, leaving
 # the boot splash on screen with no log at all. The panel is a log, not a
 # terminal; input arrives over USB once the gadget works.
+
+# Status page on the panel. The console is the only display this port has,
+# so leave something readable on it rather than a bare cursor.
+{
+	$BB echo ""
+	$BB echo "=============================================="
+	$BB echo " NixOS / mainline Linux on Google Pixel 9a"
+	$BB echo " $($BB uname -srm)"
+	$BB echo "=============================================="
+	$BB echo " cpus    : $($BB grep -c ^processor /proc/cpuinfo)"
+	$BB echo " display : simpledrm on the bootloader framebuffer"
+	$BB echo " serial  : ttySAC0 @115200"
+	$BB echo "=============================================="
+	$BB echo " No root filesystem yet; storage is next."
+	$BB echo " See nixos/hosts/tegu/README.md"
+	$BB echo "=============================================="
+} >/dev/console 2>/dev/null
 
 log "rescue init ready"
 # Everything above went to /dev/kmsg; flush it to the panel too.
