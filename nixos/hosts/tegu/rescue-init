@@ -48,6 +48,31 @@ export PATH=/tegu-bin:$PATH
 DMA=0x19900000; CTRL=0x19900008; SHD=0x19900408
 log "DPP L0 enable=$($BB devmem $DMA 2>&1) ctrl=$($BB devmem $CTRL 2>&1) shadow=$($BB devmem $SHD 2>&1)"
 
+# Clock tree state, read back rather than assumed.
+#
+# The driver reports enabling the HSI2 path but the UFS PHY still fails to
+# calibrate, so dump what the registers actually contain. Guessing at this
+# from the driver's own log line is how time gets wasted; /dev/mem is right
+# here and STRICT_DEVMEM is off for exactly this reason.
+#
+# Addresses from Google's CAL tables: CMU_TOP 0x26040000, CMU_HSI2 0x13000000.
+c() { $BB printf '%-34s %s\n' "$1" "$($BB devmem $2 2>&1)"; }
+log "--- CMU_TOP (0x26040000) ---"
+log "$(c 'MUX_CLKCMU_HSI2_UFS_EMBD 0x10b8' 0x260410b8)"
+log "$(c 'DIV_CLKCMU_HSI2_UFS_EMBD 0x18b0' 0x260418b0)"
+log "$(c 'GAT_CLKCMU_HSI2_UFS_EMBD 0x20e0' 0x260420e0)"
+log "$(c 'MUX_CLKCMU_HSI2_NOC      0x10b0' 0x260410b0)"
+log "$(c 'DIV_CLKCMU_HSI2_NOC      0x18a8' 0x260418a8)"
+log "$(c 'GAT_CLKCMU_HSI2_NOC      0x20d8' 0x260420d8)"
+log "--- CMU_HSI2 (0x13000000) ---"
+log "$(c 'PLL_CON0 NOC_USER        0x610' 0x13000610)"
+log "$(c 'PLL_CON0 UFS_EMBD_USER   0x630' 0x13000630)"
+log "$(c 'GAT UFS_EMBD I_ACLK      0x210c' 0x1300210c)"
+log "$(c 'GAT UFS_EMBD I_UNIPRO    0x2110' 0x13002110)"
+log "$(c 'GAT UFS_EMBD I_FMP       0x2114' 0x13002114)"
+log "$(c 'GAT QE_UFS_EMBD ACLK     0x20cc' 0x130020cc)"
+log "$(c 'GAT SYSREG_HSI2 PCLK     0x20e8' 0x130020e8)"
+
 # A shell on the USB gadget serial port when the controller is present, so a
 # terminal replaces photographing the panel.
 if [ -c /dev/ttyGS0 ]; then
