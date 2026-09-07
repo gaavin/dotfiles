@@ -86,4 +86,33 @@ one "PERIC1 USI11 div"      0x10c01810
 one "PERIC1 USI11 ipclk"    0x10c02048
 one "PERIC1 USI11 pclk"     0x10c0204c
 
+# Where that clock comes from, so its rate can be computed rather than
+# guessed. CMU_TOP feeds PERIC1 two clocks, NOC (bus) and IP (the one the USI
+# runs on). SELECT picks from cmucal_mux_clkcmu_peric1_ip_parents[]:
+#
+#	0 = PLL_SHARED0_D4, 1 = PLL_SHARED2_D2, 2 = PLL_SHARED3_D2
+#
+# and DIVRATIO is bits [3:0], dividing by ratio+1. UFS's clock was worked out
+# the same way; getting this wrong once already hard-locked the phone, so it
+# is read before anything states a frequency.
+log "tegu-probe: --- CMU_TOP: where PERIC1_IP comes from ---"
+one "TOP PERIC1_IP mux"     0x260410f4
+one "TOP PERIC1_IP div"     0x260418ec
+one "TOP PERIC1_IP gate"    0x26042118
+one "TOP PERIC1_NOC mux"    0x260410f8
+one "TOP PERIC1_NOC div"    0x260418f0
+
+# The SPI controller itself. Its clock path reads as fully running above, so
+# this block is powered and clocked and these reads are safe -- which was not
+# something to assume before the CMU said so. A live CH_CFG here proves the
+# bus is reachable before any driver is written for it.
+log "tegu-probe: --- SPI controller for touch, spi_20 @ 0x111d0000 ---"
+one "spi CH_CFG"           0x111d0000
+one "spi MODE_CFG"         0x111d0008
+one "spi CS_REG"           0x111d000c
+one "spi SPI_INT_EN"       0x111d0010
+one "spi SPI_STATUS"       0x111d0014
+one "spi PACKET_CNT"       0x111d0020
+one "spi FB_CLK_SEL"       0x111d002c
+
 log "tegu-probe: END (all regions survived)"
