@@ -304,7 +304,32 @@ Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
      Disregard it: this SoC's tables contain no `PHY_PLL_WAIT` entry, so
      register `0x1e` is not the PLL status here.
 
-   ### Resolved: calibration needed the reference-clock pin
+   ### Not resolved: power and pins are correct, calibration still fails
+
+   The shim (`kernel/zumapro-ufs-pins.c`) runs at arch_initcall and is
+   confirmed to set everything before the UFS driver probes:
+
+       zumapro-ufs-pins: gpp0 CON 0x00002011 DAT 0x0000000b,
+                         gph5 CON 0x00000022 PUD 0x00000000
+
+   i.e. VCC on, reference-clock pin at function 2, pull cleared -- at
+   0.66s, against a UFS probe at 1.18s. Calibration still fails on all four
+   attempts, `cal_done` still reads 0x38, `device_present` is still 0.
+
+   **This is a clean negative and it retires two claims made earlier in
+   this port.** Restoring the reference-clock pin does not fix calibration;
+   an earlier commit said it did, and that was wrong. It was inferred from
+   a re-bind showing no calibration errors, but `phy_init()` only calls
+   `ops->init` when `init_count` is zero, and a failed probe never calls
+   `phy_exit` -- so a re-bound driver *skips* calibration silently. Silence
+   was read as success.
+
+   Three boots were spent on userspace-then-rebind evidence that could not
+   have meant anything, because that path skips calibration and cannot
+   reach HCI registers (writes to `HCI_GPIO_OUT` from userspace after a
+   failed probe read back as zero).
+
+   ### Superseded: the earlier reading of calibration
 
    Settled on hardware. The bootloader tears UFS down two ways: it drops the
    VCC rail (`gpp0[1]`, low) and parks the reference clock output
