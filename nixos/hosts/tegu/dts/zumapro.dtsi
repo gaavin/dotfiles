@@ -435,11 +435,20 @@
 
 		ufs_0: ufs@13200000 {
 			/*
-			 * Enabled: it no longer panics, but the link does not
-			 * come up. PHY calibration times out (-110), which on
-			 * the evidence means the PHY is reachable but not
-			 * clocked. See the README; the next dependency is a
-			 * clock driver for this SoC.
+			 * Enabled. It no longer panics; whether the link comes
+			 * up is what the current build is testing.
+			 *
+			 * Three things had to be true before calibration could
+			 * even be attempted, and each was established on
+			 * hardware rather than assumed:
+			 *   - the HSI2 gates must be on (clk-zumapro-hsi2.c);
+			 *     a register dump from userspace confirms they are;
+			 *   - calibration-done must be polled where this SoC
+			 *     reports it (TRSV 0x31d bit 0, not gs101's 0x338
+			 *     bit 3);
+			 *   - the analogue PHY table must be this SoC's, not
+			 *     Tensor G1's. That was the last one, and the only
+			 *     one that had been silently wrong all along.
 			 */
 			/*
 			 * The PHY isolation offset is why this used to panic:
