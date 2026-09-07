@@ -10,7 +10,6 @@
   buildLinux,
   fetchurl,
   callPackage,
-  ccacheStdenv,
   ...
 }@args:
 
@@ -80,11 +79,12 @@ let
   kernel = buildLinux (
     args
     // {
-      # Bring-up means rebuilding this kernel once per hypothesis, and almost
-      # every object is unchanged between attempts. Needs programs.ccache and
-      # the cache directory in extra-sandbox-paths on the build host; see
-      # hosts/mina/default.nix.
-      stdenv = ccacheStdenv;
+      # NOT built through ccacheStdenv. It was tried: the kernel probes the
+      # assembler by invoking the compiler, the ccache wrapper does not pass
+      # that through, and the config step dies with
+      #   "unknown assembler invoked ... Sorry, this assembler is not supported"
+      # Making it work would mean teaching the wrapper about -Wa probing;
+      # until then a cache miss is cheaper than a broken build.
 
       inherit version;
       modDirVersion = "7.3.0-rc1";
