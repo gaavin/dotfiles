@@ -39,6 +39,65 @@ VARIANT = '''
 #define TENSOR_ZUMAPRO_CAL_DONE_REG	0x31d	/* byte offset 0xc74 */
 #define TENSOR_ZUMAPRO_CAL_DONE		BIT(0)
 
+/*
+ * Diagnostics for the calibration timeout.
+ *
+ * The table is now this SoC's and the wait polls the register this SoC
+ * reports in, and it still times out. That leaves two possibilities worth
+ * separating before changing any more code: either our register writes are
+ * not reaching the PHY at all (wrong clock or the block held in reset), or
+ * they are landing and the PHY genuinely will not calibrate.
+ *
+ * Read the values back to find out. This has to happen here, at the point of
+ * failure, rather than from userspace: by the time the rescue shell runs, the
+ * probe has failed and phy_power_off has re-isolated the PHY, so touching the
+ * PMA from /dev/mem would raise an SError instead of an answer.
+ */
+static void zumapro_phy_report_cal_failure(struct samsung_ufs_phy *ufs_phy,
+					   u8 lane)
+{
+	static const struct {
+		const char *name;
+		u32 reg;
+		u32 wrote;
+		bool trsv;
+	} readback[] = {
+		{ "COMN 0x05",  0x05,  0x19, false },
+		{ "COMN 0x0b",  0x0b,  0x44, false },
+		{ "COMN 0x0c",  0x0c,  0xc4, false },
+		{ "TRSV 0x201", 0x201, 0x44, true  },
+		{ "TRSV 0x2ac", 0x2ac, 0x02, true  },
+	};
+	u32 off, val;
+	int i;
+
+	val = readl(ufs_phy->reg_pma + PHY_APB_ADDR(PHY_PLL_LOCK_STATUS));
+	dev_err(ufs_phy->dev,
+		"zumapro: lane %u of %u, pll_lock_status 0x%02x (locked %d)\\n",
+		lane, ufs_phy->lane_cnt, val, !!(val & PHY_PLL_LOCK_BIT));
+
+	off = PHY_PMA_TRSV_ADDR(TENSOR_ZUMAPRO_CAL_DONE_REG, lane);
+	dev_err(ufs_phy->dev, "zumapro: cal_done reg (0x%03x) reads 0x%02x\\n",
+		TENSOR_ZUMAPRO_CAL_DONE_REG,
+		readl(ufs_phy->reg_pma + off));
+
+	/*
+	 * If these read back what we wrote, the register path is fine and the
+	 * fault is in the analogue domain. If they read 0x00 or 0xff, the
+	 * writes are being swallowed and no calibration table can ever work.
+	 */
+	for (i = 0; i < ARRAY_SIZE(readback); i++) {
+		off = readback[i].trsv
+			? PHY_PMA_TRSV_ADDR(readback[i].reg, lane)
+			: PHY_APB_ADDR(readback[i].reg);
+		val = readl(ufs_phy->reg_pma + off);
+		dev_err(ufs_phy->dev,
+			"zumapro: %s wrote 0x%02x reads 0x%02x %s\\n",
+			readback[i].name, readback[i].wrote, val,
+			val == readback[i].wrote ? "ok" : "MISMATCH");
+	}
+}
+
 static int zumapro_phy_wait_for_calibration(struct phy *phy, u8 lane)
 {
 	struct samsung_ufs_phy *ufs_phy = get_samsung_ufs_phy(phy);
@@ -53,9 +112,11 @@ static int zumapro_phy_wait_for_calibration(struct phy *phy, u8 lane)
 	err = readl_poll_timeout(ufs_phy->reg_pma + off, val,
 				 (val & TENSOR_ZUMAPRO_CAL_DONE),
 				 sleep_us, timeout_us);
-	if (err)
+	if (err) {
 		dev_err(ufs_phy->dev,
 			"zumapro: failed to get phy cal done %d\\n", err);
+		zumapro_phy_report_cal_failure(ufs_phy, lane);
+	}
 
 	return err;
 }
