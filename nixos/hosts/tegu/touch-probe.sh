@@ -142,4 +142,52 @@ one "spi SPI_STATUS"       0x111d0014
 one "spi PACKET_CNT"       0x111d0020
 one "spi FB_CLK_SEL"       0x111d002c
 
+# Release the touchscreen from reset and watch its interrupt line.
+#
+# The SPI pins need no muxing. Google's tree calls them GPB10[4..7], which is
+# a datasheet pad name -- Linux's banks on this SoC are gpa*, gph*, gpn*,
+# gpp*, gps* and there is no gpb anywhere. None of the five USIs sharing the
+# sysreg at 0x11020000 declare pinctrl in the stock tree either, and touch
+# works on Android regardless, so those pads are fixed-function and SW_CONF
+# alone decides what the block is. That matches the controller initialising
+# correctly here with nothing having muxed a pin.
+#
+# What is not configured is the reset line. gpp1 is peric0 bank 1, confirmed
+# by the stock tree listing its banks in order (gpp0, gpp1, ...) and by gpp0's
+# own registers matching what this port's UFS shim prints. TS1_RESET_L is
+# gpp1[1], active low, and it currently reads as function 0 -- an input, not
+# driven -- so the touch controller is held in reset by nothing at all.
+#
+# Driving it high is the same move that brought the UFS VCC rail up, and it
+# answers the one question that could invalidate the whole touch effort. The
+# interrupt line gpn0[0] is active low and idle high. If the part is powered,
+# releasing reset should let it drive that line; if the S2MPG14 rails are off,
+# nothing will move and we know ACPM has to come first. Its pull-down is
+# cleared beforehand so the reading reflects the part and not the SoC.
+GPP1_CON=0x10840020 ; GPP1_DAT=0x10840024
+GPN0_CON=0x15060000 ; GPN0_DAT=0x15060004 ; GPN0_PUD=0x15060008
+
+log "tegu-probe: --- experiment: release touch reset, watch its irq ---"
+log "tegu-probe: gpp1 CON=$(devmem $GPP1_CON 32) DAT=$(devmem $GPP1_DAT 32)"
+log "tegu-probe: gpn0 CON=$(devmem $GPN0_CON 32) DAT=$(devmem $GPN0_DAT 32) PUD=$(devmem $GPN0_PUD 32)"
+
+# Let the interrupt line float, so what it reads is what the part drives.
+pud=$(devmem $GPN0_PUD 32)
+devmem $GPN0_PUD 32 $(( pud & ~0x3 ))
+log "tegu-probe: gpn0 pull cleared, PUD now $(devmem $GPN0_PUD 32)"
+log "tegu-probe: irq line before reset release: DAT=$(devmem $GPN0_DAT 32)"
+
+# gpp1[1] to output, then high. Read-modify-write: the other pins in this
+# bank belong to other peripherals and must not be disturbed.
+con=$(devmem $GPP1_CON 32)
+devmem $GPP1_CON 32 $(( (con & ~0xf0) | 0x10 ))
+dat=$(devmem $GPP1_DAT 32)
+devmem $GPP1_DAT 32 $(( dat | 0x2 ))
+log "tegu-probe: gpp1 now CON=$(devmem $GPP1_CON 32) DAT=$(devmem $GPP1_DAT 32)"
+
+sleep 1
+log "tegu-probe: irq line 1s after reset release: DAT=$(devmem $GPN0_DAT 32)"
+sleep 2
+log "tegu-probe: irq line 3s after reset release: DAT=$(devmem $GPN0_DAT 32)"
+
 log "tegu-probe: END (all regions survived)"
