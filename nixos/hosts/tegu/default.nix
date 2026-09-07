@@ -197,6 +197,21 @@
     '')
   ];
 
+  # Read the touchscreen stack's registers at boot and put them in the kernel
+  # log. There is no ssh on this phone and the only way off it is the UART, so
+  # a boot-time dump is how hardware gets measured here. See touch-probe.sh for
+  # why the regions are ordered the way they are.
+  systemd.services.tegu-touch-probe = {
+    description = "Dump touchscreen-related registers to the kernel log";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "systemd-udev-settle.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${pkgs.runtimeShell} ${./touch-probe.sh}";
+    };
+  };
+
   documentation = {
     enable = false;
     nixos.enable = false;
