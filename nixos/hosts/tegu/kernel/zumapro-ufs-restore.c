@@ -49,17 +49,27 @@
  * DVFS clock, set through ACPM firmware that mainline does not have, so
  * nothing here ever programs it and it keeps whatever the bootloader left.
  *
- * Measured at hand-over against Google's own VDD_INT normal-level table
- * (cal-if/zuma, cmucal_vclk_vdd_int[] with vdd_int_nm_lut_params[]):
+ * RETRACTED. This file previously claimed the bootloader left this clock on
+ * the wrong PLL and the wrong divider, comparing against Google's VDD_INT
+ * normal-level table (cal-if/zuma, cmucal_vclk_vdd_int[] with
+ * vdd_int_nm_lut_params[]), which reads MUX SELECT 3 and DIV DIVRATIO 1
+ * where the hardware has 1 and 2. Working the frequencies out afterwards
+ * says that reading is wrong:
  *
- *	                       hardware   Google nm
- *	MUX SELECT             1          3        PLL_SHARED0_D4 vs PLL_SPARE_D1
- *	DIV DIVRATIO           2          1        /3 vs /2
+ *	PLL_SHARED0 = 2133.00 MHz, PLL_SPARE = 2400.00 MHz
  *
- * Wrong source and wrong divider, so the PMA is being clocked at a frequency
- * it was never characterised for. That is consistent with everything else
- * measured: the PMA's registers accept writes, isolation is released, the
- * gates are open, and the calibration bit still never sets.
+ *	as the bootloader left it : SHARED0_D4 / 3 = 177.75 MHz
+ *	that table read literally : SPARE_D1  / 2 = 1200.00 MHz
+ *
+ * 177.75 MHz is a plausible UniPro clock and is close to the 166.67 MHz
+ * stub both this port and gs101 mainline put in the device tree for it.
+ * 1200 MHz is not, and there is no further divider in CMU_HSI2 for UFS --
+ * only NOC dividers -- so nothing downstream would bring it back.
+ *
+ * So the clock the bootloader leaves is most likely correct, the LUT was
+ * misread, and setting it to "Google's values" replaced a working clock
+ * with a dead one. That is the whole explanation for the hard lockup
+ * below; there is no evidence left that this clock was ever the problem.
  *
  * Field positions are from cmucal-sfr.c, not guessed:
  *	CLK_CON_MUX_MUX_CLKCMU_HSI2_UFS_EMBD  0x10b8  SELECT [1:0], BUSY bit 16
