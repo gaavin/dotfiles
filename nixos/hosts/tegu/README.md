@@ -304,7 +304,44 @@ Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
      Disregard it: this SoC's tables contain no `PHY_PLL_WAIT` entry, so
      register `0x1e` is not the PLL status here.
 
-   ### Not resolved: power and pins are correct, calibration still fails
+   ### The PMA never runs. Calibration does not fail -- it never starts.
+
+   The register-space dump (`kernel/pma-dump.py`) settles it:
+
+       pma A->B table+trigger: 54 register(s) changed
+       pma B->C 50ms idle:      0 register(s) changed
+
+   `A->B` is the control and it passes -- the 36-entry table lands, so the
+   addressing and the diff machinery are sound. `B->C` is 50 ms in which
+   nothing writes the PMA, watching all 3072 registers of the mapped
+   window, and **not one bit moves**. Every attempt, every boot.
+
+   A calibration that is running and failing must move *something*: a
+   status bit, a trim, a counter. Nothing moving anywhere means the state
+   machine is not executing.
+
+   **This retires most of the storage work above as necessarily
+   irrelevant.** The PMA table contents, the cal-done register, the wait
+   timeout, the trigger sequence: none of them could ever have mattered,
+   because nothing was going to read them. Several were changed with
+   confidence and two were briefly believed to be the fix.
+
+   The register file itself is alive -- writes land and read back, and one
+   attempt shows `cal_done` moving (`0x31d` `0x28` -> `0x38`) while *we*
+   write the table. APB access works. What is dead is whatever executes
+   behind it.
+
+   That is a different class of fault from anything examined so far, and it
+   narrows the search to things that gate an engine rather than configure
+   one: a reset held over the PMA core, a power domain that is off, or an
+   enable outside the PMA window -- `vs_hci` or a sysreg bit rather than
+   anything in the PHY's own registers.
+
+   Also settled: snapshot A, the state at hand-over, contains the values
+   once read as evidence of a completed calibration (`0x15`, `0x4a`,
+   `0xea`). They are just what the block powers up with.
+
+   ### Superseded: power and pins are correct, calibration still fails
 
    The shim (`kernel/zumapro-ufs-pins.c`) runs at arch_initcall and is
    confirmed to set everything before the UFS driver probes:
