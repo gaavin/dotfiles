@@ -387,6 +387,24 @@
 			reg = <0x15460000 0x10000>;
 		};
 
+		/*
+		 * Minimal clock controller for the HSI2 block, which feeds UFS.
+		 * Base address from Google's own CAL tables for this SoC:
+		 * SFR_BLOCK(CMU_HSI2, 0x13000000, 0x8000). See
+		 * ../kernel/clk-zumapro-hsi2.c for why gs101's driver cannot be
+		 * reused here (the gate offsets differ by 0x3c).
+		 *
+		 * The upstream mux/divider tree in CMU_TOP (0x26040000) is not
+		 * modelled: the bootloader configures it and clk_ignore_unused
+		 * preserves it, so a fixed parent rate is stated instead.
+		 */
+		cmu_hsi2: clock-controller@13000000 {
+			compatible = "google,zumapro-cmu-hsi2";
+			reg = <0x13000000 0x8000>;
+			#clock-cells = <1>;
+			clocks = <&ufs_clk_stub>;
+		};
+
 		sysreg_ufs: syscon@13020000 {
 			compatible = "google,zuma-sysreg-ufs", "syscon";
 			reg = <0x13020000 0x1000>;
@@ -435,9 +453,10 @@
 			      <0x132a0000 0x100>;
 			reg-names = "hci", "vs_hci", "unipro", "ufsp";
 			interrupts = <GIC_SPI 466 IRQ_TYPE_LEVEL_HIGH 0>;
-			clocks = <&ufs_clk_stub>, <&ufs_clk_stub>,
-				 <&ufs_clk_stub>, <&ufs_clk_stub>,
-				 <&ufs_clk_stub>, <&ufs_clk_stub>;
+			/* Order matches clk-zumapro-hsi2.c's gate table. */
+			clocks = <&cmu_hsi2 0>, <&cmu_hsi2 1>,
+				 <&cmu_hsi2 2>, <&cmu_hsi2 3>,
+				 <&cmu_hsi2 4>, <&cmu_hsi2 5>;
 			clock-names = "core_clk", "sclk_unipro_main", "fmp",
 				      "aclk", "pclk", "sysreg";
 			dma-coherent;

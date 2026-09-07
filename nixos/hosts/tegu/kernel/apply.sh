@@ -36,6 +36,13 @@ printf 'obj-y += zumapro-bootfb.o\n' >> drivers/video/Makefile
 # inaccurately and the console renders with red and blue swapped. Alpha is
 # meaningless for a scanout-only layer, so BGRX8888 is the honest description
 # and DRM can already convert into it.
+# --- clocks: minimal CMU_HSI2 for this SoC -------------------------------
+# Tensor G4 has no mainline clock driver. UFS cannot come up without one, so
+# this adds just the HSI2 gates it needs. See the file for the register data
+# and why gs101's driver cannot be reused at a different base address.
+install -m444 "$src"/clk-zumapro-hsi2.c drivers/clk/samsung/clk-zumapro-hsi2.c
+printf 'obj-y\t+= clk-zumapro-hsi2.o\n' >> drivers/clk/samsung/Makefile
+
 # --- UFS PHY: Tensor G4 variant -----------------------------------------
 python3 "$src"/add-zumapro-ufs-phy.py
 
