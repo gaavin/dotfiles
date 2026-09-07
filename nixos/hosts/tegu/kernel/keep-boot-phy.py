@@ -56,13 +56,37 @@ if old not in s:
     sys.exit("keep-boot-phy: calibrate anchor moved in %s" % p)
 
 new = """	if (keep_boot_phy && ufs_phy->ufs_phy_state == CFG_PRE_INIT) {
+		/*
+		 * Skip the table *and* the wait.
+		 *
+		 * With the table skipped, the PHY's trim registers read back
+		 * values that differ from the ones the table would write
+		 * (COMN 0x05 reads 0x15 against 0x19, 0x0b reads 0x4a against
+		 * 0x44, 0x0c reads 0xea against 0xc4). Those are the table's
+		 * values as adjusted by a calibration that already ran: the
+		 * bootloader calibrated this PHY and read the kernel over it.
+		 *
+		 * cal_done bit 0 is clear even then, so it is not a persistent
+		 * "this PHY is calibrated" flag -- it does not survive the
+		 * UniPro/link software reset the host controller performs. So
+		 * waiting for it on an already-calibrated PHY waits for
+		 * something that will never arrive, and the timeout is what
+		 * fails the probe.
+		 *
+		 * Note: skipping the wait was tried before and panicked with
+		 * an SError. That was with the table applied, leaving the PHY
+		 * half-reconfigured mid-calibration. Here nothing is written
+		 * at all, so the PHY stays in the working state it was handed
+		 * over in.
+		 */
 		dev_info(ufs_phy->dev,
-			 "keep_boot_phy: leaving the bootloader's PHY configuration alone\\n");
-	} else {
-		for_each_phy_cfg(cfg) {
-			for_each_phy_lane(ufs_phy, i) {
-				samsung_ufs_phy_config(ufs_phy, cfg, i);
-			}
+			 "keep_boot_phy: leaving the bootloader's PHY configuration and calibration alone\\n");
+		goto out;
+	}
+
+	for_each_phy_cfg(cfg) {
+		for_each_phy_lane(ufs_phy, i) {
+			samsung_ufs_phy_config(ufs_phy, cfg, i);
 		}
 	}
 
