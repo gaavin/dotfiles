@@ -24,6 +24,16 @@ fi
 # This script lives in nixos/tools, so one level up is the flake itself.
 flake=$(cd "$(dirname "$0")/.." && pwd)
 img=$(nix build --no-link --print-out-paths "$flake#tegu-images")
+# Only for the size budget: boot.img already carries this exact string and
+# ABL concatenates both cmdlines, so vendor_boot must NOT repeat it.
+#
+# It used to. That put a second init= on the command line naming whichever
+# system the flake happened to build, and the last init= wins -- so the moment
+# an unrelated edit to default.nix changed the system derivation, vendor_boot
+# started pointing the initrd at a closure that was not on the phone, and the
+# boot ended in "Failed to start Find NixOS closure" and an emergency shell.
+# vendor_boot now adds tegu.cmd= and nothing else, which cannot contradict the
+# flashed rootfs and leaves ~327 more bytes for the payload.
 base=$(cat "$img/cmdline.txt")
 enc=$(printf '%s' "$cmd" | base64 -w0)
 
@@ -33,10 +43,27 @@ enc=$(printf '%s' "$cmd" | base64 -w0)
 # denser on shell text. Done here rather than on the phone so that changing
 # the encoding never costs a rootfs reflash; the phone still just runs a
 # string. The reply is unaffected -- only the BEGIN line echoes as base64.
-room=$(( 2048 - ${#base} - 12 ))
+# The kernel truncates at COMMAND_LINE_SIZE, 2048 on arm64. Three things
+# share that buffer and only one of them is ours:
+#
+#   boot.img's cmdline      ${#base}, currently 327
+#   ABL's own cmdline       277, measured off a boot log -- console=,
+#                           exynos_drm.panel_name=, the ufs_pixel_fips140
+#                           block, bootconfig
+#   ours                    " tegu.cmd=" + the base64
+#
+# Leaving ABL's share out of this sum is what silently truncated the payload
+# and made the phone answer "base64 decode failed". The probe prints
+# "cmdline bytes:" so the real total is checkable against this arithmetic.
+abl=277
+room=$(( 2048 - ${#base} - abl - 24 ))
 if [ "${#enc}" -gt "$room" ]; then
 	gz=$(printf '%s' "$cmd" | gzip -9 | base64 -w0)
-	cmd="echo $gz|base64 -d|gunzip|/bin/sh"
+	# gunzip by absolute path: the unit's systemd path= replaces PATH, and
+	# adding gzip to it costs a rootfs reflash. NixOS always puts gzip in
+	# the system profile (it is one of system-path.nix's requiredPackages),
+	# so this path exists regardless of what the unit lists.
+	cmd="echo $gz|base64 -d|/run/current-system/sw/bin/gunzip|/bin/sh"
 	enc=$(printf '%s' "$cmd" | base64 -w0)
 	echo "tegu-cmd: compressed, $((${#enc})) of $room bytes" >&2
 fi
@@ -51,7 +78,7 @@ mkdir "$work/empty"
 
 "$mkbootimg" --header_version 4 --pagesize 4096 \
 	--dtb "$img/zumapro-tegu.dtb" --vendor_ramdisk "$work/vr.cpio" \
-	--vendor_cmdline "$base tegu.cmd=$enc" \
+	--vendor_cmdline "tegu.cmd=$enc" \
 	--vendor_boot "$work/vendor_boot.img"
 
 echo "tegu-cmd: $cmd"
