@@ -78,6 +78,11 @@ python3 "$src"/pma-dump.py
 # its stock size and has never been looked at. Read-only.
 python3 "$src"/region-dump.py
 
+# --- UFS: trace HCS through init ----------------------------------------
+# The bootloader hands over HCS=0x10f: device present, lists ready, link up.
+# By first probe it is 0. Find which step tears it down.
+python3 "$src"/hcs-trace.py
+
 hdr=include/linux/platform_data/simplefb.h
 anchor='DRM_FORMAT_ABGR8888'
 if ! grep -q "$anchor" "$hdr"; then

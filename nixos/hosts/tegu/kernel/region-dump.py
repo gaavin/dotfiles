@@ -12,6 +12,12 @@ place to look is the regions the stock firmware maps and we do not:
     reg_phy (PMA)      0x13204000   0x4000    0x3000
     reg_cport          0x13208000   0x804     not mapped at all
 
+The sysreg block at 0x13020000 is deliberately NOT swept. Reading past
++0x0004 raises an SError and panics; +0x0004 itself reads 0xffffffff, the
+usual signature of a region that is not really backed. Only the single
+offset the stock tree names (ufs-iocc, +0x710) should ever be touched, and
+never by a blind sweep.
+
 Google's MISC_CAL lives at reg_hci + 0x11B4 and carries MPHY_APBCLK_CAL,
 which is outside our vs_hci window entirely. If there is a PMA reset or
 enable in vs_hci, this port has never been able to see it.
@@ -48,18 +54,15 @@ struct zumapro_ufs_region {
 
 #define ZUMAPRO_VS_HCI_WORDS	(0x2000 / 4)
 #define ZUMAPRO_HCI_WORDS	(0x200 / 4)
-#define ZUMAPRO_SYSREG_WORDS	(0x1000 / 4)
 #define ZUMAPRO_CPORT_WORDS	(0x804 / 4)
 
 static u32 snap_vs_hci[ZUMAPRO_VS_HCI_WORDS];
 static u32 snap_hci[ZUMAPRO_HCI_WORDS];
-static u32 snap_sysreg[ZUMAPRO_SYSREG_WORDS];
 static u32 snap_cport[ZUMAPRO_CPORT_WORDS];
 
 static struct zumapro_ufs_region zumapro_ufs_regions[] = {
 	{ "hci",     0x13200000, 0x200,  snap_hci    },
 	{ "vs_hci",  0x13201100, 0x2000, snap_vs_hci },
-	{ "sysreg",  0x13020000, 0x1000, snap_sysreg },
 	{ "cport",   0x13208000, 0x804,  snap_cport  },
 };
 
