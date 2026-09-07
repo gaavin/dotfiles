@@ -73,6 +73,73 @@ log "$(c 'GAT UFS_EMBD I_FMP       0x2114' 0x13002114)"
 log "$(c 'GAT QE_UFS_EMBD ACLK     0x20cc' 0x130020cc)"
 log "$(c 'GAT SYSREG_HSI2 PCLK     0x20e8' 0x130020e8)"
 
+# UFS device power: gpp0[1], and a re-bind to prove it.
+#
+# The stock device tree (zumapro-a1-ipop.dtb, from GrapheneOS's tegu kernel
+# prebuilts) says the UFS device's VCC rail is a fixed regulator gated by a
+# GPIO:
+#
+#     fixedregulator@0 { compatible = "regulator-fixed";
+#                        regulator-name = "ufs-vcc";
+#                        gpio = <&gpp0 1 0>; enable-active-high; };
+#
+# with gpp0 living in pinctrl@10840000 ("google,zumapro-pinctrl"). Pixel 6
+# is wired identically -- same block, same bank, same pin -- and mainline's
+# gs101 support drives it through a pinctrl driver we do not have for this
+# SoC. So nothing in this kernel ever turns that rail on, which is exactly
+# consistent with the measured link state: device_present=0, no reset
+# asserted, no error latched at any layer.
+#
+# Writing a pinctrl driver would mean inventing bank tables for zumapro that
+# are not published anywhere. Prove the diagnosis first instead: drive the
+# pin from here, then re-bind the UFS driver. If storage appears, the cause
+# is settled and the driver work is justified; if it does not, we have spent
+# one boot instead of a week.
+#
+# Samsung GPIO bank layout, shared with gs101: CON at +0x00 with four bits
+# per pin (1 = output), DAT at +0x04 with one bit per pin. gpp0 is the first
+# bank, at offset 0 of the block. Pin 1 is therefore CON bits [7:4] and DAT
+# bit 1.
+# Read-only first: the other two UFS pins. ufs-refclk-out is gph5-0 and
+# ufs-rst-n is gph5-1, both at pin-function 2, in pinctrl@13060000 where
+# gph5 is the first (and only) bank, so CON is at +0x00. Four bits per pin
+# means pin 0 is CON[3:0] and pin 1 is CON[7:4]; both reading 2 means the
+# bootloader left the reference clock and device reset muxed to the UFS
+# block, and only the VCC rail is missing. Not written, only reported --
+# these are the pins the device is actually talking over.
+log "gph5 (ufs refclk/rst): CON=$($BB devmem 0x13060000 2>/dev/null) DAT=$($BB devmem 0x13060004 2>/dev/null)"
+
+GPP0_CON=0x10840000
+GPP0_DAT=0x10840004
+con=$($BB devmem $GPP0_CON 2>/dev/null)
+dat=$($BB devmem $GPP0_DAT 2>/dev/null)
+log "gpp0 before: CON=$con DAT=$dat"
+
+if [ -n "$con" ] && [ -n "$dat" ]; then
+	# Preserve every other pin's mode; set pin 1 to output and drive high.
+	newcon=$(( ($con & 0xFFFFFF0F) | 0x10 ))
+	newdat=$(( $dat | 0x2 ))
+	$BB devmem $GPP0_CON 32 $newcon 2>/dev/null
+	$BB devmem $GPP0_DAT 32 $newdat 2>/dev/null
+	log "gpp0 after:  CON=$($BB devmem $GPP0_CON) DAT=$($BB devmem $GPP0_DAT)"
+	$BB sleep 1
+else
+	log "gpp0 read failed; not writing"
+fi
+
+UFSDRV=/sys/bus/platform/drivers/exynos-ufshc
+if [ -d "$UFSDRV" ]; then
+	log "re-binding 13200000.ufs with the VCC rail on"
+	$BB echo 13200000.ufs > "$UFSDRV"/bind 2>/dev/null
+	$BB sleep 3
+	log "--- dmesg since re-bind ---"
+	$BB dmesg | $BB tail -30 | while read -r l; do log "$l"; done
+	log "block devices: $($BB ls /sys/class/block 2>/dev/null | $BB tr '\n' ' ')"
+	log "scsi devices: $($BB ls /sys/class/scsi_device 2>/dev/null | $BB tr '\n' ' ')"
+else
+	log "no $UFSDRV; driver not registered"
+fi
+
 # A shell on the USB gadget serial port when the controller is present, so a
 # terminal replaces photographing the panel.
 if [ -c /dev/ttyGS0 ]; then
