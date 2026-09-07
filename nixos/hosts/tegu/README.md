@@ -30,7 +30,7 @@ sources, then tested by booting it.
 | Register access from userspace | **Yes**, `/dev/mem` (`STRICT_DEVMEM` deliberately off) |
 | Rescue userspace | **Yes**, linked into the kernel image |
 | Serial console | **Yes**, with a USB-C debug board (read-only) |
-| Storage | Described but **disabled**: probing panics with an SError, see below |
+| Storage | Described, probes, **link does not come up**: PHY calibration times out. Blocked on clocks |
 | USB, WLAN, modem, GPU, touch, audio, camera | No |
 
 ## The panel console
@@ -186,16 +186,39 @@ Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
 
 ## Next steps, in order
 
-1. **Storage.** The controller and PHY are described (`ufs@13200000`) but
-   disabled: probing panics with an asynchronous SError inside
-   `samsung_ufs_phy_power_on`, i.e. the driver is pointed at an address that
-   is not a device. Every register derived from gs101's relative offsets
-   (`vs_hci` +0x1100, `unipro` +0x80000, `phy` +0x4000) matches the downstream
-   node; only `ufsp` had to be guessed, and gs101 puts it at hci-0x100000
-   (0x13100000 here) which the downstream node does not list. Try that, and
-   confirm the region responds by reading it from the rescue userspace via
-   `/dev/mem` before letting the driver touch it. Fixed-clock stubs already
-   stand in for the driverless clock controller.
+1. **Storage, blocked on clocks.** The controller and PHY are described and
+   enabled. They no longer panic, but the link does not come up:
+
+       samsung-ufs-phy 13204000.phy: failed to get phy cal done -110
+       exynos-ufshc 13200000.ufs: link startup failed 1
+
+   What is established, on hardware:
+
+   - The PHY isolation offset was wrong and is fixed. Mainline's gs101 data
+     writes PMU 0x3ec8; zumapro's control is at 0x3ec0 (`kernel/apply.sh`
+     adds a `google,zumapro-ufs-phy` variant). Before this the first PHY
+     access raised an SError and panicked the kernel.
+   - The PHY is now reachable: its registers read back real values, and the
+     calibration poll returns a clean timeout rather than faulting.
+   - Calibration genuinely does not complete. Skipping the wait was tried
+     and is **wrong**: the driver then writes registers that are not ready
+     and the kernel panics with an SError in `phy_power_off`. The timeout is
+     the honest signal.
+   - The addresses are not the problem. `ufsp` is never touched at all,
+     because gs101 sets `EXYNOS_UFS_OPT_UFSPR_SECURE`, which skips that block.
+
+   That leaves power/clocking. The clocks in the device tree are fixed-clock
+   stubs standing in for a clock controller that has no mainline driver, so
+   the kernel believes clocks are enabled when the hardware has them gated.
+   The bootloader brings UFS fully up (it reads the boot image from it) and
+   then tears it down before handing over, including re-isolating the PHY,
+   which is consistent with everything above.
+
+   **So the real next step is a clock driver.** On this SoC clocks are
+   managed through ACPM firmware (`google,gs-acpm`), which mainline does not
+   support either; `drivers/clk/samsung/clk-gs101.c` is the closest starting
+   point. This is a substantial project, and it is the same dependency that
+   gates the GPU and touch, so it is the single highest-value thing to build.
 2. **USB.** `usb@11210000`, PHY `@11100000`. Establish the power state from
    userspace first (item 5 above). A gadget serial console ends the
    photograph-the-screen workflow; `USB_G_SERIAL` and `U_SERIAL_CONSOLE` are

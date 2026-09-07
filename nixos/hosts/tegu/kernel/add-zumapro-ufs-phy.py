@@ -27,6 +27,14 @@ const struct samsung_ufs_phy_drvdata tensor_zumapro_ufs_phy = {
 	},
 	.clk_list = tensor_gs101_ufs_phy_clks,
 	.num_clks = ARRAY_SIZE(tensor_gs101_ufs_phy_clks),
+	/*
+	 * Keep .wait_for_cal. It was tried without, on the theory that zumapro
+	 * reports calibration completion elsewhere. It does not: skipping the
+	 * wait let the driver proceed to write PHY registers that are not
+	 * ready, and the kernel panicked with an SError in phy_power_off.
+	 * With the wait in place the driver gives up cleanly and the system
+	 * boots. The timeout is the honest signal, not a quirk to route around.
+	 */
 	.wait_for_cal = gs101_phy_wait_for_calibration,
 	.wait_for_cdr = gs101_phy_wait_for_cdr_lock,
 };

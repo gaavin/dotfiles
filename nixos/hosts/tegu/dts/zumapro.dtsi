@@ -414,6 +414,13 @@
 
 		ufs_0: ufs@13200000 {
 			/*
+			 * Enabled: it no longer panics, but the link does not
+			 * come up. PHY calibration times out (-110), which on
+			 * the evidence means the PHY is reachable but not
+			 * clocked. See the README; the next dependency is a
+			 * clock driver for this SoC.
+			 */
+			/*
 			 * The PHY isolation offset is why this used to panic:
 			 * mainline's gs101 data writes PMU 0x3ec8, but on
 			 * zumapro the control is at 0x3ec0, so the PHY stayed
