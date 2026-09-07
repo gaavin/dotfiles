@@ -65,6 +65,7 @@
 #include <linux/clk-provider.h>
 #include <linux/io.h>
 #include <linux/mod_devicetable.h>
+#include <linux/moduleparam.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -104,6 +105,18 @@ static const struct zumapro_gate_desc zumapro_hsi2_gates[] = {
 	{ "hsi2_sysreg_pclk",	0x20e8 },	/* sysreg           */
 };
 
+/*
+ * Leave the CMU_HSI2 user muxes exactly as the bootloader set them.
+ *
+ * Forcing them to CMU_TOP is only right if the bootloader had closed the
+ * path. Pass clk_zumapro_hsi2.keep_boot_mux=1 to test the other possibility --
+ * that the bootloader's setting was the working one and overriding it is
+ * what starves the M-PHY of its reference clock.
+ */
+static bool keep_boot_mux;
+module_param(keep_boot_mux, bool, 0444);
+MODULE_PARM_DESC(keep_boot_mux, "do not touch the CMU_HSI2 user muxes");
+
 static DEFINE_SPINLOCK(zumapro_clk_lock);
 
 static int zumapro_cmu_hsi2_probe(struct platform_device *pdev)
@@ -123,20 +136,43 @@ static int zumapro_cmu_hsi2_probe(struct platform_device *pdev)
 		return PTR_ERR(top);
 
 	/*
-	 * Re-open the path the bootloader closed, before anything downstream
-	 * asks for a clock: the CMU_TOP gates first, then point the user muxes
-	 * at CMU_TOP rather than the oscillator.
+	 * Report what the bootloader actually left here before touching it.
+	 *
+	 * The comment this replaces asserted that the bootloader had closed
+	 * this path, and that was never checked. It matters: the bootloader
+	 * read the kernel off UFS, so whatever state it left behind is a
+	 * working one, and the user mux below decides whether the block is
+	 * fed from CMU_TOP or from the oscillator. If the M-PHY wants the
+	 * oscillator and we point it at CMU_TOP, we break the reference clock
+	 * the PHY calibrates against -- which would look exactly like the
+	 * failure being chased: digital registers fine, calibration never
+	 * completing.
 	 */
+	dev_info(dev,
+		 "bootloader left: TOP noc_gate 0x%08x ufs_gate 0x%08x, HSI2 noc_user 0x%08x ufs_user 0x%08x\n",
+		 readl(top + CLK_CON_GAT_GATE_CLKCMU_HSI2_NOC),
+		 readl(top + CLK_CON_GAT_GATE_CLKCMU_HSI2_UFS_EMBD),
+		 readl(base + PLL_CON0_MUX_CLKCMU_HSI2_NOC_USER),
+		 readl(base + PLL_CON0_MUX_CLKCMU_HSI2_UFS_EMBD_USER));
+	for (i = 0; i < ARRAY_SIZE(zumapro_hsi2_gates); i++)
+		dev_info(dev, "bootloader left: %s (0x%04x) 0x%08x\n",
+			 zumapro_hsi2_gates[i].name,
+			 zumapro_hsi2_gates[i].offset,
+			 readl(base + zumapro_hsi2_gates[i].offset));
+
 	zumapro_set_bits(top + CLK_CON_GAT_GATE_CLKCMU_HSI2_NOC,
 			 BIT(ZUMAPRO_GATE_ENABLE_BIT));
 	zumapro_set_bits(top + CLK_CON_GAT_GATE_CLKCMU_HSI2_UFS_EMBD,
 			 BIT(ZUMAPRO_GATE_ENABLE_BIT));
-	zumapro_set_bits(base + PLL_CON0_MUX_CLKCMU_HSI2_NOC_USER,
-			 ZUMAPRO_USER_MUX_SEL_BIT);
-	zumapro_set_bits(base + PLL_CON0_MUX_CLKCMU_HSI2_UFS_EMBD_USER,
-			 ZUMAPRO_USER_MUX_SEL_BIT);
+	if (!keep_boot_mux) {
+		zumapro_set_bits(base + PLL_CON0_MUX_CLKCMU_HSI2_NOC_USER,
+				 ZUMAPRO_USER_MUX_SEL_BIT);
+		zumapro_set_bits(base + PLL_CON0_MUX_CLKCMU_HSI2_UFS_EMBD_USER,
+				 ZUMAPRO_USER_MUX_SEL_BIT);
+	}
 
-	dev_info(dev, "HSI2 clock path enabled (top gates + user muxes)\n");
+	dev_info(dev, "HSI2 clock path enabled (top gates%s)\n",
+		 keep_boot_mux ? ", user muxes left as booted" : " + user muxes");
 
 	/*
 	 * One parent for all of them. Modelling the CMU_TOP mux/divider tree
