@@ -21,8 +21,9 @@ else
 	cmd="${1:?usage: tegu-cmd '<shell command>' | tegu-cmd -f script.sh}"
 fi
 
-here=$(cd "$(dirname "$0")/.." && pwd)
-img=$(nix build --no-link --print-out-paths "$here/nixos#tegu-images")
+# This script lives in nixos/tools, so one level up is the flake itself.
+flake=$(cd "$(dirname "$0")/.." && pwd)
+img=$(nix build --no-link --print-out-paths "$flake#tegu-images")
 base=$(cat "$img/cmdline.txt")
 enc=$(printf '%s' "$cmd" | base64 -w0)
 

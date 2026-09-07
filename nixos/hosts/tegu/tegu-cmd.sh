@@ -23,8 +23,13 @@ cmd=$(printf '%s' "$enc" | base64 -d 2>/dev/null) || {
 	exit 0
 }
 
+# /bin/sh by absolute path. systemd.services.<n>.path replaces PATH for the
+# unit rather than adding to it, and while coreutils come along in
+# /run/current-system/sw/bin, a bare "sh" does not exist there -- NixOS only
+# provides /bin/sh. The first command sent down this channel died on exactly
+# that.
 echo "tegu-cmd: BEGIN <<$cmd>>" > /dev/kmsg
-sh -c "$cmd" 2>&1 | while IFS= read -r line; do
+/bin/sh -c "$cmd" 2>&1 | while IFS= read -r line; do
 	echo "tegu-cmd: $line" > /dev/kmsg
 done
 echo "tegu-cmd: END" > /dev/kmsg
