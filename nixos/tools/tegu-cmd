@@ -27,6 +27,24 @@ img=$(nix build --no-link --print-out-paths "$flake#tegu-images")
 base=$(cat "$img/cmdline.txt")
 enc=$(printf '%s' "$cmd" | base64 -w0)
 
+# ABL caps vendor_cmdline at 2048 bytes and the base cmdline eats a third of
+# it, so a probe script of any size does not fit base64'd. Fall back to
+# gzip+base64 with a decode pipeline in front, which is about three times
+# denser on shell text. Done here rather than on the phone so that changing
+# the encoding never costs a rootfs reflash; the phone still just runs a
+# string. The reply is unaffected -- only the BEGIN line echoes as base64.
+room=$(( 2048 - ${#base} - 12 ))
+if [ "${#enc}" -gt "$room" ]; then
+	gz=$(printf '%s' "$cmd" | gzip -9 | base64 -w0)
+	cmd="echo $gz|base64 -d|gunzip|/bin/sh"
+	enc=$(printf '%s' "$cmd" | base64 -w0)
+	echo "tegu-cmd: compressed, $((${#enc})) of $room bytes" >&2
+fi
+[ "${#enc}" -le "$room" ] || {
+	echo "tegu-cmd: command still too long ($((${#enc})) > $room)" >&2
+	exit 1
+}
+
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 mkdir "$work/empty"
 (cd "$work/empty" && find . | cpio -o -H newc --quiet) > "$work/vr.cpio"
