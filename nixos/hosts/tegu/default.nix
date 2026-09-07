@@ -185,6 +185,16 @@
     i2c-tools
     evtest
     htop
+
+    # busybox's devmem, and only that applet, so the rest of userspace keeps
+    # coreutils. /dev/mem is deliberately unrestricted on this port
+    # (STRICT_DEVMEM=n), and reading hardware from a shell on the phone is far
+    # cheaper than a build-flash-boot cycle -- every register fact this port
+    # rests on cost one of those before the system booted.
+    (runCommand "devmem" { } ''
+      mkdir -p $out/bin
+      ln -s ${busybox}/bin/busybox $out/bin/devmem
+    '')
   ];
 
   documentation = {
