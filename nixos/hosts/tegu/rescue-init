@@ -120,7 +120,13 @@ log "gph5 before: CON=$gcon DAT=$($BB devmem 0x13060004 2>/dev/null) PUD=$($BB d
 if [ -n "$gcon" ]; then
 	newgcon=$(( ($gcon & 0xFFFFFFF0) | 0x2 ))
 	$BB devmem $GPH5_CON 32 $newgcon 2>/dev/null
-	log "gph5 after:  CON=$($BB devmem $GPH5_CON) (pin0 -> function 2, refclk to UFS)"
+	# Pull: the stock tree sets samsung,pin-pud = <0> on both pins, and PUD
+	# reads 0x1, so pin 0 has a pull enabled that should not be there. Two
+	# bits per pin, so pin 0 is PUD[1:0]. DRV already reads 2, matching the
+	# stock samsung,pin-drv = <2>, so it is left alone.
+	gpud=$($BB devmem 0x13060008 2>/dev/null)
+	[ -n "$gpud" ] && $BB devmem 0x13060008 32 $(( $gpud & 0xFFFFFFFC )) 2>/dev/null
+	log "gph5 after:  CON=$($BB devmem $GPH5_CON) PUD=$($BB devmem 0x13060008) (pin0 -> function 2, no pull)"
 else
 	log "gph5 read failed; not writing"
 fi
@@ -141,6 +147,25 @@ if [ -n "$con" ] && [ -n "$dat" ]; then
 	$BB sleep 1
 else
 	log "gpp0 read failed; not writing"
+fi
+
+# Give the device a clean cold start now that it has power and a clock.
+#
+# It was powered off, so this is its first power-up. exynos_ufs_dev_hw_reset()
+# does pulse RST_n during probe, but only for 5us and immediately before link
+# startup. A device coming up from cold wants a longer reset and time to
+# initialise afterwards, so do it here with generous timing before re-binding.
+#
+# RST_n is HCI_GPIO_OUT bit 0, at hci base + 0x70.
+UFS_GPIO_OUT=0x13200070
+g=$($BB devmem $UFS_GPIO_OUT 2>/dev/null)
+if [ -n "$g" ]; then
+	log "device reset: GPIO_OUT=$g, pulsing RST_n low"
+	$BB devmem $UFS_GPIO_OUT 32 $(( $g & 0xFFFFFFFE )) 2>/dev/null
+	$BB sleep 1
+	$BB devmem $UFS_GPIO_OUT 32 $(( $g | 0x1 )) 2>/dev/null
+	$BB sleep 1
+	log "device reset: released, GPIO_OUT=$($BB devmem $UFS_GPIO_OUT)"
 fi
 
 UFSDRV=/sys/bus/platform/drivers/exynos-ufshc

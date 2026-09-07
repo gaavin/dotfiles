@@ -304,7 +304,30 @@ Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
      Disregard it: this SoC's tables contain no `PHY_PLL_WAIT` entry, so
      register `0x1e` is not the PLL status here.
 
-   ### Resolved: calibration was never the problem
+   ### Resolved: calibration needed the reference-clock pin
+
+   Settled on hardware. The bootloader tears UFS down two ways: it drops the
+   VCC rail (`gpp0[1]`, low) and parks the reference clock output
+   (`gph5[0]`) as a plain GPIO driven low instead of function 2. Restoring
+   both from the rescue shell and re-binding the driver makes PHY
+   calibration **pass** -- in the same boot, the first probe shows
+   `failed to get phy cal done -110` on every attempt and the re-bind shows
+   none at all, with the attempt spacing dropping from ~207ms to ~104ms
+   because the 40ms timeouts are gone.
+
+   So calibration was never a table problem, a wrong-register problem, or an
+   already-calibrated-by-the-bootloader problem. The PMA simply had no
+   reference clock, because the pin feeding it was parked. The ported table
+   and the corrected cal-done register are both right and are both used.
+   `keep_boot_phy` is a workaround that is no longer needed.
+
+   The earlier reading of this, kept as a caution: with the table skipped,
+   the PHY's trim registers read back values differing from the table's, and
+   that was taken as evidence of a completed calibration. It is equally
+   consistent with a torn-down PHY, and that ambiguity was not weighed at
+   the time.
+
+   ### Superseded: the earlier reading of calibration
 
    Confirmed on hardware. Booting with `phy_exynos_ufs.keep_boot_phy=1`,
    which skips the PRE_INIT table and the calibration wait, removes
