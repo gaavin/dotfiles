@@ -83,6 +83,13 @@ python3 "$src"/region-dump.py
 # By first probe it is 0. Find which step tears it down.
 python3 "$src"/hcs-trace.py
 
+# --- UFS: Tensor G4's own UniPro/PCS pre-link values ---------------------
+# This SoC binds to "google,gs101-ufs", and gs101's pre-link sequence is right
+# except in two places: Tensor G4's M-PHY runs from a 38.4 MHz reference, which
+# Google selects with PCS attribute 0x202 = 0x22 and gs101 never writes at all,
+# and PCS RX 0x2f is 0x79 here rather than gs101's 0x69.
+python3 "$src"/zumapro-ufs-prelink.py
+
 hdr=include/linux/platform_data/simplefb.h
 anchor='DRM_FORMAT_ABGR8888'
 if ! grep -q "$anchor" "$hdr"; then

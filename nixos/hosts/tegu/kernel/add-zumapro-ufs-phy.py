@@ -144,8 +144,37 @@ static int zumapro_phy_wait_for_calibration(struct phy *phy, u8 lane)
 				 sleep_us, timeout_us);
 	if (err) {
 		dev_err(ufs_phy->dev,
-			"zumapro: failed to get phy cal done %d\\n", err);
+			"zumapro: cal done never set (%d), continuing anyway\\n",
+			err);
 		zumapro_phy_report_cal_failure(ufs_phy, lane);
+
+		/*
+		 * Deliberately not fatal, because Google's own kernel does not
+		 * treat it as fatal either. In
+		 * google-modules/soc/gs/drivers/ufs/zuma/ufs-cal-if.c,
+		 * ufs30_cal_done_wait() -- the handler for the
+		 * PHY_EMB_CAL_WAIT entry that ends this SoC's pre-link table,
+		 * {0x0000, 0xC74, 0x01, PMD_ALL, PHY_EMB_CAL_WAIT, BRD_ALL} --
+		 * polls TRSV 0xC74 bit 0 a hundred times and then does this:
+		 *
+		 *	#if defined(__UFS_CAL_FW__)
+		 *		if (i >= 100)
+		 *			return UFS_CAL_ERROR;
+		 *	#endif
+		 *		return UFS_CAL_NO_ERROR;
+		 *
+		 * __UFS_CAL_FW__ is defined only for the firmware build. In
+		 * the kernel build the timeout returns success, so on this
+		 * hardware the vendor driver never blocks on this bit.
+		 *
+		 * Treating it as fatal here made phy_power_on() fail, which
+		 * made exynos_ufs_phy_init() run phy_exit() on a PHY that had
+		 * in fact been programmed. The register dump says calibration
+		 * does run: within the same window the PHY writes TRSV 0xC3C,
+		 * 0xC78 and 0xC7C -- registers no table of ours touches -- and
+		 * moves 0xC74 itself. What never happens is bit 0 setting.
+		 */
+		err = 0;
 	}
 
 	return err;
