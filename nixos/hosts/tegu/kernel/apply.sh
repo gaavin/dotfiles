@@ -48,8 +48,8 @@ printf 'obj-y\t+= clk-zumapro-hsi2.o\n' >> drivers/clk/samsung/Makefile
 # and parks the reference clock output (gph5[0]) as a low GPIO. A bring-up
 # shim until this SoC has a pinctrl driver; see the file for why it cannot
 # be done from userspace.
-install -m444 "$src"/zumapro-ufs-pins.c drivers/soc/samsung/zumapro-ufs-pins.c
-printf 'obj-y\t+= zumapro-ufs-pins.o\n' >> drivers/soc/samsung/Makefile
+install -m444 "$src"/zumapro-ufs-restore.c drivers/soc/samsung/zumapro-ufs-restore.c
+printf 'obj-y\t+= zumapro-ufs-restore.o\n' >> drivers/soc/samsung/Makefile
 
 # --- UFS PHY: Tensor G4 variant -----------------------------------------
 python3 "$src"/add-zumapro-ufs-phy.py

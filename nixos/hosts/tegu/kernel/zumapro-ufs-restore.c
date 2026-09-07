@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Bring-up shim: put the UFS pins where the stock firmware puts them, before
- * the UFS driver probes.
+ * Bring-up shim: put the UFS pins and reference clock where the stock
+ * firmware puts them, before the UFS driver probes.
  *
  * The bootloader tears UFS down on its way out, in two ways measured on
  * hardware:
@@ -36,7 +36,42 @@
  */
 
 #include <linux/init.h>
+#include <linux/delay.h>
 #include <linux/io.h>
+
+/*
+ * The M-PHY reference clock.
+ *
+ * CLKCMU_HSI2_UFS_EMBD is the parent of MUX_CLKCMU_HSI2_UFS_EMBD_USER, which
+ * is the parent of GOUT_BLK_HSI2_UID_UFS_EMBD_IPCLKPORT_I_CLK_UNIPRO -- the
+ * M-PHY/UniPro clock the PMA calibrates against. On this SoC it is a VDD_INT
+ * DVFS clock, set through ACPM firmware that mainline does not have, so
+ * nothing here ever programs it and it keeps whatever the bootloader left.
+ *
+ * Measured at hand-over against Google's own VDD_INT normal-level table
+ * (cal-if/zuma, cmucal_vclk_vdd_int[] with vdd_int_nm_lut_params[]):
+ *
+ *	                       hardware   Google nm
+ *	MUX SELECT             1          3        PLL_SHARED0_D4 vs PLL_SPARE_D1
+ *	DIV DIVRATIO           2          1        /3 vs /2
+ *
+ * Wrong source and wrong divider, so the PMA is being clocked at a frequency
+ * it was never characterised for. That is consistent with everything else
+ * measured: the PMA's registers accept writes, isolation is released, the
+ * gates are open, and the calibration bit still never sets.
+ *
+ * Field positions are from cmucal-sfr.c, not guessed:
+ *	CLK_CON_MUX_MUX_CLKCMU_HSI2_UFS_EMBD  0x10b8  SELECT [1:0], BUSY bit 16
+ *	CLK_CON_DIV_CLKCMU_HSI2_UFS_EMBD      0x18b0  DIVRATIO [3:0], BUSY bit 16
+ */
+#define ZUMAPRO_CMU_TOP_BASE	0x26040000
+#define CLKCMU_HSI2_UFS_EMBD_MUX	0x10b8
+#define CLKCMU_HSI2_UFS_EMBD_DIV	0x18b0
+#define CMU_MUX_SELECT_MASK		0x3
+#define CMU_DIV_RATIO_MASK		0xf
+#define CMU_BUSY			BIT(16)
+#define UFS_EMBD_MUX_PLL_SPARE_D1	3	/* Google's VDD_INT nm value */
+#define UFS_EMBD_DIV_BY_2		1	/* Google's VDD_INT nm value */
 
 #define ZUMAPRO_PERIC0_BASE	0x10840000	/* pinctrl@10840000, gpp0 at +0 */
 #define ZUMAPRO_HSI2_PINS_BASE	0x13060000	/* pinctrl@13060000, gph5 at +0 */
@@ -49,9 +84,27 @@ static void __init zumapro_rmw(void __iomem *reg, u32 clear, u32 set)
 	writel((readl(reg) & ~clear) | set, reg);
 }
 
+/*
+ * Wait for a CMU mux or divider to finish switching. Bounded and
+ * non-fatal: if the selected source is not running the block stays busy,
+ * and a stuck mux must be reported rather than hang the boot.
+ */
+static bool __init zumapro_cmu_settle(void __iomem *reg)
+{
+	int i;
+
+	for (i = 0; i < 1000; i++) {
+		if (!(readl(reg) & CMU_BUSY))
+			return true;
+		udelay(10);
+	}
+	return false;
+}
+
 static int __init zumapro_ufs_pins_init(void)
 {
-	void __iomem *peric0, *hsi2;
+	void __iomem *peric0, *hsi2, *cmu_top;
+	bool mux_ok, div_ok;
 
 	peric0 = ioremap(ZUMAPRO_PERIC0_BASE, 0x1000);
 	if (!peric0)
@@ -70,6 +123,27 @@ static int __init zumapro_ufs_pins_init(void)
 	/* ufs-refclk-out: gph5[0] to function 2, no pull. */
 	zumapro_rmw(hsi2 + BANK_CON, 0xf, 0x2);
 	zumapro_rmw(hsi2 + BANK_PUD, 0x3, 0);
+
+	/* M-PHY reference clock: Google's VDD_INT normal-level settings. */
+	cmu_top = ioremap(ZUMAPRO_CMU_TOP_BASE, 0x8000);
+	if (cmu_top) {
+		zumapro_rmw(cmu_top + CLKCMU_HSI2_UFS_EMBD_DIV,
+			    CMU_DIV_RATIO_MASK, UFS_EMBD_DIV_BY_2);
+		div_ok = zumapro_cmu_settle(cmu_top + CLKCMU_HSI2_UFS_EMBD_DIV);
+
+		zumapro_rmw(cmu_top + CLKCMU_HSI2_UFS_EMBD_MUX,
+			    CMU_MUX_SELECT_MASK, UFS_EMBD_MUX_PLL_SPARE_D1);
+		mux_ok = zumapro_cmu_settle(cmu_top + CLKCMU_HSI2_UFS_EMBD_MUX);
+
+		pr_info("zumapro-ufs-pins: UFS_EMBD mux %#010x (%s) div %#010x (%s)\n",
+			readl(cmu_top + CLKCMU_HSI2_UFS_EMBD_MUX),
+			mux_ok ? "settled" : "STILL BUSY",
+			readl(cmu_top + CLKCMU_HSI2_UFS_EMBD_DIV),
+			div_ok ? "settled" : "STILL BUSY");
+		iounmap(cmu_top);
+	} else {
+		pr_warn("zumapro-ufs-pins: could not map CMU_TOP\n");
+	}
 
 	pr_info("zumapro-ufs-pins: gpp0 CON %#010x DAT %#010x, gph5 CON %#010x PUD %#010x\n",
 		readl(peric0 + BANK_CON), readl(peric0 + BANK_DAT),
