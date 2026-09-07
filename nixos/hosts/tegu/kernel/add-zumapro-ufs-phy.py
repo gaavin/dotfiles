@@ -269,6 +269,59 @@ static const struct samsung_ufs_phy_cfg tensor_zumapro_pwr_hs_cfg[] = {
 	END_UFS_PHY_CFG,
 };
 
+/*
+ * Hibern8, from Google's post_h8_enter and pre_h8_exit for this SoC. Their
+ * offsets are bytes and mainline's are registers, so each is theirs over four:
+ * 0x9F4 -> 0x27d, 0xA00 -> 0x280, 0xB64 -> 0x2d9.
+ *
+ * Their PHY_PMA_TRSV_SQ and PHY_PMA_TRSV entries reach the same register file
+ * by the same address arithmetic -- __config_uic() handles both with
+ * pma_writel(..., PHY_PMA_TRSV_ADDR(addr, lane)) -- so both become
+ * PHY_TRSV_REG_CFG_GS101 here.
+ *
+ * These slots held gs101's tables until now, which is why the link died the
+ * moment anything let it idle: clock gating put it into hibern8, and coming
+ * back out ran Tensor G1's analogue values through a Tensor G4 PHY.
+ *
+ *	samsung-ufs-phy: failed to get cdr lock
+ *	pwr ctrl cmd 0x18 with (MIBattribute 0x0, mode 0x0) failed,
+ *		host upmcrs:0x5
+ *	ufshcd_uic_hibern8_exit: hibern8 exit failed. ret = 5
+ *	ufshcd_ungate_work: hibern8 exit failed 5
+ *
+ * UIC command 0x18 is DME_HIBERN8_EXIT and upmcrs 5 is PWR_FATAL_ERROR.
+ */
+static const struct samsung_ufs_phy_cfg tensor_zumapro_post_h8_enter[] = {
+	PHY_TRSV_REG_CFG_GS101(0x27d, 0x08, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x280, 0x3a, PWR_MODE_ANY),
+	PHY_COMN_REG_CFG(0x000, 0x51, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x2d9, 0x30, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x2d9, 0x33, PWR_MODE_ANY),
+	END_UFS_PHY_CFG,
+};
+
+static const struct samsung_ufs_phy_cfg tensor_zumapro_pre_h8_exit[] = {
+	PHY_COMN_REG_CFG(0x000, 0x11, PWR_MODE_ANY),
+	/*
+	 * Google's {0x0000, 0x000, 0x0A, PMD_ALL, COMMON_WAIT, BRD_ALL}. The
+	 * PHY needs settling time after that write before the squelch
+	 * registers are touched, and mainline's table format had no way to say
+	 * so, so PHY_DELAY_CFG adds one rather than leaving the wait out and
+	 * hoping bus latency covers it.
+	 */
+	PHY_DELAY_CFG(10, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x27d, 0x00, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x280, 0x30, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x2d9, 0x32, PWR_MODE_ANY),
+	PHY_TRSV_REG_CFG_GS101(0x2d9, 0x22, PWR_MODE_ANY),
+	END_UFS_PHY_CFG,
+};
+
+static const struct samsung_ufs_phy_cfg *tensor_zumapro_hibern8_cfgs[] = {
+	[CFG_POST_HIBERN8_ENTER]	= tensor_zumapro_post_h8_enter,
+	[CFG_PRE_HIBERN8_EXIT]		= tensor_zumapro_pre_h8_exit,
+};
+
 static const struct samsung_ufs_phy_cfg *tensor_zumapro_ufs_phy_cfgs[CFG_TAG_MAX] = {
 	[CFG_PRE_INIT]		= tensor_zumapro_pre_init_cfg,
 	[CFG_PRE_PWR_HS]	= tensor_zumapro_pwr_hs_cfg,
@@ -277,7 +330,7 @@ static const struct samsung_ufs_phy_cfg *tensor_zumapro_ufs_phy_cfgs[CFG_TAG_MAX
 
 const struct samsung_ufs_phy_drvdata tensor_zumapro_ufs_phy = {
 	.cfgs = tensor_zumapro_ufs_phy_cfgs,
-	.cfgs_hibern8 = tensor_gs101_hibern8_cfgs,
+	.cfgs_hibern8 = tensor_zumapro_hibern8_cfgs,
 	.isol = {
 		.offset = TENSOR_ZUMAPRO_PHY_CTRL,
 		.mask = TENSOR_GS101_PHY_CTRL_MASK,
@@ -294,7 +347,19 @@ const struct samsung_ufs_phy_drvdata tensor_zumapro_ufs_phy = {
 	 * boots. The timeout is the honest signal, not a quirk to route around.
 	 */
 	.wait_for_cal = zumapro_phy_wait_for_calibration,
-	.wait_for_cdr = gs101_phy_wait_for_cdr_lock,
+	/*
+	 * No .wait_for_cdr. gs101's polls TRSV 0x338 bit 3, a register that
+	 * appears nowhere in Google's tables for this SoC, and it duly failed
+	 * every time it ran -- once after the gear change and again on every
+	 * hibern8 exit:
+	 *
+	 *	samsung-ufs-phy 13204000.phy: failed to get cdr lock
+	 *
+	 * Google waits for no CDR lock here at all: post_calib_of_hs_rate_a
+	 * and _b are empty, and pre_h8_exit ends with register writes, not a
+	 * PHY_CDR_WAIT entry. A poll of the wrong register can only ever
+	 * report failure, so it is removed rather than pointed somewhere.
+	 */
 };
 '''
 
@@ -320,6 +385,29 @@ if anchor not in s:
     fail("PHY drvdata declarations moved upstream")
 s = s.replace(anchor,
               anchor + "\nextern const struct samsung_ufs_phy_drvdata tensor_zumapro_ufs_phy;", 1)
+
+# A table entry that waits instead of writing.
+#
+# Google's tables have COMMON_WAIT for this and __config_uic() answers it with
+# handle->udelay(cfg->val); mainline's table format has no equivalent, so the
+# Tensor G4 hibern8-exit sequence could not be expressed faithfully without
+# one. PHY_DELAY_BLK reuses the existing id field, so nothing else changes.
+blk = "#define PHY_TRSV_BLK\t2"
+if blk not in s:
+    fail("PHY block ids moved upstream")
+s = s.replace(blk, blk + "\n#define PHY_DELAY_BLK\t3", 1)
+
+comn = "#define PHY_COMN_REG_CFG(o, v, d) {\t\\"
+if comn not in s:
+    fail("PHY_COMN_REG_CFG moved upstream")
+s = s.replace(comn,
+              "#define PHY_DELAY_CFG(us, d) {\t\\\n"
+              "\t.off_0 = 0,\t\t\\\n"
+              "\t.off_1 = 0,\t\t\\\n"
+              "\t.val = (us),\t\t\\\n"
+              "\t.desc = (d),\t\t\\\n"
+              "\t.id = PHY_DELAY_BLK,\t\\\n"
+              "}\n\n" + comn, 1)
 open(p, "w").write(s)
 
 # 3. bind it to a compatible
@@ -335,5 +423,34 @@ s = s.replace(anchor,
               '\t\t.compatible = "google,zumapro-ufs-phy",\n'
               '\t\t.data = &tensor_zumapro_ufs_phy,\n'
               '\t}, {', 1)
+
+cfgfn = """	enum {LANE_0, LANE_1}; /* lane index */
+
+	switch (lane) {"""
+if s.count(cfgfn) != 1:
+    fail("samsung_ufs_phy_config() body moved upstream")
+s = s.replace(cfgfn, """	enum {LANE_0, LANE_1}; /* lane index */
+
+	/*
+	 * A wait, not a write. Google's tables spell this COMMON_WAIT and
+	 * __config_uic() answers it with handle->udelay(cfg->val); Tensor G4's
+	 * hibern8-exit sequence needs 10us after the first common-block write
+	 * before the squelch registers are touched. Once per entry, not once
+	 * per lane.
+	 */
+	if (cfg->id == PHY_DELAY_BLK) {
+		if (lane == LANE_0)
+			udelay(cfg->val);
+		return;
+	}
+
+	switch (lane) {""", 1)
+
+if "#include <linux/delay.h>" not in s:
+    inc = "#include <linux/io.h>"
+    if inc not in s:
+        fail("phy-samsung-ufs.c includes moved upstream")
+    s = s.replace(inc, "#include <linux/delay.h>\n" + inc, 1)
+
 open(p, "w").write(s)
 print("add-zumapro-ufs-phy: added google,zumapro-ufs-phy (isolation at 0x3ec0)")
