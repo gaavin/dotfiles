@@ -12,6 +12,23 @@
   # emulation; air is too small for the kernel + Plasma Mobile closure.
   boot.binfmt.emulatedSystems = [ "aarch64-linux" ];
 
+  # ccache for the tegu kernel builds. Each iteration of that port rebuilds a
+  # full arm64 kernel, and almost all of it is unchanged between attempts.
+  #
+  # The cache has to be visible inside the Nix build sandbox, hence
+  # extra-sandbox-paths; without that entry the compiler wrapper silently
+  # misses every lookup and the only symptom is that nothing gets faster.
+  programs.ccache = {
+    enable = true;
+    cacheDir = "/var/cache/ccache";
+  };
+  nix.settings.extra-sandbox-paths = [ "/var/cache/ccache" ];
+  nix.settings.trusted-users = [ "root" "max" ];
+
+  systemd.tmpfiles.rules = [
+    "d /var/cache/ccache 0770 root nixbld - -"
+  ];
+
   virtualisation.virtualbox.host = {
     enable = true;
     enableExtensionPack = true;

@@ -10,6 +10,7 @@
   buildLinux,
   fetchurl,
   callPackage,
+  ccacheStdenv,
   ...
 }@args:
 
@@ -79,6 +80,12 @@ let
   kernel = buildLinux (
     args
     // {
+      # Bring-up means rebuilding this kernel once per hypothesis, and almost
+      # every object is unchanged between attempts. Needs programs.ccache and
+      # the cache directory in extra-sandbox-paths on the build host; see
+      # hosts/mina/default.nix.
+      stdenv = ccacheStdenv;
+
       inherit version;
       modDirVersion = "7.3.0-rc1";
       extraMeta.branch = "7.3";
