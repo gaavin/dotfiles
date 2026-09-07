@@ -1,21 +1,22 @@
 # tegu — Google Pixel 9a (Tensor G4) on mainline NixOS
 
-Status: **mainline Linux boots on this phone and sees its storage.** 7.3-rc1
-comes up on a Tensor G4 (`zumapro`), runs to userspace, prints its log over
-UART and on the panel, and brings UFS all the way up:
+Status: **it boots.** Mainline Linux 7.3-rc1 runs NixOS 26.11 on a Tensor G4
+(`zumapro`) from the phone's own UFS storage, with Plasma Mobile on the panel
+and a login prompt on UART.
 
 ```
 Power mode changed to : FAST series_B G_4 L_2
-scsi 0:0:0:0: Direct-Access  SAMSUNG  KLUDG4UHGC-B0E1  3303
 sd 0:0:0:0: [sda] 31147008 4096-byte logical blocks: (128 GB/119 GiB)
- sda: sda1 sda2 ... sda34
+EXT4-fs (sda34): mounted filesystem r/w with ordered data mode
+Welcome to NixOS 26.11 (Zokor)!
+[  OK  ] Reached target Graphical Interface.
+tegu login:
 ```
 
-Gear 4, two lanes, HS rate B, with the partition table read. It is not yet a
-usable system: the phone still carries Android's `init_boot` ramdisk, so
-Android's init runs instead of ours and panics. Flashing this build's
-`init_boot.img` and `rootfs.img` is the remaining step. See "What works" for
-the honest boundary.
+Not yet a usable phone. The known gap is that **the device powers off on its
+own after a few minutes**; the cause is not yet established, and the leading
+candidate is the cluster watchdog, which this port describes nowhere and
+therefore never pets. See "Next steps".
 
 Everything below was established on hardware. Where something is inferred
 rather than observed it says so.
