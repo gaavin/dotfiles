@@ -9,6 +9,18 @@
   ...
 }:
 
+let
+  # busybox's devmem applet on its own, so the rest of userspace keeps
+  # coreutils. It matters that this is devmem and not dd: on arm64,
+  # valid_phys_addr_range() restricts /dev/mem read() to real memory, so
+  # reading MMIO with dd returns EFAULT no matter what STRICT_DEVMEM says.
+  # devmem uses mmap(), which takes a different path in drivers/char/mem.c and
+  # does reach MMIO.
+  devmem = pkgs.runCommand "devmem" { } ''
+    mkdir -p $out/bin
+    ln -s ${pkgs.busybox}/bin/busybox $out/bin/devmem
+  '';
+in
 {
   nixpkgs.hostPlatform = "aarch64-linux";
   networking.hostName = "tegu";
@@ -186,15 +198,7 @@
     evtest
     htop
 
-    # busybox's devmem, and only that applet, so the rest of userspace keeps
-    # coreutils. /dev/mem is deliberately unrestricted on this port
-    # (STRICT_DEVMEM=n), and reading hardware from a shell on the phone is far
-    # cheaper than a build-flash-boot cycle -- every register fact this port
-    # rests on cost one of those before the system booted.
-    (runCommand "devmem" { } ''
-      mkdir -p $out/bin
-      ln -s ${busybox}/bin/busybox $out/bin/devmem
-    '')
+    devmem
   ];
 
   # Read the touchscreen stack's registers at boot and put them in the kernel
@@ -210,6 +214,7 @@
       RemainAfterExit = true;
       ExecStart = "${pkgs.runtimeShell} ${./touch-probe.sh}";
     };
+    path = [ devmem ];
   };
 
   documentation = {
