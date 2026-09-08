@@ -146,6 +146,13 @@ stick.
 
 ### Known-incomplete in the touch driver
 
+- **The poll loop is gated on a line nobody has validated.** `zumapro_touch_poll()`
+  skips the bus unless `gpn0` reads low. Today it always reads low, so the
+  gate is a no-op and the probe-time diagnostics run regardless — but the
+  moment that line starts behaving, a wrong polarity or a wrong pin means the
+  driver silently stops reading. Delete the gate, or prove the line, before
+  trusting an empty log.
+
 - **No coordinate decoding.** TouchComm's touch report is a bitfield sequence
   described by a report-config the part supplies at runtime. It is deliberately
   not written yet: the driver logs raw reports so the layout can be read off
@@ -163,17 +170,25 @@ stick.
    Mainline has the Samsung pinctrl driver and gs101 bank tables; zumapro
    needs its own.
 
-   **The bank tables already exist and are complete.** `soc-gs`,
-   `drivers/pinctrl/gs/pinctrl-gs.c`, has `zuma_pin_alive[]`,
-   `zuma_pin_custom[]`, `zuma_pin_far[]`, `zuma_pin_gsacore0..3[]`,
-   `zuma_pin_gsactrl[]`, `zuma_pin_hsi1[]`, `zuma_pin_hsi2[]`,
-   `zuma_pin_hsi2ufs[]` and the peric banks, each entry giving pin count,
-   offset, name and EINT numbers, with the block base in the comment above
-   it. `google,zumapro-pinctrl` shares zuma's data. For example
-   `0x15060000` is GPIO_CUSTOM_ALIVE and holds `gpn0`..`gpn9`, one pin each,
-   0x20 apart, `gpn0` first — which is what makes the touch IRQ readable at
-   `0x15060004` today. Nothing here needs reverse-engineering; it needs
-   transcribing into mainline's `samsung_pin_bank_data` form.
+   **The bank tables already exist and are complete**, and zumapro has its
+   own — do not use zuma's, they differ (zumapro's GPIO_ALIVE adds `gpa11`
+   and `gpa12`). `soc-gs`, `drivers/pinctrl/gs/pinctrl-gs.c`, has
+   `zumapro_pin_alive[]`, `zumapro_pin_custom[]`, `zumapro_pin_far[]`,
+   `zumapro_pin_gsacore0..3[]`, `zumapro_pin_gsactrl[]`,
+   `zumapro_pin_hsi1[]`, `zumapro_pin_hsi2[]`, `zumapro_pin_hsi2ufs[]`,
+   `zumapro_pin_peric0[]` and `zumapro_pin_peric1[]`, each entry giving pin
+   count, offset, name and EINT number, with the block base in the comment
+   above it. Two entries are already load-bearing here and both check out
+   against hardware: `gpn0` is bank 0 of GPIO_CUSTOM_ALIVE (`0x15060000`, one
+   pin) and `gpp1` is bank 1 of GPIO_PERIC0 (`0x10840000` + 0x20, four pins).
+   This is transcription into mainline's `samsung_pin_bank_data` form, not
+   reverse-engineering.
+
+   One thing those tables do *not* cover: the touch SPI pads. Google's board
+   file calls them `GPB10[4..7]`, and no `gpb` bank exists in any zumapro
+   block or in the stock DTS — which is consistent with Google's own SPI node
+   carrying `pinctrl-0 = <>`. Firmware sets those pads up and Linux never
+   touches them, so pad muxing is not a suspect for the silent touchscreen.
 2. Coordinate decoding, from logged reports.
 3. USB (DWC3 + eUSB/combo PHY) would end the reflash-per-question loop.
 

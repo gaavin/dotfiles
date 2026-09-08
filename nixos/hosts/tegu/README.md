@@ -486,11 +486,12 @@ cannot write an S2MPG10 offset by accident.
    and `sec-acpm` cannot probe at all without an interrupt. Mainline has the
    Samsung pinctrl driver and gs101 bank tables; zumapro needs its own — and
    the data is already written down. `soc-gs`'s
-   `drivers/pinctrl/gs/pinctrl-gs.c` carries a full set of `zuma_pin_*[]`
-   tables giving every bank's pin count, offset, name and EINT numbers, with
-   the block base in the comment above each, and `google,zumapro-pinctrl`
-   shares zuma's data. This is a transcription job, not a reverse-engineering
-   one.
+   `drivers/pinctrl/gs/pinctrl-gs.c` carries a full set of `zumapro_pin_*[]`
+   tables giving every bank's pin count, offset, name and EINT number, with
+   the block base in the comment above each. They are *not* zuma's — that set
+   exists separately and differs — so take the ones named for zumapro. Both
+   banks this port already pokes by hand agree with them. This is a
+   transcription job, not a reverse-engineering one.
 3. **USB.** `usb@11210000`, PHY `@11100000`. A gadget serial console would end
    the reflash-per-question loop that costs this port most of its time;
    `USB_G_SERIAL` and `U_SERIAL_CONSOLE` are already enabled.
