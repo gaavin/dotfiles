@@ -52,6 +52,22 @@ printf 'obj-y\t+= clk-zumapro-hsi2.o\n' >> drivers/clk/samsung/Makefile
 install -m444 "$src"/clk-zumapro-hsi0.c drivers/clk/samsung/clk-zumapro-hsi0.c
 printf 'obj-y\t+= clk-zumapro-hsi0.o\n' >> drivers/clk/samsung/Makefile
 
+# --- PMIC: the touchscreen's two rails -----------------------------------
+# S2MPG14 LDO4M (AVDD 3.3V) and LDO25M (DVDD 1.8V). Offsets from Google's
+# s2mpg14-register.h and confirmed against a live read of the part; see the
+# driver. Not mainline's sec-acpm/s2mps11, whose S2MPG10 map puts LDO4M where
+# this part keeps LDO25M.
+install -m444 "$src"/zumapro-s2mpg14-regulator.c drivers/regulator/zumapro-s2mpg14-regulator.c
+printf 'obj-y\t+= zumapro-s2mpg14-regulator.o\n' >> drivers/regulator/Makefile
+
+# --- Touchscreen: Synaptics TouchComm over SPI ---------------------------
+# Mainline has no TouchComm driver at all (only RMI4, a different protocol).
+# Written against Google's protocol sources; identifies the part and streams
+# reports, but does not decode coordinates yet -- that format is described by
+# a runtime report-config and is being read off hardware rather than guessed.
+install -m444 "$src"/zumapro-touch.c drivers/input/touchscreen/zumapro-touch.c
+printf 'obj-y\t+= zumapro-touch.o\n' >> drivers/input/touchscreen/Makefile
+
 # --- PMIC: read-only dump over ACPM --------------------------------------
 # ACPM is confirmed working, but the PMIC's register map is not: this phone
 # has S2MPG14/15 and mainline's sec-acpm.c only knows S2MPG10/11. Borrowing

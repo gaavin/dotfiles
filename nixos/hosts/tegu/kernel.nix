@@ -139,6 +139,12 @@ let
             # any source available here, so nothing is written to it yet. This
             # is the instrument: regmap debugfs makes the PMIC readable from
             # userspace so the real map can be measured rather than assumed.
+            # Touchscreen: input stack for kernel/zumapro-touch.c, and the
+            # regulator framework for its two S2MPG14 rails.
+            INPUT = yes;
+            INPUT_EVDEV = yes;
+            INPUT_TOUCHSCREEN = yes;
+
             MAILBOX = yes;
             EXYNOS_MBOX = yes;
             EXYNOS_ACPM_PROTOCOL = yes;

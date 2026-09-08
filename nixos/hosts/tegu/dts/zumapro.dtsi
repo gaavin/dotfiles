@@ -561,6 +561,33 @@
 			pmic_dump: pmic-dump {
 				compatible = "google,zumapro-pmic-dump";
 			};
+
+			/*
+			 * The touchscreen's two supplies on the main PMIC.
+			 * Offsets from Google's s2mpg14-register.h and
+			 * confirmed against a live read: the hardware already
+			 * holds 3300000 and 1800000 in these registers with
+			 * the enable bit clear, so min == max here states what
+			 * is there rather than asking for a change. See
+			 * kernel/zumapro-s2mpg14-regulator.c.
+			 */
+			pmic_main: pmic-main {
+				compatible = "google,zumapro-s2mpg14-regulator";
+
+				regulators {
+					m_ldo4_reg: LDO4M {
+						regulator-name = "PP3300_L4M_TS1_AVDD";
+						regulator-min-microvolt = <3300000>;
+						regulator-max-microvolt = <3300000>;
+					};
+
+					m_ldo25_reg: LDO25M {
+						regulator-name = "PP1800_L25M_TS1_DVDD";
+						regulator-min-microvolt = <1800000>;
+						regulator-max-microvolt = <1800000>;
+					};
+				};
+			};
 		};
 
 		cmu_hsi0: clock-controller@11000000 {
@@ -616,24 +643,26 @@
 				 * USIs sharing sysreg 0x11020000 declare
 				 * pinctrl at all -- yet touch works on Android.
 				 *
-				 * spidev, deliberately, and temporarily. There
-				 * is no synaptics,tcm-spi driver in mainline to
-				 * bind here, and before writing one it is worth
-				 * establishing from userspace that the part
-				 * answers at all. "rohm,dh2228fv" is the
-				 * conventional stand-in compatible for exactly
-				 * this; it names nothing real and should go
-				 * when a genuine driver exists.
-				 *
-				 * 10 MHz and SPI mode 0 are the touch part's
-				 * own numbers, from Google's board file:
-				 * spi-max-frequency = <10000000> and
-				 * synaptics,spi-mode = <0>.
+				 * The bus itself is proven: in internal
+				 * loopback the controller echoes a5 5a 0f f0
+				 * byte for byte at 9.98 MHz.
 				 */
-				touch_spidev: spidev@0 {
-					compatible = "rohm,dh2228fv";
+				touchscreen@0 {
+					compatible = "google,zumapro-tcm-spi";
 					reg = <0>;
 					spi-max-frequency = <10000000>;
+
+					/*
+					 * Synaptics TouchComm. The driver
+					 * enables these itself and waits
+					 * Google's 200 ms power-delay-ms
+					 * before speaking, so they are not
+					 * marked always-on: if it fails to
+					 * probe the rails stay off, which is
+					 * the safer failure.
+					 */
+					vdd-supply = <&m_ldo25_reg>;
+					avdd-supply = <&m_ldo4_reg>;
 				};
 			};
 		};
