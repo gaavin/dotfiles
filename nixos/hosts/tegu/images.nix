@@ -109,28 +109,51 @@ stdenvNoCC.mkDerivation {
 
     cat > flash.sh <<SH
     #!/bin/sh
-    # Usage: flash.sh [--rootfs]   (phone in fastboot mode, bootloader unlocked)
+    # Usage: flash.sh [--rootfs] [--reboot]   (phone in fastboot, unlocked)
+    #
+    # Does not reboot unless you ask it to.
+    #
+    # Set FASTBOOT_SERIAL whenever more than one Android device is attached.
+    # fastboot with no serial silently picks one, and this port has already
+    # aimed a flash at a second Google phone that happened to be plugged in.
     set -eu
     d=\$(dirname "\$(readlink -f "\$0")")
     fb=${android-tools}/bin/fastboot
-    \$fb flash boot "\$d/boot.img"
-    \$fb flash init_boot "\$d/init_boot.img"
-    \$fb flash vendor_boot "\$d/vendor_boot.img"
-    \$fb flash vendor_kernel_boot "\$d/vendor_kernel_boot.img"
-    \$fb flash dtbo "\$d/dtbo.img"
+    rootfs=0
+    reboot=0
+    for a in "\$@"; do
+      case "\$a" in
+        --rootfs) rootfs=1 ;;
+        --reboot) reboot=1 ;;
+        *) echo "flash.sh: unknown argument \$a" >&2; exit 1 ;;
+      esac
+    done
+    if [ -n "\''${FASTBOOT_SERIAL:-}" ]; then
+      set -- -s "\$FASTBOOT_SERIAL"
+    else
+      set --
+    fi
+    \$fb "\$@" flash boot "\$d/boot.img"
+    \$fb "\$@" flash init_boot "\$d/init_boot.img"
+    \$fb "\$@" flash vendor_boot "\$d/vendor_boot.img"
+    \$fb "\$@" flash vendor_kernel_boot "\$d/vendor_kernel_boot.img"
+    \$fb "\$@" flash dtbo "\$d/dtbo.img"
     # Non-fatal: fastboot rejects this image with "Failed to find AVB_MAGIC at
     # offset: 0" when patching the flags, and under set -e that aborted the
     # script before the rootfs was written -- leaving a phone whose boot.img
     # named a closure the rootfs did not have. Verification is already off on
     # an unlocked device that has been booting unsigned kernels all along.
-    \$fb flash vbmeta "\$d/vbmeta.img" --disable-verity --disable-verification || \
+    \$fb "\$@" flash vbmeta "\$d/vbmeta.img" --disable-verity --disable-verification || \
       echo "flash.sh: vbmeta rejected, continuing (verification already disabled)"
-    if [ "\''${1:-}" = "--rootfs" ]; then
-      \$fb flash userdata "\$d/rootfs.img"
+    if [ "\$rootfs" = 1 ]; then
+      \$fb "\$@" flash userdata "\$d/rootfs.img"
     fi
-    \$fb reboot
+    if [ "\$reboot" = 1 ]; then
+      \$fb "\$@" reboot
+    else
+      echo "flash.sh: flashed, not rebooting (pass --reboot if you want that)"
+    fi
     SH
-    sed -i 's/^    //' flash.sh
     chmod +x flash.sh
 
     cat > cmdline.txt <<EOT

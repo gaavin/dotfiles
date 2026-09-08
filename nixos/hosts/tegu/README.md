@@ -50,9 +50,10 @@ sources, then tested by booting it.
 | Storage | **Yes.** UFS at gear 4, 2 lanes; boots from an 11 GB ext4 root |
 | Graphical session | **Yes.** Plasma Mobile, on the bootloader's framebuffer |
 | Watchdog | **Yes.** BL2 arms a 60 s cluster watchdog; Linux now owns it |
-| Touch SPI bus | **Yes.** Loopback echoes at 9.98 MHz. The part itself is unpowered |
+| Touch SPI bus | **Yes.** Loopback echoes at 9.98 MHz |
 | ACPM | **Yes.** Mailbox, SRAM and protocol confirmed; the route to the PMIC |
-| Touch input | No — needs the S2MPG14 rails, pinctrl, and a TouchComm driver |
+| S2MPG14 rails | **Yes.** `LDO4M` and `LDO25M` enabled over ACPM; the touch part is powered and its ATTN line answers |
+| Touch input | Not yet — the bus, the rails and the part are all proven; what is left is TouchComm framing and report decoding |
 | USB, WLAN, modem, GPU, audio, camera | No |
 
 ## The panel console
@@ -210,6 +211,24 @@ Things that are not documented anywhere and cost real time to discover:
     `gs101-acpm-clk` device answered it in one boot. Check the driver model,
     not the log.
 
+15. **A pull-up that reads 0 means no power, not an assertion.** `gpn0-0`,
+    the touch IRQ, read 0 through a pull-up that read back as enabled, for
+    the whole of this port. An idle input with a pull-up reads 1; an
+    unpowered part clamps the line low through its ESD diodes. Once the rails
+    came up the same line idled 1 and asserted 0 after a reset pulse. That
+    single bit was the difference between "the driver is wrong" and "the part
+    is not switched on".
+
+16. **`find` lies in a sparse checkout.** `soc-gs` is cloned sparse and
+    blobless, so files that exist in the repository are absent from the
+    working tree. An empty `find` was read here as "no source describes
+    S2MPG14" and used to justify reverse-engineering a register map;
+    `git ls-tree -r HEAD --name-only` listed `s2mpg14-register.h` and three
+    more files that had been there all along. It mattered: mainline's S2MPG10
+    map puts `LDO4M` at `0x43`, which on S2MPG14 is `LDO25M`, so the guess
+    would have powered the wrong rail from the wrong voltage group and looked
+    like partial success.
+
 ## Layout
 
 | File | Purpose |
@@ -223,6 +242,10 @@ Things that are not documented anywhere and cost real time to discover:
 | `kernel/clk-zumapro-hsi0.c` | CMU_HSI0 USI2 divider — the touch SPI's real clock (see fact 10) |
 | `kernel/zumapro-ufs-host.py` | Tensor G4 host-controller corrections: PCS `0x202` (the 38.4 MHz reference), PCS RX `0x2f`, and the four quirks the stock tree drops |
 | `kernel/zumapro-pmic-dump.c` | Read-only dump of the S2MPG14 register map over ACPM. Never writes; see the file for why that matters |
+| `kernel/zumapro-s2mpg14-regulator.c` | The two touch rails as regulators, over ACPM directly. Not `sec-acpm.c`: that knows S2MPG10's map, where `0x43` is a different LDO |
+| `kernel/zumapro-touch.c` | Synaptics TouchComm v1 over SPI. Owns the rails, drives reset, logs raw reports |
+| `notes/s2mpg14-dump.txt` | The live PMIC dump, and how the vendor map was matched against it |
+| `notes/HANDOVER.md`, `notes/HANDOVER-PROMPT.md` | Briefing for picking this up cold, and the prompt to hand a new session |
 | `kernel/add-zumapro-wdt.py` | `google,zumapro-wdt`, with no PMU quirks — zumapro's PMU offsets are unverified and gs101's differ |
 | `touch-probe.sh` | Boot-time register dump for the touch stack, via `devmem` (never `dd`: arm64 restricts `/dev/mem` `read()` to real memory) |
 | `tegu-cmd.sh`, `../../tools/tegu-cmd` | Run a shell command passed on the kernel command line. The write half of the debug loop on a phone with a receive-only UART |
@@ -259,8 +282,17 @@ The device tree must be flashed; `fastboot boot` alone uses the phone's own.
 
 ```sh
 nix build .#tegu-images
-result/flash.sh                   # boot, init_boot, vendor_boot, dtbo, vbmeta
+FASTBOOT_SERIAL=59201JEBF29944 result/flash.sh --rootfs
 ```
+
+`flash.sh` **does not reboot** unless you pass `--reboot`. Set
+`FASTBOOT_SERIAL` whenever more than one Android device is attached: fastboot
+with no serial picks one for you, and this port has already aimed a flash at
+a second Google phone that happened to be plugged in.
+
+Pass `--rootfs` whenever the closure changes. `boot.img` names the closure it
+expects, so a boot image flashed without its matching rootfs drops the phone
+into an emergency shell.
 
 ### The bring-up loop actually used
 
@@ -327,12 +359,11 @@ which polls a register this SoC does not have.
   when `init_count` is non-zero, so the re-bound driver was skipping
   calibration silently. Silence was read as success.
 
-## Touch: the SPI bus works, the part is unpowered
+## Touch: the bus is proven and the part is alive
 
-The controller is finished and proven. In internal loopback it echoes
-`a5 5a 0f f0` byte for byte at 9.98 MHz, so the clock, the datapath and the
-FIFOs are all good. A normal transfer completes and returns `00 00 00 00` —
-the bus drives, and the part says nothing.
+The controller is finished. In internal loopback it echoes `a5 5a 0f f0` byte
+for byte at 9.98 MHz, so the clock, the datapath and the FIFOs are all good.
+Do not re-investigate this.
 
 **The bug was the wrong CMU.** `spi@111d0000` is clocked by CMU_HSI0's USI2,
 not CMU_PERIC1's USI11. The stock DTB settles it: the node's `clocks` resolve
@@ -356,15 +387,40 @@ means), the USI's `CLKSTOP_ON` (already clear), the PERIC1 gates, `CS_REG`'s
 blocks that plainly work), and clock gating generally. Every finding that
 survived came from a dump; no hypothesis did.
 
-**Why the part is silent.** Its rails are S2MPG14 `LDO25M` (DVDD 1.8 V) and
-`LDO4M` (AVDD 3.3 V), and nothing enables them — Google's driver turns them on
-itself with a 200 ms settle, so nothing before Linux has reason to. It also
-explains the one measurement that fitted nothing else: the active-low IRQ on
-`gpn0-0` reads 0 even with a pull-up enabled and reading back `0x3`. An idle
-input with a pull-up reads 1; an unpowered part clamps it low through its ESD
-diodes.
+**The part was silent because it was unpowered.** Its rails are S2MPG14
+`LDO4M` (AVDD 3.3 V, reg `0x2E`) and `LDO25M` (DVDD 1.8 V, reg `0x43`),
+enable at `BIT(7)`. Nothing turns them on before Linux — Google's driver does
+it itself with a 200 ms settle. A live read had both correctly programmed and
+switched off: `0x2E = 0x3c` decodes to 3,300,000 µV and `0x43 = 0x2c` to
+1,800,000 µV, matching Google's board file exactly.
 
-## ACPM works, and the PMIC map does not exist here
+`kernel/zumapro-s2mpg14-regulator.c` enables them over ACPM, and it works.
+The proof is not the SPI but the IRQ line:
+
+    zumapro-touch: rails up: vdd 1800000 uV, avdd 3300000 uV
+    zumapro-touch: gpn0 DAT = 0x00000001        <- idles HIGH
+    zumapro-touch: irq sample 0..9: DAT = 0     <- LOW after a reset pulse
+
+`gpn0-0` had read 0 on every boot of this port, even with a pull-up enabled
+and reading back `0x3` — which is not an assertion but an unpowered part
+clamping the line through its ESD diodes. It now idles high and asserts low
+after reset, which is a live TouchComm part saying "message waiting". The
+whole chain is proven: CMU_HSI0 clock, SPI controller, ACPM, PMIC rails,
+reset.
+
+What remains is protocol, in `kernel/zumapro-touch.c`. Two framing bugs are
+fixed — `spi_read()` transmits zeroes and TouchComm reads a MOSI byte as a
+command byte, so reads now drive MOSI high as Google's does; and an idle bus
+reads all `0xff`, so a header of `ff ff ff ff` was being taken as a
+65535-byte message rather than as nothing. The last unverified change waits
+for a response the way the vendor core does — 10 ms polls up to 3 s — instead
+of reading once, 20 ms after the command, and calling the part silent.
+
+Coordinate decoding is deliberately unwritten: TouchComm's touch report is a
+bitfield sequence described by a report-config the part supplies at runtime,
+so the driver logs raw reports and the layout gets read off real data.
+
+## ACPM works, and the PMIC map was in the vendor tree all along
 
 ACPM is up on Tensor G4 with mainline's gs101 driver unchanged:
 
@@ -374,9 +430,9 @@ ACPM is up on Tensor G4 with mainline's gs101 driver unchanged:
     devices_deferred              (empty)
 
 That confirms the mailbox at `0x15110000`, IRQ 80, the SRAM at `0x15700000`
-and the `0xa000` initdata offset. Note the protocol needed no zumapro
-variant: mainline's `ACPM_GS101_INITDATA_BASE` is `0xa000` and zumapro's own
-device tree declares `initdata-base = <0xa000>`.
+and the `0xa000` initdata offset. The protocol needed no zumapro variant:
+mainline's `ACPM_GS101_INITDATA_BASE` is `0xa000` and zumapro's own device
+tree declares `initdata-base = <0xa000>`.
 
 It had to be confirmed from the driver model, not the log. **Every message in
 `exynos-acpm.c` is an error path, so a successful probe prints nothing** — a
@@ -384,48 +440,49 @@ silent boot is equally consistent with "worked" and "never bound".
 `gs101-acpm-clk` is the real signal, since the driver only creates it after a
 successful probe.
 
-**The next step is blocked on a register map, not on code.** This phone has
-S2MPG14/15; mainline's `sec-acpm.c` knows S2MPG10/11, and no source available
-to this port describes S2MPG14 — `google-modules/soc/gs` names it once, in
-`exynos-pm.c`, with no table.
+**This README previously said no source available here described S2MPG14.
+That was wrong**, and it is worth recording why. `soc-gs` is a *sparse,
+blobless* checkout: `find` shows an empty tree while the repository holds the
+files. `git ls-tree -r HEAD --name-only` turns up `s2mpg14-register.h`,
+`s2mpg14-regulator.c`, `s2mpg14-core.c` and `rtc-s2mpg14.c`, and they had
+been there the whole time. Look for the vendor's own source, and look
+properly, before reverse-engineering anything on this SoC.
 
-Borrowing the driver by declaring `samsung,s2mpg10-pmic` is **not** a harmless
-experiment: `sec_pmic_probe()` installs a regmap-irq chip, and regmap-irq
-*writes* the interrupt mask registers at probe. On a part whose map differs
-those writes land at S2MPG10's offsets inside a live PMIC that controls every
-rail on the board, including the ones the phone boots from. Hence
-`kernel/zumapro-pmic-dump.c`: it references only `bulk_read`, dumps 64
-registers of each access type on both speedy channels, and never writes.
+Reading the map mattered more than it looks. Mainline's S2MPG10 layout puts
+`LDO4M` at `0x43`; on S2MPG14 that address is **`LDO25M`**. Enabling "AVDD"
+by analogy would have switched on DVDD at a voltage taken from the wrong
+group — and it would have looked like partial success. That is also why
+`kernel/zumapro-pmic-dump.c` exists and only ever calls `bulk_read`:
+borrowing `sec-acpm.c` by declaring `samsung,s2mpg10-pmic` is not a harmless
+experiment, because `sec_pmic_probe()` installs a regmap-irq chip and
+regmap-irq *writes* the mask registers at probe, inside a live PMIC that owns
+every rail on the board.
+
+The driver here is deliberately not `sec-acpm.c`: it talks to ACPM directly,
+so it needs no interrupt (there is no pinctrl driver to supply one) and it
+cannot write an S2MPG10 offset by accident.
 
 ## Next steps, in order
 
-1. **Read S2MPG14's register map** with `zumapro-pmic-dump.c`, compare against
-   mainline's S2MPG10 tables, and confirm whether channel 2 / speedy 0 are
-   right for this part. Only then write regulator descriptors and enable
-   `LDO25M`/`LDO4M`.
-2. **A zumapro pinctrl driver.** It blocks two things at once: `sec-acpm`
-   requires an interrupt (`platform_get_irq` is mandatory in its probe) and
-   gs101 supplies it from a GPIO, and touch needs `irq-gpio = <&gpn0 0>` and
-   `reset-gpio = <&gpp1 1>` — currently poked with `devmem` from a shell
-   script, which no driver can rely on. Mainline has the Samsung pinctrl
-   driver and gs101 bank tables; zumapro needs its own. The stock DTS gives
-   the bank lists and their GIC interrupts, and hardware confirms the 0x20
-   bank stride; per-bank pin counts are the missing piece.
-3. **A `synaptics,tcm-spi` driver.** Absent from mainline in any form — only
-   RMI4, a different protocol.
-
-2. **USB.** `usb@11210000`, PHY `@11100000`. Establish the power state from
-   userspace first (item 5 above). A gadget serial console ends the
-   photograph-the-screen workflow; `USB_G_SERIAL` and `U_SERIAL_CONSOLE` are
-   already enabled in the config.
-3. **Clocks and power domains, properly.** `clk-zumapro-hsi2.c` covers one
-   block and does not model the CMU_TOP mux/divider tree at all. A real
-   driver, starting from `drivers/clk/samsung/clk-gs101.c`, is still needed
-   for the GPU, touch and USB. Note this is **not** what blocks storage —
-   that belief was wrong, see fact 8.
-4. **Touch.** Synaptics TouchCom over SPI (`spi@111d0000`, IRQ `gpn0-0`, reset
-   `gpp1-1`). No mainline driver exists; Google's is a large out-of-tree module.
-   Needs pinctrl and USI/SPI clocks first.
+1. **Finish touch.** Get a clean `IDENTIFY -> code 0x10`, then decode
+   TouchComm reports into input events from the raw reports the driver logs.
+   Google's decoder is `synaptics_touchcom_func_touch.c` in the vendor tree.
+2. **A zumapro pinctrl driver.** It removes three problems at once: touch
+   reset is currently written straight into peric0's GPIO block from the
+   driver, the touch IRQ is polled at 16 ms instead of taken from `gpn0-0`,
+   and `sec-acpm` cannot probe at all without an interrupt. Mainline has the
+   Samsung pinctrl driver and gs101 bank tables; zumapro needs its own. The
+   stock DTS gives the bank lists and their GIC interrupts, and hardware
+   confirms the 0x20 bank stride; per-bank pin counts are the missing piece.
+3. **USB.** `usb@11210000`, PHY `@11100000`. A gadget serial console would end
+   the reflash-per-question loop that costs this port most of its time;
+   `USB_G_SERIAL` and `U_SERIAL_CONSOLE` are already enabled.
+4. **Clocks and power domains, properly.** `clk-zumapro-hsi0.c` and
+   `clk-zumapro-hsi2.c` each cover one block and do not model the CMU_TOP
+   mux/divider tree at all. A real driver, starting from
+   `drivers/clk/samsung/clk-gs101.c`, is still needed for the GPU and USB.
+   Note this is **not** what blocked storage — that belief was wrong, see
+   fact 8.
 5. **Display proper.** DPU/DSIM plus the `google,gs-tg4a/b/c` panel driver, to
    replace the borrowed bootloader framebuffer.
 
