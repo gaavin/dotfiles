@@ -3,35 +3,45 @@
  * Synaptics TouchComm v1 over SPI for the Pixel 9a (tegu).
  *
  * Mainline has no TouchComm driver in any form -- only RMI4, a different
- * protocol -- and Google's is a large out-of-tree module. This is a minimal
- * one written against their protocol sources
- * (google-modules/touch/synaptics_touch, branch android-gs-tegu-6.1-android16,
- * syna_c10/tcm/synaptics_touchcom_core_v1.c):
+ * protocol -- and Google's is a large out-of-tree module. This is written
+ * against their protocol sources (google-modules/touch/synaptics_touch,
+ * branch android-gs-tegu-6.1-android16):
  *
  *   command  [ cmd, len_lo, len_hi, payload... ]
- *   response [ 0xa5, code, len_lo, len_hi ] followed by len payload bytes
+ *   message  [ 0xa5, code, len_lo, len_hi ] followed by len payload bytes
  *
- * 0xa5 is TCM_V1_MESSAGE_MARKER and 0x5a is TCM_V1_MESSAGE_PADDING.
+ * 0xa5 is TCM_V1_MESSAGE_MARKER. The part on this board identifies itself as
+ * a Synaptics S3908 running application firmware:
  *
- * WHAT THIS DOES AND DOES NOT DO
+ *   a5 10 18 00 01 01 53 33 39 30 38 47 41 31 42 30 ...
+ *   |  |  |____| |  |  |____________________________
+ *   |  |  len 24 |  mode 1 = application firmware   part number "S3908GA1B0"
+ *   |  REPORT_IDENTIFY                              (ASCII)
+ *   marker
  *
- * It powers the part, resets it, identifies it, asks for touch reports and
- * logs what arrives. It does not yet decode touch coordinates. TouchComm's
- * touch report is a configurable bitfield sequence described by a
- * report-config the part supplies at runtime, and writing that decoder blind
- * -- before this port has ever seen the device answer -- would be inventing a
- * format rather than reading one. The reports are dumped instead so the
- * layout can be read off real data, which is how every other part of this
- * port was settled.
+ * WHAT MADE IT TALK
+ *
+ * Chip select. Mainline hardcodes S3C64XX_SPI_QUIRK_CS_AUTO for
+ * google,gs101-spi, so nSS is timed by the hardware and no device can ask
+ * for anything else; Google's own spi-s3c64xx reads
+ * samsung,spi-chip-select-mode per slave, and tegu's touch node sets 0,
+ * which is MANUAL_CS_MODE. Under hardware-timed chip select this part
+ * answered with one byte and then a line rising to its pull-up, which looks
+ * convincingly like a device that has stopped talking. kernel/spi-manual-cs.py
+ * drops the quirk; do not put it back.
+ *
+ * A whole message arrives in a single chip-select assertion, so this reads
+ * header and payload in one transfer rather than doing the vendor's chunked
+ * continued-read dance -- that exists for parts with a small max_read_size,
+ * and re-reading here would restart the message instead of continuing it.
  *
  * TWO THINGS ARE MISSING FROM THE SOC AND ARE WORKED AROUND HERE
  *
  * There is no pinctrl driver for zumapro, so neither the reset line
  * (gpp1-1, peric0) nor the interrupt (gpn0-0, alive) can be requested
- * properly. Reset is therefore driven by writing the GPIO block directly,
- * exactly as kernel/zumapro-ufs-restore.c already does for the UFS pins, and
- * the driver polls instead of taking the ATTN interrupt. Both are shims that
- * a real pinctrl driver should delete.
+ * properly. Reset is driven by writing the GPIO block directly, and the
+ * driver polls the ATTN level instead of taking its interrupt. Both are
+ * shims a real pinctrl driver should delete.
  */
 
 #include <linux/delay.h>
@@ -46,20 +56,48 @@
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
 #include <linux/workqueue.h>
+#include <linux/unaligned.h>
 
 #define TCM_MARKER		0xa5
 #define TCM_HEADER_SIZE		4
+
+#define STATUS_IDLE		0x00
+#define STATUS_OK		0x01
 
 #define CMD_IDENTIFY		0x02
 #define CMD_RESET		0x04
 #define CMD_ENABLE_REPORT	0x05
 #define CMD_TCM2_ACK		0x07	/* Google's detect magic; a no-op on v1 */
-
-#define STATUS_IDLE		0x00
-#define STATUS_OK		0x01
+#define CMD_GET_APPLICATION_INFO 0x20
+#define CMD_GET_TOUCH_REPORT_CONFIG 0x25
 
 #define REPORT_IDENTIFY		0x10
 #define REPORT_TOUCH		0x11
+
+/*
+ * Touch report configuration opcodes, from synaptics_touchcom_func_touch.h.
+ * The config is a byte stream: control codes on their own, entity codes
+ * followed by a bit width. Walking it against the report bitstream is the
+ * whole decoder -- the layout is the part's to define, not ours to assume.
+ */
+#define TR_END			0x00
+#define TR_FOREACH_ACTIVE	0x01
+#define TR_FOREACH_ALL		0x02
+#define TR_FOREACH_END		0x03
+#define TR_PAD_TO_BYTE		0x04
+#define TR_TIMESTAMP		0x05
+#define TR_OBJ_INDEX		0x06
+#define TR_OBJ_CLASS		0x07
+#define TR_OBJ_X		0x08
+#define TR_OBJ_Y		0x09
+#define TR_OBJ_Z		0x0a
+#define TR_OBJ_X_WIDTH		0x0b
+#define TR_OBJ_Y_WIDTH		0x0c
+#define TR_NUM_ACTIVE		0x18
+
+/* Object classification: synaptics_touchcom_func_touch.h. */
+#define OBJ_LIFT		0
+#define OBJ_FINGER		1
 
 /* From Google's board file: reset-active-ms, reset-delay-ms, power-delay-ms */
 #define TOUCH_RESET_ACTIVE_MS	2
@@ -69,29 +107,32 @@
 #define TOUCH_POLL_MS		16
 
 /*
- * Google polls for a command response every CMD_RESPONSE_POLLING_DELAY_MS up
- * to CMD_RESPONSE_TIMEOUT_MS, and retries a header whose marker is wrong with
- * a 5-10 ms sleep between tries (synaptics_touchcom_core_v1.c). A single read
- * 20 ms after the command -- which is what this driver did first -- is simply
- * too early, and reported the part as silent when it was not.
+ * How long to wait for the part after reset. Google's reset-delay-ms of 50 is
+ * not enough on its own: measured here, reads return 0x00 -- the part driving
+ * MISO low while it boots -- for well past that. Rather than pick a bigger
+ * magic number, poll until it produces a real marker.
  */
+#define TOUCH_BOOT_TRIES	100
+#define TOUCH_BOOT_POLL_MS	10
+
+/* Command responses: the vendor polls every 10 ms up to 3 s. */
 #define TOUCH_RESP_POLL_MS	10
 #define TOUCH_RESP_TRIES	100
 
+/* One message read in one chip select: header plus the largest payload. */
+#define TCM_MSG_MAX		512
+#define TCM_CONFIG_MAX		128
+#define TCM_MAX_OBJECTS		10
+
 /*
- * The ATTN line, gpn0-0, active low. No pinctrl driver, so it is read
- * directly like the reset pad.
+ * The ATTN line, gpn0-0, active low, read directly for want of a pinctrl
+ * driver. Bank layout from Google's own table (soc-gs,
+ * drivers/pinctrl/gs/pinctrl-gs.c, zumapro_pin_custom[]): 0x15060000 is
+ * GPIO_CUSTOM_ALIVE holding gpn0..gpn9, one pin each, 0x20 apart, gpn0 first.
  *
- * The bank layout is from Google's own table (soc-gs,
- * drivers/pinctrl/gs/pinctrl-gs.c, zuma_pin_custom[]): 0x15060000 is
- * GPIO_CUSTOM_ALIVE, holding gpn0..gpn9, one pin each, 0x20 apart, gpn0
- * first. So CON is +0x00 and DAT +0x04, and gpn0's only pin is bit 0.
- *
- * This line has read 0 in every measurement in this port, including with a
- * pull-up enabled and read back as enabled -- and gpn3, in the same block,
- * reads 1, so the block and the reads are good. 0 is ambiguous: it is what
- * an asserted ATTN looks like, and also what an unpowered part clamping
- * through its ESD diodes looks like. It is logged, not trusted.
+ * This read 0 for the whole port until the part started answering, which was
+ * not a pull-up failure but an undrained message holding ATTN asserted
+ * forever. It idles high now.
  */
 #define ALIVE_BASE		0x15060000
 #define ALIVE_SIZE		0x10
@@ -110,20 +151,7 @@
 #define GPP1_DAT		0x24
 #define GPP1_RESET_PIN		1
 
-/*
- * The SPI controller's own registers, mapped read-only except for FB_CLK.
- *
- * FB_CLK_SEL is the feedback clock delay: the controller samples MISO on a
- * clock fed back through the pad, and this picks which of four taps. Mainline
- * writes it once at setup from samsung,spi-feedback-delay, which defaults to
- * 0. At 10 MHz through a real pad and cable the round trip matters, and the
- * symptom of getting it wrong is exactly what this port sees -- the first
- * byte after chip select is clean and later ones are not.
- *
- * Writing it between transfers is a diagnostic, not a design. If one setting
- * reads a clean message, the fix is a controller-data node in the DT and this
- * whole block comes out.
- */
+/* The SPI controller's own registers, mapped read-only for diagnostics. */
 #define SPI_BASE		0x111d0000
 #define SPI_SIZE		0x30
 #define SPI_CH_CFG		0x00
@@ -141,12 +169,21 @@ struct zumapro_touch {
 	void __iomem *peric0;
 	void __iomem *alive;
 	void __iomem *spiregs;
+
 	u8 hdr[TCM_HEADER_SIZE];	/* last header read, for diagnostics */
 	unsigned int rxlen;		/* bytes the last sysfs read returned */
 	u32 speed_hz;			/* 0 = the device's own maximum */
 	bool polling;
-	u8 rxbuf[512];
-	u8 txfill[512];		/* all 0xff; see zumapro_touch_spi_read() */
+
+	/* What the part told us about itself. */
+	u8 config[TCM_CONFIG_MAX];
+	unsigned int config_len;
+	unsigned int max_objects;
+	unsigned int max_x;
+	unsigned int max_y;
+
+	u8 rxbuf[TCM_MSG_MAX];
+	u8 txfill[TCM_MSG_MAX];		/* all 0xff; see zumapro_touch_spi_read() */
 };
 
 static void zumapro_touch_reset(struct zumapro_touch *ts)
@@ -190,11 +227,8 @@ static int zumapro_touch_cmd(struct zumapro_touch *ts, u8 cmd,
  *
  * This is not spi_read(). spi_read() sends zeroes, and on TouchComm a byte on
  * MOSI is a command byte -- so reading with it feeds the device a stream of
- * 0x00 and walks the message framing off its boundaries. The first log from
- * this driver showed exactly that: 0xa5 markers and a 0x10 REPORT_IDENTIFY
- * appearing *inside* what had been read as payload. Google's platform layer
- * fills its TX buffer with 0xff for every read (syna_tcm2_platform_spi.c),
- * and so does this.
+ * 0x00 and walks the message framing off its boundaries. Google's platform
+ * layer fills its TX buffer with 0xff for every read, and so does this.
  */
 static int zumapro_touch_spi_read(struct zumapro_touch *ts, u8 *buf, size_t len)
 {
@@ -215,38 +249,37 @@ static int zumapro_touch_spi_read(struct zumapro_touch *ts, u8 *buf, size_t len)
 }
 
 /*
- * Read one message. Returns the payload length, or negative.
+ * Read one whole message. Returns the payload length, with the payload at
+ * ts->rxbuf, or negative.
  *
- * An idle TouchComm bus reads as all 0xff, so a header of ff ff ff ff is
- * "nothing to say" rather than a message of 65535 bytes -- taking that length
- * at face value is what produced 512-byte dumps of filler. Both that and a
- * missing marker are reported as -ENOMSG, which the poll loop ignores
- * silently; anything else would flood a receive-only UART every 16 ms.
+ * Header and payload come back in a single chip-select assertion, so this
+ * reads a generous fixed block once rather than reading the header and then
+ * going back for the body: a second transfer is a second chip select, and the
+ * part restarts its message on each one.
  */
 static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 {
-	u8 *hdr = ts->hdr;
+	u8 buf[TCM_HEADER_SIZE + TCM_MSG_MAX];
 	int ret, len;
 
-	ret = zumapro_touch_spi_read(ts, hdr, TCM_HEADER_SIZE);
+	ret = zumapro_touch_spi_read(ts, buf, sizeof(buf));
 	if (ret)
 		return ret;
 
-	if (hdr[0] != TCM_MARKER)
+	memcpy(ts->hdr, buf, TCM_HEADER_SIZE);
+
+	if (buf[0] != TCM_MARKER)
 		return -ENOMSG;
 
-	*code = hdr[1];
-	len = hdr[2] | (hdr[3] << 8);
+	*code = buf[1];
+	len = buf[2] | (buf[3] << 8);
 
 	/* Filler, or a length this driver has no buffer for: resynchronise. */
-	if (len > sizeof(ts->rxbuf))
+	if (len > TCM_MSG_MAX)
 		return -ENOMSG;
 
-	if (len) {
-		ret = zumapro_touch_spi_read(ts, ts->rxbuf, len);
-		if (ret)
-			return ret;
-	}
+	if (len)
+		memcpy(ts->rxbuf, buf + TCM_HEADER_SIZE, len);
 
 	return len;
 }
@@ -255,6 +288,15 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 static u32 zumapro_touch_attn_dat(struct zumapro_touch *ts)
 {
 	return ts->alive ? readl(ts->alive + GPN0_DAT) : ~0u;
+}
+
+/* True when the part has a message waiting. Assume yes if unmapped. */
+static bool zumapro_touch_attn(struct zumapro_touch *ts)
+{
+	if (!ts->alive)
+		return true;
+
+	return !(zumapro_touch_attn_dat(ts) & BIT(GPN0_ATTN_PIN));
 }
 
 /*
@@ -270,23 +312,197 @@ static int zumapro_touch_read_wait(struct zumapro_touch *ts, u8 *code)
 		if (ret != -ENOMSG)
 			return ret;
 
-		/*
-		 * Show the bytes, not just -ENOMSG. All 0x00 is MISO held low,
-		 * which is what an unpowered part does; all 0xff is an idle
-		 * bus and a part that is powered but not answering. That
-		 * distinction decides where to look next, and the previous
-		 * version of this loop threw it away.
-		 */
-		if (i < 3 || i == TOUCH_RESP_TRIES - 1)
-			dev_err(&ts->spi->dev,
-				"try %d: hdr %*ph, gpn0 0x%08x\n", i,
-				TCM_HEADER_SIZE, ts->hdr,
-				zumapro_touch_attn_dat(ts));
-
 		msleep(TOUCH_RESP_POLL_MS);
 	}
 
 	return -ETIMEDOUT;
+}
+
+/*
+ * Send a command and collect its response. Reports the part volunteers while
+ * we wait are logged and skipped -- an identify report turns up after every
+ * reset and is not an answer to whatever was just asked.
+ */
+static int zumapro_touch_request(struct zumapro_touch *ts, u8 cmd,
+				 const u8 *payload, u16 plen)
+{
+	struct device *dev = &ts->spi->dev;
+	u8 code = 0;
+	int ret, i;
+
+	ret = zumapro_touch_cmd(ts, cmd, payload, plen);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < TOUCH_RESP_TRIES; i++) {
+		ret = zumapro_touch_read(ts, &code);
+		if (ret >= 0) {
+			if (code == STATUS_OK)
+				return ret;
+
+			if (code != STATUS_IDLE)
+				dev_dbg(dev, "cmd 0x%02x: skipping report 0x%02x\n",
+					cmd, code);
+		}
+
+		msleep(TOUCH_RESP_POLL_MS);
+	}
+
+	dev_err(dev, "cmd 0x%02x: no response (last code 0x%02x)\n", cmd, code);
+	return -ETIMEDOUT;
+}
+
+/*
+ * Extract a big-endian-by-byte, LSB-first-within-byte field, exactly as
+ * syna_tcm_get_touch_data() does. Getting this wrong silently yields
+ * plausible-looking coordinates, so it follows the vendor bit for bit.
+ */
+static u32 zumapro_touch_bits(const u8 *buf, size_t len, unsigned int offset,
+			      unsigned int bits)
+{
+	unsigned int remaining = bits;
+	unsigned int bit_off = offset % 8;
+	unsigned int byte_off = offset / 8;
+	u32 out = 0;
+
+	if (!bits || bits > 32 || offset + bits > len * 8)
+		return 0;
+
+	while (remaining) {
+		unsigned int avail = 8 - bit_off;
+		unsigned int take = min(avail, remaining);
+		u8 b = buf[byte_off] >> bit_off;
+
+		b &= 0xff >> (8 - take);
+		out |= (u32)b << (bits - remaining);
+
+		bit_off = 0;
+		byte_off++;
+		remaining -= take;
+	}
+
+	return out;
+}
+
+struct zumapro_touch_obj {
+	u8 status;
+	u32 x, y, z;
+};
+
+/*
+ * Walk the report config against the report and emit multitouch events.
+ * Mirrors syna_tcm_parse_touch_report()'s control flow.
+ */
+static void zumapro_touch_report(struct zumapro_touch *ts, const u8 *report,
+				 unsigned int report_len)
+{
+	struct zumapro_touch_obj objs[TCM_MAX_OBJECTS] = { };
+	unsigned int active_objects = 0, objects = 0;
+	unsigned int idx = 0, offset = 0, obj = 0, next = 0;
+	unsigned int end_of_foreach = 0;
+	bool have_active_count = false;
+	bool active_only = false;
+	unsigned int i, reported = 0;
+
+	while (idx < ts->config_len) {
+		u8 code = ts->config[idx++];
+		unsigned int bits;
+		u32 data;
+
+		if (code == TR_END)
+			break;
+
+		switch (code) {
+		case TR_FOREACH_ACTIVE:
+			obj = 0;
+			next = idx;
+			active_only = true;
+			continue;
+		case TR_FOREACH_ALL:
+			obj = 0;
+			next = idx;
+			active_only = false;
+			continue;
+		case TR_FOREACH_END:
+			end_of_foreach = idx;
+			if (active_only) {
+				if (have_active_count) {
+					objects++;
+					obj++;
+					if (objects < active_objects)
+						idx = next;
+				} else if (offset < report_len * 8) {
+					obj++;
+					idx = next;
+				}
+			} else {
+				obj++;
+				if (obj < ts->max_objects)
+					idx = next;
+			}
+			continue;
+		case TR_PAD_TO_BYTE:
+			offset = ALIGN(offset, 8);
+			continue;
+		}
+
+		/* Everything else is an entity: one byte of width follows. */
+		if (idx >= ts->config_len)
+			break;
+
+		bits = ts->config[idx++];
+		data = zumapro_touch_bits(report, report_len, offset, bits);
+		offset += bits;
+
+		if (obj >= TCM_MAX_OBJECTS)
+			continue;
+
+		switch (code) {
+		case TR_OBJ_INDEX:
+			obj = data;
+			break;
+		case TR_OBJ_CLASS:
+			objs[obj].status = data;
+			break;
+		case TR_OBJ_X:
+			objs[obj].x = data;
+			break;
+		case TR_OBJ_Y:
+			objs[obj].y = data;
+			break;
+		case TR_OBJ_Z:
+			objs[obj].z = data;
+			break;
+		case TR_NUM_ACTIVE:
+			active_objects = data;
+			have_active_count = true;
+			if (!active_objects && end_of_foreach)
+				idx = end_of_foreach;
+			break;
+		default:
+			break;
+		}
+	}
+
+	for (i = 0; i < ts->max_objects && i < TCM_MAX_OBJECTS; i++) {
+		bool down = objs[i].status != OBJ_LIFT;
+
+		input_mt_slot(ts->input, i);
+		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, down);
+		if (!down)
+			continue;
+
+		reported++;
+		input_report_abs(ts->input, ABS_MT_POSITION_X, objs[i].x);
+		input_report_abs(ts->input, ABS_MT_POSITION_Y, objs[i].y);
+		if (objs[i].z)
+			input_report_abs(ts->input, ABS_MT_PRESSURE, objs[i].z);
+	}
+
+	input_mt_sync_frame(ts->input);
+	input_sync(ts->input);
+
+	dev_dbg(&ts->spi->dev, "touch: %u object(s) down\n", reported);
 }
 
 /*
@@ -557,18 +773,24 @@ static void zumapro_touch_poll(struct work_struct *work)
 	if (!ts->polling)
 		return;
 
-	len = zumapro_touch_read(ts, &code);
-	if (len >= 0) {
-		/*
-		 * KERN_ERR: the only output from this phone is a receive-only
-		 * UART, and anything under the console loglevel is never seen.
-		 * This is loud on purpose and should become an input event
-		 * once the report layout has been read off real data.
-		 */
-		dev_err(&ts->spi->dev, "report 0x%02x, %d bytes: %*ph\n",
-			code, len, min(len, 16), ts->rxbuf);
-	}
+	/*
+	 * Only touch the bus when the part says it has something. ATTN is
+	 * trustworthy now: it idles high and asserts while a message waits.
+	 */
+	if (!zumapro_touch_attn(ts))
+		goto again;
 
+	len = zumapro_touch_read(ts, &code);
+	if (len < 0)
+		goto again;
+
+	if (code == REPORT_TOUCH && ts->config_len)
+		zumapro_touch_report(ts, ts->rxbuf, len);
+	else if (code != STATUS_IDLE)
+		dev_dbg(&ts->spi->dev, "report 0x%02x, %d bytes: %*ph\n",
+			code, len, min(len, 16), ts->rxbuf);
+
+again:
 	schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
 }
 
@@ -577,7 +799,8 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	struct device *dev = &spi->dev;
 	struct zumapro_touch *ts;
 	u8 code = 0;
-	int ret, len;
+	int ret, len = -ENOMSG;
+	unsigned int i;
 
 	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
 	if (!ts)
@@ -646,27 +869,69 @@ static int zumapro_touch_probe(struct spi_device *spi)
 
 	/*
 	 * A TouchComm part queues a REPORT_IDENTIFY of its own after reset, so
-	 * there is something to read before any command is sent.
+	 * wait for that rather than for a fixed delay -- reset-delay-ms of 50
+	 * is measurably not long enough, and reads return 0x00 while it boots.
 	 */
-	ret = zumapro_touch_cmd(ts, CMD_IDENTIFY, NULL, 0);
-	if (ret) {
-		dev_err(dev, "IDENTIFY write failed: %d\n", ret);
-		goto err;
+	for (i = 0; i < TOUCH_BOOT_TRIES; i++) {
+		len = zumapro_touch_read(ts, &code);
+		if (len >= 0)
+			break;
+
+		msleep(TOUCH_BOOT_POLL_MS);
 	}
 
-
-	len = zumapro_touch_read_wait(ts, &code);
-	if (len < 0)
+	if (len < 0) {
+		dev_err(dev, "part did not report in after reset (%d)\n", len);
+	} else if (code == REPORT_IDENTIFY && len >= 22) {
 		/*
-		 * Not fatal. The bus and the rails are known good, so keep the
-		 * poll loop running and report what does arrive -- failing the
-		 * probe here would take the only instrument off the device.
+		 * struct tcm_identification_info: version, mode, then a
+		 * 16-byte ASCII part number and a 4-byte build id.
 		 */
-		dev_err(dev, "no answer to IDENTIFY (%d); polling anyway\n",
-			len);
-	else
-		dev_err(dev, "IDENTIFY -> code 0x%02x, %d bytes: %*ph\n",
+		dev_info(dev, "TouchComm v%u mode %u, part %.16s, build %u\n",
+			 ts->rxbuf[0], ts->rxbuf[1], &ts->rxbuf[2],
+			 get_unaligned_le32(&ts->rxbuf[18]));
+	} else {
+		dev_err(dev, "unexpected first message 0x%02x, %d bytes: %*ph\n",
 			code, len, min(len, 24), ts->rxbuf);
+	}
+
+	/*
+	 * Screen bounds and object count belong to the part, not to this
+	 * driver. Hardcoding 1080x2424 would be inventing numbers that the
+	 * device is willing to state.
+	 */
+	ts->max_objects = TCM_MAX_OBJECTS;
+	ret = zumapro_touch_request(ts, CMD_GET_APPLICATION_INFO, NULL, 0);
+	if (ret >= 30) {
+		ts->max_x = get_unaligned_le16(&ts->rxbuf[26]);
+		ts->max_y = get_unaligned_le16(&ts->rxbuf[28]);
+		if (ret >= 32)
+			ts->max_objects = min_t(unsigned int, TCM_MAX_OBJECTS,
+						get_unaligned_le16(&ts->rxbuf[30]));
+
+		dev_info(dev, "app info: %ux%u, %u objects\n",
+			 ts->max_x, ts->max_y, ts->max_objects);
+	} else {
+		dev_err(dev, "no application info (%d); using panel defaults\n",
+			ret);
+		ts->max_x = 1079;
+		ts->max_y = 2423;
+	}
+
+	/*
+	 * The touch report layout. Without it there is nothing to decode
+	 * against, so the poll loop falls back to logging raw reports.
+	 */
+	ret = zumapro_touch_request(ts, CMD_GET_TOUCH_REPORT_CONFIG, NULL, 0);
+	if (ret > 0 && ret <= TCM_CONFIG_MAX) {
+		memcpy(ts->config, ts->rxbuf, ret);
+		ts->config_len = ret;
+		dev_info(dev, "touch report config, %d bytes: %*ph\n",
+			 ret, min(ret, 32), ts->config);
+	} else {
+		dev_err(dev, "no touch report config (%d); reports stay raw\n",
+			ret);
+	}
 
 	ts->input = devm_input_allocate_device(dev);
 	if (!ts->input) {
@@ -676,9 +941,10 @@ static int zumapro_touch_probe(struct spi_device *spi)
 
 	ts->input->name = "Synaptics TouchComm";
 	ts->input->id.bustype = BUS_SPI;
-	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0, 1079, 0, 0);
-	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0, 2423, 0, 0);
-	ret = input_mt_init_slots(ts->input, 10, INPUT_MT_DIRECT);
+	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0, ts->max_x, 0, 0);
+	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0, ts->max_y, 0, 0);
+	input_set_abs_params(ts->input, ABS_MT_PRESSURE, 0, 255, 0, 0);
+	ret = input_mt_init_slots(ts->input, ts->max_objects, INPUT_MT_DIRECT);
 	if (ret)
 		goto err;
 
@@ -686,9 +952,15 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	if (ret)
 		goto err;
 
+	/* Ask for touch reports; without this the part stays quiet. */
+	code = REPORT_TOUCH;
+	ret = zumapro_touch_request(ts, CMD_ENABLE_REPORT, &code, 1);
+	if (ret < 0)
+		dev_err(dev, "could not enable touch reports (%d)\n", ret);
+
+	ts->polling = true;
 	INIT_DELAYED_WORK(&ts->poll, zumapro_touch_poll);
-	if (ts->polling)
-		schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
+	schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
 
 	return 0;
 
