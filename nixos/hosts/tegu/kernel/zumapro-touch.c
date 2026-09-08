@@ -136,6 +136,14 @@
  */
 #define TOUCH_POLL_MAX_BAD	64
 
+/*
+ * Bus turnaround. syna_tcm_v1_continued_read() sleeps this long before every
+ * chunk it reads, and this driver went straight from the header read into the
+ * continued read with nothing in between.
+ */
+#define TOUCH_TAT_US_MIN	50
+#define TOUCH_TAT_US_MAX	100
+
 /* Command responses: the vendor polls every 10 ms up to 3 s. */
 #define TOUCH_RESP_POLL_MS	10
 #define TOUCH_RESP_TRIES	100
@@ -309,12 +317,29 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 	if (!len)
 		return 0;
 
+	/*
+	 * The part needs the bus back before it will answer again. Without
+	 * this the continued read returned padding -- 5a 5a 5a 5a -- to a
+	 * header that had just arrived perfectly formed as a5 10 18 00.
+	 */
+	usleep_range(TOUCH_TAT_US_MIN, TOUCH_TAT_US_MAX);
+
 	ret = zumapro_touch_spi_read(ts, buf, len + 3);
 	if (ret)
 		return ret;
 
-	if (buf[0] != TCM_MARKER || buf[1] != STATUS_CONTINUED_READ)
+	/*
+	 * Only the status byte, because that is all the vendor checks:
+	 * syna_tcm_v1_continued_read() reads temp.buf[1] and never looks at
+	 * the marker. Being stricter than the device's own driver is how a
+	 * good message gets thrown away.
+	 */
+	if (buf[1] != STATUS_CONTINUED_READ) {
+		dev_err(&ts->spi->dev,
+			"continued read for %d bytes began %*ph\n",
+			len, 4, buf);
 		return -ENOMSG;
+	}
 
 	memcpy(ts->rxbuf, buf + 2, len);
 
@@ -863,7 +888,7 @@ static ssize_t tcm_xfer_store(struct device *dev, struct device_attribute *attr,
 			return -EINVAL;
 
 		memset(tx, 0xff, val);
-		xfer[0].tx_buf = tx;
+		xfer[0].tx_buf = ts->drive_mosi ? tx : NULL;
 		xfer[0].rx_buf = ts->rxbuf;
 		xfer[0].len = val;
 		xfer[0].speed_hz = ts->speed_hz;
