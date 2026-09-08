@@ -79,9 +79,16 @@ stdenvNoCC.mkDerivation {
     # can overwrite its /init. Both vendor images are 64 MiB partitions, with
     # room for a 25 MiB zstd initrd. The DTB and vendor cmdline are carried by
     # both, as before; ABL prefers vendor_kernel_boot's.
+    # No --vendor_cmdline here. boot.img already carries the cmdline and ABL
+    # concatenates both, so repeating it put a second init= on the command
+    # line -- and the last init= wins. While the two agree that is merely
+    # redundant, but vendor_boot is the one image small enough to reflash on
+    # its own, so the moment it was flashed from a newer build than the
+    # rootfs it pointed the initrd at a closure that was not on the phone:
+    # "Failed to start Find NixOS closure", emergency shell. Leaving it out
+    # makes vendor_boot incapable of contradicting the flashed system.
     mkbootimg --header_version 4 --pagesize 4096 \
       --dtb zumapro-tegu.dtb --vendor_ramdisk vendor_ramdisk.cpio \
-      --vendor_cmdline ${lib.escapeShellArg cmdline} \
       --vendor_boot vendor_boot.img
 
     mkbootimg --header_version 4 --pagesize 4096 \
@@ -111,7 +118,13 @@ stdenvNoCC.mkDerivation {
     \$fb flash vendor_boot "\$d/vendor_boot.img"
     \$fb flash vendor_kernel_boot "\$d/vendor_kernel_boot.img"
     \$fb flash dtbo "\$d/dtbo.img"
-    \$fb flash vbmeta "\$d/vbmeta.img" --disable-verity --disable-verification
+    # Non-fatal: fastboot rejects this image with "Failed to find AVB_MAGIC at
+    # offset: 0" when patching the flags, and under set -e that aborted the
+    # script before the rootfs was written -- leaving a phone whose boot.img
+    # named a closure the rootfs did not have. Verification is already off on
+    # an unlocked device that has been booting unsigned kernels all along.
+    \$fb flash vbmeta "\$d/vbmeta.img" --disable-verity --disable-verification || \
+      echo "flash.sh: vbmeta rejected, continuing (verification already disabled)"
     if [ "\''${1:-}" = "--rootfs" ]; then
       \$fb flash userdata "\$d/rootfs.img"
     fi
