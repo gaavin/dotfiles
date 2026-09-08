@@ -106,6 +106,17 @@ static const struct samsung_pin_bank_data zuma_pin_peric1[] __initconst = {
 	GS101_PIN_BANK_EINTG(4, 0xa0, "gpp23", 0x14, 0x1c),
 };
 
+/*
+ * Alive controllers deliberately omit .retention_data. gs101 copies
+ * &no_retention_data here, but that is not a no-op: probe calls
+ * retention_data->init() (exynos_retention_init), which looks up the
+ * Exynos PMU syscon and treats -ENODEV as fatal. Measured on this
+ * phone with pinctrl-loud: 15060000.pinctrl reached "soc data ok, 10
+ * banks" then "retention -19" and never registered gpn0. PERIC0 has
+ * no retention_data and probed. Pad retention is a suspend helper;
+ * do not restore until a zumapro PMU driver exists -- gs101's init
+ * writes PMU registers at offsets this port has not verified.
+ */
 static const struct samsung_pin_ctrl zuma_pin_ctrl[] __initconst = {
 	{
 		/* pin banks of zuma pin-controller (ALIVE) */
@@ -114,7 +125,6 @@ static const struct samsung_pin_ctrl zuma_pin_ctrl[] __initconst = {
 		.eint_wkup_init = exynos_eint_wkup_init,
 		.suspend	= gs101_pinctrl_suspend,
 		.resume		= gs101_pinctrl_resume,
-		.retention_data = &no_retention_data,
 	}, {
 		/* pin banks of zuma pin-controller (CUSTOM_ALIVE) */
 		.pin_banks	= zuma_pin_custom,
@@ -122,7 +132,6 @@ static const struct samsung_pin_ctrl zuma_pin_ctrl[] __initconst = {
 		.eint_wkup_init = exynos_eint_wkup_init,
 		.suspend	= gs101_pinctrl_suspend,
 		.resume		= gs101_pinctrl_resume,
-		.retention_data = &no_retention_data,
 	}, {
 		/* pin banks of zuma pin-controller (FAR_ALIVE) */
 		.pin_banks	= zuma_pin_far,
@@ -130,7 +139,6 @@ static const struct samsung_pin_ctrl zuma_pin_ctrl[] __initconst = {
 		.eint_wkup_init = exynos_eint_wkup_init,
 		.suspend	= gs101_pinctrl_suspend,
 		.resume		= gs101_pinctrl_resume,
-		.retention_data = &no_retention_data,
 	}, {
 		/* pin banks of zuma pin-controller (GSACORE0) */
 		.pin_banks	= zuma_pin_gsacore0,

@@ -633,6 +633,17 @@
 			compatible = "google,zuma-pinctrl";
 			reg = <0x15060000 0x1000>;
 
+			/*
+			 * Without this child, exynos_eint_wkup_init() returns
+			 * -ENODEV before creating any irq_domain. Probe still
+			 * registers the gpiochips (the return is ignored), but
+			 * gpn0 cannot be an interrupt parent. Compatible from
+			 * the stock DTB; it is in mainline's wkup match table.
+			 */
+			wakeup-interrupt-controller {
+				compatible = "samsung,exynos7-wakeup-eint";
+			};
+
 			gpn0: gpn0-gpio-bank {
 				gpio-controller;
 				#gpio-cells = <2>;
@@ -924,18 +935,15 @@
 					reset-gpios = <&gpp1 1 GPIO_ACTIVE_LOW>;
 					attn-gpios = <&gpn0 0 GPIO_ACTIVE_LOW>;
 					/*
-					 * No interrupts-extended. This driver polls
+					 * No interrupts-extended. The driver polls
 					 * ATTN through attn-gpios and never requests
-					 * the line, and naming it here would only
-					 * strand the device: spi_probe() calls
-					 * of_irq_get(), which returns -EPROBE_DEFER
-					 * while gpn0 has no irq_domain -- and it has
-					 * none, because exynos_eint_wkup_init() gives
-					 * up with -ENODEV before creating any when the
-					 * controller has no wakeup-eint child node.
-					 * Add that node first if this ever wants a
-					 * real interrupt; the line is level-low, so a
-					 * handler that fails to drain will storm.
+					 * the line. gpn0 now has an irq_domain (the
+					 * wakeup-eint child on pinctrl@15060000),
+					 * but the line is level-low and stays
+					 * asserted until the message is drained, so
+					 * a handler that fails to drain will storm.
+					 * Name the interrupt once the read path is
+					 * proven; spi_probe() would resolve it today.
 					 */
 
 					/*
