@@ -338,6 +338,34 @@ static bool zumapro_touch_attn(struct zumapro_touch *ts)
 }
 
 /*
+ * Wait for the part to raise ATTN, then read one message.
+ *
+ * Never read speculatively. A read holds MOSI high and this part treats every
+ * MOSI byte as a command byte, so polling a silent device feeds it a stream of
+ * 0xff commands -- and enough of those wedge it into answering nothing at all.
+ * That is what a hundred blind four-byte retries did here: the boot where the
+ * identify arrived on the first read worked, and every boot that had to retry
+ * ended with the part mute and MISO low.
+ *
+ * ATTN is the interrupt Google's driver reads on. It idles high and asserts
+ * while a message is waiting, so it says exactly when a read is free.
+ */
+static int zumapro_touch_read_attn(struct zumapro_touch *ts, u8 *code,
+				   unsigned int tries)
+{
+	unsigned int i;
+
+	for (i = 0; i < tries; i++) {
+		if (zumapro_touch_attn(ts))
+			return zumapro_touch_read(ts, code);
+
+		msleep(TOUCH_RESP_POLL_MS);
+	}
+
+	return -ETIMEDOUT;
+}
+
+/*
  * Send a command and collect its response. Reports the part volunteers while
  * we wait are logged and skipped -- an identify report turns up after every
  * reset and is not an answer to whatever was just asked.
@@ -354,7 +382,7 @@ static int zumapro_touch_request(struct zumapro_touch *ts, u8 cmd,
 		return ret;
 
 	for (i = 0; i < TOUCH_RESP_TRIES; i++) {
-		ret = zumapro_touch_read(ts, &code);
+		ret = zumapro_touch_read_attn(ts, &code, 1);
 		if (ret >= 0) {
 			if (code == STATUS_OK)
 				return ret;
@@ -818,8 +846,7 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	struct device *dev = &spi->dev;
 	struct zumapro_touch *ts;
 	u8 code = 0;
-	int ret, len = -ENOMSG;
-	unsigned int i;
+	int ret, len;
 
 	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
 	if (!ts)
@@ -891,13 +918,7 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	 * wait for that rather than for a fixed delay -- reset-delay-ms of 50
 	 * is measurably not long enough, and reads return 0x00 while it boots.
 	 */
-	for (i = 0; i < TOUCH_BOOT_TRIES; i++) {
-		len = zumapro_touch_read(ts, &code);
-		if (len >= 0)
-			break;
-
-		msleep(TOUCH_BOOT_POLL_MS);
-	}
+	len = zumapro_touch_read_attn(ts, &code, TOUCH_BOOT_TRIES);
 
 	if (len < 0) {
 		dev_err(dev, "part did not report in after reset (%d)\n", len);
