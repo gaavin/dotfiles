@@ -81,103 +81,91 @@ framebuffer, UART console, watchdog, ACPM.
 - The SPI bus is *finished and proven*. Internal loopback echoes
   `a5 5a 0f f0` byte for byte at 9.98 MHz. Controller, clock, datapath and
   FIFOs are all good. Do not re-investigate this.
-- The part was silent because it is unpowered. Its rails are S2MPG14 LDO4M
-  (AVDD 3.3 V, reg 0x2E) and LDO25M (DVDD 1.8 V, reg 0x43), enable at BIT(7).
-  A live read had both correctly programmed and switched **off**.
-- **The rails are on and the part answers.**
-  `kernel/zumapro-s2mpg14-regulator.c` sets the enable bit over ACPM and reads
-  it back from the PMIC: `LDO25M 0x2c -> 0xac`, `LDO4M 0x3c -> 0xbc`. The
-  device then replies on the bus with `0xa5` (`TCM_V1_MESSAGE_MARKER`) and
-  `0x10` (`REPORT_IDENTIFY`). Clock, SPI controller, ACPM, register map,
-  rails, reset — the whole chain works.
+- The rails are real and mainline drives them. LDO4M (AVDD 3.3 V) and LDO25M
+  (DVDD 1.8 V) come up through `sec-acpm`, and ATTN goes from low to high the
+  moment they do -- the first time that line has ever read high here.
+- Pinctrl is real. Both alive controllers probe, `gpn0` exists, and the touch
+  SPI device binds instead of waiting forever for a supplier.
 
-### Where it got to, and the open question
+### Read Google's own sources before designing an experiment
 
-Four logs in. Fixed along the way, all real bugs:
+Three trees, cloned under /tmp/tegu-work (tmpfs -- re-clone if gone), from the
+`zumapro-mainline` orbit:
 
-1. `spi_read()` transmits zeroes, and on TouchComm a MOSI byte is a command
-   byte. Reads now drive MOSI high, as `syna_tcm2_platform_spi.c` does.
-2. An idle bus reads all 0xff, so a header of `ff ff ff ff` was taken as a
-   65535-byte message. Implausible lengths now resynchronise.
-3. A single read 20 ms after the command called the part silent. Google's core
-   polls every 10 ms up to 3 s; the driver now retries 100 x 10 ms.
-4. `regulator_enable()` returning 0 was being read as "the rail is on". It
-   means ACPM accepted the message. The enable path now reads the register
-   back, and that is what proved the rails.
+| tree | what it settles |
+| --- | --- |
+| `tegu-dt` | `dts/zuma-tegu-common-touch.dtsi` -- the real `spitouch` node for *this phone* |
+| `synaptics` | `syna_gtd/syna_tcm2_platform_spi.c`, `tcm/synaptics_touchcom_core_v1.c` |
+| `soc-gs` | SoC hardware tables (sparse clone -- ask `git ls-tree`, not the filesystem) |
 
-**A correction that is in the git history.** One log was read as showing
-`gpn0` idling high and a commit claimed the part had come alive. That was a
-misread — in a bank dump the words are CON, DAT, PUD, DRV, and the
-`0x00000001` was PUD. `gpn0` DAT reads 0 in every measurement, including
-through a pull-up that reads back as enabled, and 0 is what an asserted
-active-low ATTN and an unpowered part clamping through its ESD diodes both
-look like. Do not use that line as evidence until the part has answered once.
+Every touch question answered on 2026-09-08 was answered by reading these, and
+each had cost boots to guess at. Look here first.
 
-**The open question is the header.** Google's header says a v1 identify packet
-is 24 = `0x18` bytes, so the true header is almost certainly `a5 10 18 00`:
+### Where it got to
 
-	try 0: hdr a5 10 ff ff      byte 0 right, byte 1 right, rest wrong
-	try 1: hdr a5 18 ff ff      0x18 is the length byte, one position early
-	poll:  hdr a5 18 ff 00
+Stages 1 and 2 are done on hardware. What is left is the part itself.
 
-Byte 0 is right on every read, byte 1 is right or one bit out, and it degrades
-from there. That is a sampling problem, not a protocol one.
+Three defects were fixed together, each against vendor evidence:
 
-Ruled out, so do not spend a boot on them:
+1. **The ATTN gate trusted a pulled line.** The bootloader leaves a pull-*down*
+   on gpn0-0 (PUD reads 0x1, measured). ATTN is active low, so the line reads
+   asserted whenever nothing drives it -- rails off, reset held, or the part
+   still booting. `-42` after reset was a read twelve milliseconds after reset
+   release into a part that had not booted, and the wait returned the first
+   header it saw instead of retrying. Google's `ts-irq` clears that pull; the
+   device tree now does too, and `-ENOMSG` no longer ends a wait.
+2. **Reads were transmitting.** The driver held MOSI high, believing Google
+   fills 0xff. Google does -- but only when `synaptics,spi-byte-delay-us` is
+   nonzero, and tegu sets it to 0. The real path is `tx_buf = NULL`, and
+   `spi-s3c64xx` sets `CH_TXCH_ON` only for a non-NULL `tx_buf` and never asks
+   the core for a dummy buffer, so **MOSI is not driven at all** through an
+   Android read. Every MOSI byte is a command byte to this part.
+3. **The poll loop could hammer forever** on that same untrustworthy gate. It
+   now stops after 64 markerless reads and says so.
 
-- **Not a short read.** `s3c64xx_spi_wait_for_pio()` spins until `RX_FIFO_LVL`
-  reaches the transfer length and returns `-EIO` otherwise. `spi_sync()`
-  returned 0, so all four bytes came off the wire.
-- **Not byte swapping.** Mainline writes 0 to `SWAP_CFG` at init.
-- **Not pad muxing.** No `gpb` bank exists in any zumapro pinctrl block or in
-  the stock DTS, and Google's own SPI node carries an empty `pinctrl-0`.
-  Firmware owns those pads.
+**`FB_CLK_SEL` is retired as a suspect.** Google's `controller-data` sets
+`samsung,spi-feedback-delay = <0>`, which is mainline's default. The earlier
+note naming it the prime cause of degrading headers was wrong.
 
-**The suspect is `FB_CLK_SEL`**, the feedback tap the controller samples MISO
-on (`0x111d0000` + 0x2c, four settings). Mainline writes it once at setup from
-`samsung,spi-feedback-delay`, which defaults to 0. Internal loopback cannot
-see this: it never leaves the controller, so there is no round trip to
-compensate — which is how a bus that echoes `a5 5a 0f f0` byte for byte can
-still read a real device wrong.
+### Next log to read
 
-**Next log to read.** The driver now sweeps all four taps and dumps 32 raw
-bytes at each, which is header plus a whole 24-byte identify packet in one
-chip-select assertion:
+The post-reset wait is now an instrument. It samples ATTN for 500 ms without
+putting a byte on the bus and logs every transition -- and says so when there
+are none -- then reads eight times at 50 ms apart, logging every header that is
+not a marker:
 
-	zumapro-touch ...: spi: ch_cfg ... mode_cfg ... swap ... fb ...
-	zumapro-touch ...: dump fb0: <16 bytes> | <16 bytes>
-	zumapro-touch ...: dump fb1: ...
-	zumapro-touch ...: dump slow: ...
-	zumapro-touch ...: dump after IDENTIFY: ...
+	zumapro-touch ...: boot: attn asserted at reset release
+	zumapro-touch ...: boot: first read header a5 10 18 00
+	zumapro-touch ...: boot: attn idle at 120 ms
+	zumapro-touch ...: boot: attn asserted after 500 ms, 2 transitions
+	zumapro-touch ...: boot: read 0 header ff ff ff ff
 
-A tap that yields `a5 10 18 00` followed by real data is the answer, and the
-fix is a `controller-data` child node on the touchscreen with
-`samsung,spi-feedback-delay = <n>` — after which the sweep, which pokes the
-controller's register behind its driver's back, must come out.
+Read it as: does ATTN ever idle (is the line the part's to speak for), and what
+comes back off the bus (mute, still booting, or out of frame).
 
-If no tap works, the next instrument is a genuinely slow clock. The floor
-today is about 6.24 MHz against 9.98: the USI2 divider is four bits wide off a
-fixed 399.36 MHz parent and `spi-s3c64xx` divides by four again. Modelling the
-CMU_TOP HSI0_PERI divider (`0x26041890`, reads 0) is what buys a real sweep.
+`tcm_xfer` gained `fb N`, `mosi 0|1` and `attn`, so the feedback tap, the MOSI
+drive and the line itself can be swept from userspace through `tegu-cmd`
+without a rebuild.
+
 
 ### Known-incomplete in the touch driver
 
-- **The poll loop is gated on a line nobody has validated.** `zumapro_touch_poll()`
-  skips the bus unless `gpn0` reads low. Today it always reads low, so the
-  gate is a no-op and the probe-time diagnostics run regardless — but the
-  moment that line starts behaving, a wrong polarity or a wrong pin means the
-  driver silently stops reading. Delete the gate, or prove the line, before
-  trusting an empty log.
+- **The ATTN gate is honest now but still unproven.** The pull-down is cleared
+  and the poll loop backs off after 64 markerless reads instead of hammering,
+  but no message has yet been read *because* the line said one was waiting.
+  Until that happens, treat a quiet log as "the gate may be wrong", not as
+  "the part is quiet" — `echo attn > tcm_xfer` prints the raw level.
 
 - **No coordinate decoding.** TouchComm's touch report is a bitfield sequence
   described by a report-config the part supplies at runtime. It is deliberately
   not written yet: the driver logs raw reports so the layout can be read off
   real data. Google's decoder is in
   `/tmp/tegu-work/synaptics/syna_c10/tcm/synaptics_touchcom_func_touch.c`.
-- **Two shims for missing SoC support.** Reset is driven by writing peric0's
-  GPIO block directly (`0x10840000`, gpp1 CON +0x20 / DAT +0x24, pin 1, active
-  low), and it polls at 16 ms instead of taking the `gpn0-0` interrupt. Both
-  exist only because there is no zumapro pinctrl driver.
+- **Still polling, by choice.** Reset and ATTN are real gpiods now, and `gpn0`
+  has an irq_domain, so `interrupts-extended` would resolve today. The line is
+  level-low and stays asserted until the message is drained, so a handler that
+  failed to drain would storm the machine. One line to change once a read has
+  succeeded.
 
 ### Next after touch
 
