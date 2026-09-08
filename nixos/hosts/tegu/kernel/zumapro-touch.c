@@ -338,8 +338,10 @@ static int zumapro_touch_read_sync(struct zumapro_touch *ts, u8 *buf,
 			return 0;
 	}
 
-	dev_err(&ts->spi->dev, "no marker in %u reads of %zu bytes: %*ph\n",
-		TOUCH_READ_RETRIES, len, (int)min(len, (size_t)32), buf);
+	dev_err_ratelimited(&ts->spi->dev,
+			    "no marker in %u reads of %zu bytes: %*ph\n",
+			    TOUCH_READ_RETRIES, len,
+			    (int)min(len, (size_t)32), buf);
 
 	return -ENOMSG;
 }
@@ -519,8 +521,13 @@ static int zumapro_touch_wait_boot(struct zumapro_touch *ts, u8 *code)
 			if (ret != -ENOMSG)
 				return ret;
 
-			dev_info(dev, "boot: read %u header %*ph\n",
-				 i, TCM_HEADER_SIZE, ts->hdr);
+			/*
+			 * No header to print: ts->hdr is only written by a
+			 * read that found a marker, so printing it here would
+			 * show the previous message's header as if it were
+			 * this one. read_sync has already said what came back.
+			 */
+			dev_info(dev, "boot: read %u found no message\n", i);
 		}
 
 		msleep(TOUCH_BOOT_READ_MS);
@@ -1235,10 +1242,23 @@ input:
 	if (ret)
 		goto err;
 
-	if (len < 0) {
-		dev_err(dev, "not polling; \"poll 1\" through tcm_xfer starts it\n");
-		return 0;
-	}
+	/*
+	 * Unconditionally. Identify succeeding is not permission to keep
+	 * talking: CMD_ENABLE_REPORT is a command like any other, it times out
+	 * like any other, and its hundred polls are enough on their own to
+	 * leave the part answering 0x00 to everything by the time userspace
+	 * looks. Guarding this on "len < 0" meant the successful path -- the
+	 * only one that matters -- still ran it.
+	 */
+	/*
+	 * Before the return, not after it. "poll 1" through tcm_xfer schedules
+	 * this work, and scheduling one that was never initialised is an oops
+	 * -- reached by using the very escape hatch the line below advertises.
+	 */
+	INIT_DELAYED_WORK(&ts->poll, zumapro_touch_poll);
+
+	dev_err(dev, "identified only; \"poll 1\" through tcm_xfer starts reports\n");
+	return 0;
 
 	/* Ask for touch reports; without this the part stays quiet. */
 	code = REPORT_TOUCH;
@@ -1247,7 +1267,6 @@ input:
 		dev_err(dev, "could not enable touch reports (%d)\n", ret);
 
 	ts->polling = true;
-	INIT_DELAYED_WORK(&ts->poll, zumapro_touch_poll);
 	schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
 
 	return 0;
