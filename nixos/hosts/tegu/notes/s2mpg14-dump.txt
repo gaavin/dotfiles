@@ -62,22 +62,41 @@ WHAT THIS ESTABLISHES
   pairs; S2MPG10 has CTRL/OUT1/OUT2 triplets there. Attaching the S2MPG10
   driver would have written to the wrong registers, not merely risked it.
 
-WHAT THIS DOES NOT ESTABLISH, AND MUST NOT BE ASSUMED
+RESOLVED: THE MAP CAME FROM THE VENDOR SOURCE, NOT FROM THIS TABLE
 
-Where LDO4M and LDO25M are. If S2MPG14 placed L1M_CTRL at 0x40 as S2MPG10
-does, then with S2MPG10's encoding (bit 7 = enable, bits [5:0] = voltage)
-LDO4M would be +0x43 = 0x2c and LDO25M would be +0x58 = 0x44, both with
-bit 7 clear, i.e. both off -- which is what the unpowered-touch-part theory
-predicts.
+The offsets are in soc-gs after all, at
+include/linux/mfd/samsung/s2mpg14-register.h. The earlier claim in this
+file -- that no available source describes S2MPG14 -- was wrong. That
+checkout is sparse (--filter=blob:none, sparse-checkout of /drivers/soc
+/google and /include), so grepping the files on disk found nothing while
+the repo contained s2mpg14-register.h, s2mpg14-regulator.c, s2mpg14-core.c
+and rtc-s2mpg14.c the whole time. Ask git what a tree holds, not the
+filesystem:
 
-That is suggestive and nothing more. Against it: +0x44..0x48 reads
-7f cc ff ff ff, and three consecutive 0xff bytes look far more like
-interrupt masks than LDO controls, which would put the block boundary
-somewhere else. The buck layout already differs from S2MPG10, so there is
-no reason to expect the LDO base to match.
+	git ls-tree -r --name-only HEAD | grep -i s2mpg
+	git sparse-checkout add drivers/mfd drivers/regulator include/linux/mfd
 
-Writing an enable to a guessed offset would be a write into the PMIC that
-powers the whole board, including the rails it boots from. The map has to
-come from a source -- Google publishes the S2MPG14 headers in a
-google-modules repo that is not checked out here -- or from a differential
-read against a known change. Not from this table plus optimism.
+	S2MPG14_PM_B1M_CTRL  = 0x17
+	S2MPG14_PM_L1M_CTRL  = 0x2A
+	S2MPG14_PM_L4M_CTRL  = 0x2E   AVDD, group 5 (min 1800000, step 25000)
+	S2MPG14_PM_L25M_CTRL = 0x43   DVDD, group 4 (min  700000, step 25000)
+
+Enable is BIT(7) of the same register; vsel is the low (n_voltages - 1)
+bits. Against the dump above:
+
+	0x2E = 0x3c -> bit 7 clear, vsel 60 -> 1800000 + 60*25000 = 3300000 uV
+	0x43 = 0x2c -> bit 7 clear, vsel 44 ->  700000 + 44*25000 = 1800000 uV
+
+Google's board file gives AVDD = 3300000 and DVDD = 1800000. Two exact
+hits, so the map is confirmed by the hardware rather than assumed from it.
+Both rails are programmed to the right voltage and switched off, which is
+why the touch part is silent and why its active-low IRQ sits at 0 through
+a pull-up.
+
+WHY THE GUESS WOULD HAVE BEEN WORSE THAN USELESS
+
+S2MPG10 keeps its LDO block at 0x40, which predicted LDO4M at 0x43. On
+S2MPG14, 0x43 is a real register -- it is LDO25M. Writing "enable AVDD"
+there would have enabled DVDD instead, at a voltage decoded from the wrong
+group, and the result would have looked like a partial success rather than
+an error. The near miss is the argument for the read-only instrument.
