@@ -123,6 +123,32 @@ let
             SPI_SPIDEV = yes;
             EXYNOS_USI = yes;
 
+            # ACPM, and through it the PMIC. The touch part's rails are
+            # S2MPG14 LDO25M (DVDD 1.8V) and LDO4M (AVDD 3.3V) and nothing
+            # turns them on, which is the leading explanation for a SPI bus
+            # that transfers correctly (loopback echoes) while the part stays
+            # silent and its active-low IRQ sits at 0 even through a pull-up.
+            #
+            # Mainline already has the whole stack -- exynos-acpm.c,
+            # sec-acpm.c, and S2MPG10/11 regulator descriptors in s2mps11.c.
+            # Only the addresses differ here, and ACPM's shared-memory layout
+            # is identical: the driver's ACPM_GS101_INITDATA_BASE is 0xa000
+            # and zumapro's own device tree declares initdata-base = <0xa000>.
+            #
+            # The chip is S2MPG14, not S2MPG10, and its register map is not in
+            # any source available here, so nothing is written to it yet. This
+            # is the instrument: regmap debugfs makes the PMIC readable from
+            # userspace so the real map can be measured rather than assumed.
+            MAILBOX = yes;
+            EXYNOS_MBOX = yes;
+            EXYNOS_ACPM_PROTOCOL = yes;
+            MFD_SEC_ACPM = yes;
+            MFD_SEC_CORE = yes;
+            REGULATOR = yes;
+            REGULATOR_S2MPS11 = yes;
+            REGMAP_DEBUGFS = yes;
+            DEBUG_FS = yes;
+
             # BL2 arms a 60s cluster watchdog on every boot and nothing in
             # this port used to pet it, so the phone reset on a timer.
             WATCHDOG = yes;

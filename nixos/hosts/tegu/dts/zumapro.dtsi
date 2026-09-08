@@ -181,11 +181,42 @@
 	 * clock: spi-s3c64xx sets that with clk_set_rate(), because gs101's
 	 * port config sets clk_from_cmu and the controller has no prescaler.
 	 */
+	/*
+	 * The APM mailbox's APB clock. Stated, not modelled: there is no
+	 * CMU_APM driver in this port, the bootloader leaves the clock running
+	 * (ACPM is what it talks to for DVFS and the PMIC), and the mailbox
+	 * driver only enables it -- it does no arithmetic with the rate. The
+	 * binding makes clocks/clock-names mandatory, so a phandle has to
+	 * resolve to something.
+	 */
+	apm_pclk: clock-6 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24576000>;
+		clock-output-names = "apm-pclk";
+	};
+
 	hsi0_peri: clock-5 {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <399360000>;
 		clock-output-names = "hsi0-peri";
+	};
+
+	/*
+	 * The APM's SRAM. ACPM's shared-memory mailbox queues live in here;
+	 * the protocol driver ioremaps it and finds its channel descriptors at
+	 * initdata-base (0xa000) from the start. Address and size are the
+	 * second region of the stock tree's acpm_ipc reg property.
+	 *
+	 * Root here is #address-cells = <2>, #size-cells = <1>.
+	 */
+	apm_sram: sram@15700000 {
+		compatible = "mmio-sram";
+		reg = <0x0 0x15700000 0x58000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0x0 0x0 0x15700000 0x58000>;
 	};
 
 	pmu {
@@ -481,6 +512,45 @@
 		 * its CS_REG went 0 -> 1, S3C64XX_SPI_CS_SIG_INACT -- so this
 		 * address is confirmed, not inferred.
 		 */
+		/*
+		 * ACPM -- the Alive Clock and Power Manager. It is the only
+		 * route to the PMIC, and therefore to the touchscreen's rails.
+		 *
+		 * Addresses from the stock device tree, whose acpm_ipc node
+		 * carries all three regions in one property:
+		 *
+		 *   reg = <0x15110000 0x1000     mailbox
+		 *          0x15700000 0x58000    SRAM
+		 *          0x1542048c 0x14>;
+		 *   interrupts = <0 0x50 4 0>;   GIC_SPI 80
+		 *   initdata-base = <0xa000>;
+		 *
+		 * Mainline wants the mailbox and SRAM as separate nodes that
+		 * acpm_ipc points at, so they are split out here. The third
+		 * region is Google's own and mainline's driver never asks for
+		 * it, so it is left out rather than described speculatively.
+		 *
+		 * The protocol node needs no zumapro variant: mainline's
+		 * ACPM_GS101_INITDATA_BASE is 0xa000, exactly what the stock
+		 * tree declares, so the shared-memory layout is the same and
+		 * only the addresses differ.
+		 */
+		ap2apm_mailbox: mailbox@15110000 {
+			compatible = "google,gs101-mbox";
+			reg = <0x15110000 0x1000>;
+			clocks = <&apm_pclk>;
+			clock-names = "pclk";
+			interrupts = <GIC_SPI 80 IRQ_TYPE_LEVEL_HIGH 0>;
+			#mbox-cells = <0>;
+		};
+
+		acpm_ipc: power-management {
+			compatible = "google,gs101-acpm-ipc";
+			#clock-cells = <1>;
+			mboxes = <&ap2apm_mailbox>;
+			shmem = <&apm_sram>;
+		};
+
 		cmu_hsi0: clock-controller@11000000 {
 			compatible = "google,zumapro-cmu-hsi0";
 			reg = <0x11000000 0x8000>;
