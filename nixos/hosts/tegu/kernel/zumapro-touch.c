@@ -35,16 +35,21 @@
  * continued-read dance -- that exists for parts with a small max_read_size,
  * and re-reading here would restart the message instead of continuing it.
  *
- * TWO THINGS ARE MISSING FROM THE SOC AND ARE WORKED AROUND HERE
+ * PINS
  *
- * There is no pinctrl driver for zumapro, so neither the reset line
- * (gpp1-1, peric0) nor the interrupt (gpn0-0, alive) can be requested
- * properly. Reset is driven by writing the GPIO block directly, and the
- * driver polls the ATTN level instead of taking its interrupt. Both are
- * shims a real pinctrl driver should delete.
+ * Reset (gpp1-1) and ATTN (gpn0-0) are ordinary GPIOs now that this port has
+ * pin-controller data (kernel/zuma-pinctrl-data.c). Both used to be poked
+ * through ioremap because there was no pinctrl driver at all; that could
+ * drive a pad but never supply an interrupt.
+ *
+ * The driver still polls the ATTN level rather than taking its interrupt.
+ * That is deliberate for now: the line is level triggered and stays asserted
+ * until the message is drained, so an interrupt handler that fails to drain
+ * one would storm, and the read path is too young to bet the machine on.
  */
 
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/io.h>
@@ -146,33 +151,6 @@
 #define APP_INFO_MAX_Y		34
 #define APP_INFO_MAX_OBJECTS	36
 
-/*
- * The ATTN line, gpn0-0, active low, read directly for want of a pinctrl
- * driver. Bank layout from Google's own table (soc-gs,
- * drivers/pinctrl/gs/pinctrl-gs.c, zumapro_pin_custom[]): 0x15060000 is
- * GPIO_CUSTOM_ALIVE holding gpn0..gpn9, one pin each, 0x20 apart, gpn0 first.
- *
- * This read 0 for the whole port until the part started answering, which was
- * not a pull-up failure but an undrained message holding ATTN asserted
- * forever. It idles high now.
- */
-#define ALIVE_BASE		0x15060000
-#define ALIVE_SIZE		0x10
-#define GPN0_DAT		0x04
-#define GPN0_ATTN_PIN		0
-
-/*
- * peric0's GPIO block, and gpp1 within it. Banks are 0x20 apart and gpp1 is
- * the second, so CON is +0x20 and DAT +0x24; each pin takes 4 bits of CON,
- * so pin 1 is bits [7:4], and 1 there means output. The touch reset is
- * active low (synaptics,reset-on-state = 0 in Google's board file).
- */
-#define PERIC0_BASE		0x10840000
-#define PERIC0_SIZE		0x40
-#define GPP1_CON		0x20
-#define GPP1_DAT		0x24
-#define GPP1_RESET_PIN		1
-
 /* The SPI controller's own registers, mapped read-only for diagnostics. */
 #define SPI_BASE		0x111d0000
 #define SPI_SIZE		0x30
@@ -188,8 +166,8 @@ struct zumapro_touch {
 	struct regulator *vdd;
 	struct regulator *avdd;
 	struct delayed_work poll;
-	void __iomem *peric0;
-	void __iomem *alive;
+	struct gpio_desc *reset;
+	struct gpio_desc *attn;
 	void __iomem *spiregs;
 
 	u8 hdr[TCM_HEADER_SIZE];	/* last header read, for diagnostics */
@@ -211,20 +189,12 @@ struct zumapro_touch {
 
 static void zumapro_touch_reset(struct zumapro_touch *ts)
 {
-	u32 con, dat;
-
-	if (!ts->peric0)
+	if (!ts->reset)
 		return;
 
-	con = readl(ts->peric0 + GPP1_CON);
-	con &= ~(0xfu << (GPP1_RESET_PIN * 4));
-	con |= 0x1u << (GPP1_RESET_PIN * 4);		/* output */
-	writel(con, ts->peric0 + GPP1_CON);
-
-	dat = readl(ts->peric0 + GPP1_DAT);
-	writel(dat & ~BIT(GPP1_RESET_PIN), ts->peric0 + GPP1_DAT);
+	gpiod_set_value_cansleep(ts->reset, 1);		/* active low in DT */
 	msleep(TOUCH_RESET_ACTIVE_MS);
-	writel(dat | BIT(GPP1_RESET_PIN), ts->peric0 + GPP1_DAT);
+	gpiod_set_value_cansleep(ts->reset, 0);
 	msleep(TOUCH_RESET_DELAY_MS);
 }
 
@@ -322,19 +292,19 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 	return len;
 }
 
-/* Raw gpn0 DAT, or ~0 when the block is not mapped. */
-static u32 zumapro_touch_attn_dat(struct zumapro_touch *ts)
-{
-	return ts->alive ? readl(ts->alive + GPN0_DAT) : ~0u;
-}
-
-/* True when the part has a message waiting. Assume yes if unmapped. */
+/*
+ * True when the part has a message waiting.
+ *
+ * The line is active low and the DT says so, so gpiod returns 1 when it is
+ * asserted. Assume a message is waiting if there is no GPIO, which keeps the
+ * driver working on a tree without pinctrl rather than going silent.
+ */
 static bool zumapro_touch_attn(struct zumapro_touch *ts)
 {
-	if (!ts->alive)
+	if (!ts->attn)
 		return true;
 
-	return !(zumapro_touch_attn_dat(ts) & BIT(GPN0_ATTN_PIN));
+	return gpiod_get_value_cansleep(ts->attn) == 1;
 }
 
 /*
@@ -864,14 +834,15 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	if (IS_ERR(ts->avdd))
 		return dev_err_probe(dev, PTR_ERR(ts->avdd), "no avdd\n");
 
-	/* See the comment at the top: no pinctrl, so drive the pads directly. */
-	ts->peric0 = devm_ioremap(dev, PERIC0_BASE, PERIC0_SIZE);
-	if (!ts->peric0)
-		dev_err(dev, "no peric0 mapping; reset will not be driven\n");
+	ts->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);	/* logical 1 = asserted; held until the pulse below */
+	if (IS_ERR(ts->reset))
+		return dev_err_probe(dev, PTR_ERR(ts->reset), "reset gpio\n");
+	if (!ts->reset)
+		dev_err(dev, "no reset gpio; the part will not be reset\n");
 
-	ts->alive = devm_ioremap(dev, ALIVE_BASE, ALIVE_SIZE);
-	if (!ts->alive)
-		dev_err(dev, "no alive mapping; polling without ATTN\n");
+	ts->attn = devm_gpiod_get_optional(dev, "attn", GPIOD_IN);
+	if (IS_ERR(ts->attn))
+		return dev_err_probe(dev, PTR_ERR(ts->attn), "attn gpio\n");
 
 	ts->spiregs = devm_ioremap(dev, SPI_BASE, SPI_SIZE);
 	if (ts->spiregs)
@@ -882,13 +853,8 @@ static int zumapro_touch_probe(struct spi_device *spi)
 			readl(ts->spiregs + SPI_SWAP_CFG),
 			readl(ts->spiregs + SPI_FB_CLK));
 
-	/*
-	 * Sample the interrupt line before anything is powered. If it reads
-	 * the same here as it does with both rails up and the part out of
-	 * reset, the line is telling us nothing and the driver should stop
-	 * treating it as evidence either way.
-	 */
-	dev_err(dev, "gpn0 before power: 0x%08x\n", zumapro_touch_attn_dat(ts));
+	dev_info(dev, "attn before power: %s\n",
+		 zumapro_touch_attn(ts) ? "asserted" : "idle");
 
 	ret = regulator_enable(ts->vdd);
 	if (ret)
@@ -901,17 +867,11 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	}
 
 	msleep(TOUCH_POWER_DELAY_MS);
-	dev_err(dev, "rails on: vdd %d uV, avdd %d uV, gpn0 0x%08x\n",
-		regulator_get_voltage(ts->vdd), regulator_get_voltage(ts->avdd),
-		zumapro_touch_attn_dat(ts));
+	dev_info(dev, "rails on: vdd %d uV, avdd %d uV, attn %s\n",
+		 regulator_get_voltage(ts->vdd), regulator_get_voltage(ts->avdd),
+		 zumapro_touch_attn(ts) ? "asserted" : "idle");
 
 	zumapro_touch_reset(ts);
-
-	if (ts->peric0)
-		dev_err(dev, "after reset: gpp1 CON 0x%08x DAT 0x%08x, gpn0 0x%08x\n",
-			readl(ts->peric0 + GPP1_CON),
-			readl(ts->peric0 + GPP1_DAT),
-			zumapro_touch_attn_dat(ts));
 
 	/*
 	 * A TouchComm part queues a REPORT_IDENTIFY of its own after reset, so

@@ -14,6 +14,7 @@
  * clock controllers, pinctrl, PMIC/ACPM, UFS, USB, DPU/DSIM, WLAN, modem.
  */
 
+#include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/soc/samsung,exynos-usi.h>
 
@@ -23,6 +24,20 @@
 	#size-cells = <1>;
 
 	interrupt-parent = <&gic>;
+
+	/*
+	 * Not decoration. pinctrl-samsung picks which bank table a controller
+	 * gets with of_alias_get_id(node, "pinctrl") and nothing else -- not
+	 * the compatible, not the reg -- so a controller without an alias
+	 * fails probe at "failed to get alias id" and registers no GPIO at
+	 * all. That is what left the touch SPI waiting forever on a supplier
+	 * called gpn0-gpio-bank. The indices are positions in zuma_pin_ctrl[]:
+	 * 1 is CUSTOM_ALIVE and 11 is PERIC0, matching zumapro-mainline.
+	 */
+	aliases {
+		pinctrl1 = &pinctrl_gpio_custom_alive;
+		pinctrl11 = &pinctrl_peric0;
+	};
 
 	cpus {
 		#address-cells = <2>;
@@ -551,42 +566,267 @@
 			shmem = <&apm_sram>;
 
 			/*
-			 * Read-only. The touch rails are S2MPG14 LDO25M and
-			 * LDO4M, but nothing here describes S2MPG14's register
-			 * map, and "samsung,s2mpg10-pmic" would install a
-			 * regmap-irq chip that writes mask registers at probe
-			 * -- wrong offsets, live PMIC, every rail on the board.
-			 * Measure the map first; see the driver.
+			 * Read-only dump of the main PMIC, kept as the
+			 * instrument that established the register map the
+			 * regulator node below now relies on.
 			 */
 			pmic_dump: pmic-dump {
 				compatible = "google,zumapro-pmic-dump";
 			};
 
 			/*
-			 * The touchscreen's two supplies on the main PMIC.
-			 * Offsets from Google's s2mpg14-register.h and
-			 * confirmed against a live read: the hardware already
-			 * holds 3300000 and 1800000 in these registers with
-			 * the enable bit clear, so min == max here states what
-			 * is there rather than asking for a change. See
-			 * kernel/zumapro-s2mpg14-regulator.c.
+			 * The touchscreen's two supplies on the main PMIC,
+			 * now through mainline's sec-acpm MFD, which puts a
+			 * regmap over ACPM so the ordinary regmap regulator
+			 * ops drive them. The S2MPG14 register map it needs
+			 * is added by kernel/sec-acpm-s2mpg14.py.
+			 *
+			 * Offsets confirmed against a live read: the hardware
+			 * already holds 3300000 and 1800000 in these two
+			 * registers with the enable bit clear, so min == max
+			 * states what is there rather than asking for a
+			 * change.
+			 *
+			 * The interrupt is here only because
+			 * sec_pmic_acpm_probe() refuses to probe without one.
+			 * sec_irq_init() installs no chip for this part -- the
+			 * S2MPG14 has no common INT register to drive one --
+			 * so nothing ever requests this line. The number comes
+			 * from the zumapro-mainline tree and is unconfirmed on
+			 * this phone; while no handler is attached it only has
+			 * to parse.
 			 */
 			pmic_main: pmic-main {
-				compatible = "google,zumapro-s2mpg14-regulator";
+				compatible = "samsung,s2mpg14-pmic";
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 75 IRQ_TYPE_LEVEL_HIGH 0>;
 
 				regulators {
-					m_ldo4_reg: LDO4M {
+					m_ldo4_reg: ldo4m {
 						regulator-name = "PP3300_L4M_TS1_AVDD";
 						regulator-min-microvolt = <3300000>;
 						regulator-max-microvolt = <3300000>;
 					};
 
-					m_ldo25_reg: LDO25M {
+					m_ldo25_reg: ldo25m {
 						regulator-name = "PP1800_L25M_TS1_DVDD";
 						regulator-min-microvolt = <1800000>;
 						regulator-max-microvolt = <1800000>;
 					};
 				};
+			};
+		};
+
+		/*
+		 * The SoC's GPIO. Bank data lives in the kernel
+		 * (kernel/zuma-pinctrl-data.c, from the zumapro-mainline
+		 * tree); these nodes only say where the blocks are and give
+		 * each bank a gpio-controller so phandles resolve.
+		 *
+		 * The pclk is deliberately absent. The binding takes it with
+		 * devm_clk_get_optional_prepared(), and this port has no
+		 * CMU_APM or CMU_PERIC0 driver yet -- the bootloader leaves
+		 * both blocks clocked, which is why the touch reset and ATTN
+		 * pins were readable by hand long before this existed.
+		 */
+		pinctrl_gpio_custom_alive: pinctrl@15060000 {
+			compatible = "google,zuma-pinctrl";
+			reg = <0x15060000 0x1000>;
+
+			gpn0: gpn0-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 0 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+			gpn1: gpn1-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 1 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+			gpn2: gpn2-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 2 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+			gpn3: gpn3-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+			gpn4: gpn4-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 4 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+			gpn5: gpn5-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 5 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+			gpn6: gpn6-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 6 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+			gpn7: gpn7-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 7 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+			gpn8: gpn8-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 8 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+			gpn9: gpn9-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 9 IRQ_TYPE_LEVEL_HIGH 0>;
+			};
+		};
+
+		pinctrl_peric0: pinctrl@10840000 {
+			compatible = "google,zuma-pinctrl";
+			reg = <0x10840000 0x1000>;
+			interrupts = <GIC_SPI 634 IRQ_TYPE_LEVEL_HIGH 0>;
+
+			gpp0: gpp0-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp1: gpp1-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp2: gpp2-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp3: gpp3-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp4: gpp4-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp5: gpp5-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp6: gpp6-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp7: gpp7-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp8: gpp8-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp9: gpp9-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp10: gpp10-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp11: gpp11-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp12: gpp12-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp13: gpp13-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp14: gpp14-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp15: gpp15-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp17: gpp17-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
+			};
+			gpp16: gpp16-gpio-bank {
+				gpio-controller;
+				#gpio-cells = <2>;
+				interrupt-controller;
+				#interrupt-cells = <2>;
 			};
 		};
 
@@ -673,6 +913,30 @@
 					 * the standard way instead.
 					 */
 					spi-cs-setup-delay-ns = <2000>;
+
+					/*
+					 * Real GPIOs now that there is a
+					 * pinctrl driver. Both of these were
+					 * poked through ioremap until now,
+					 * which could drive a pad but never
+					 * supply an interrupt.
+					 */
+					reset-gpios = <&gpp1 1 GPIO_ACTIVE_LOW>;
+					attn-gpios = <&gpn0 0 GPIO_ACTIVE_LOW>;
+					/*
+					 * No interrupts-extended. This driver polls
+					 * ATTN through attn-gpios and never requests
+					 * the line, and naming it here would only
+					 * strand the device: spi_probe() calls
+					 * of_irq_get(), which returns -EPROBE_DEFER
+					 * while gpn0 has no irq_domain -- and it has
+					 * none, because exynos_eint_wkup_init() gives
+					 * up with -ENODEV before creating any when the
+					 * controller has no wakeup-eint child node.
+					 * Add that node first if this ever wants a
+					 * real interrupt; the line is level-low, so a
+					 * handler that fails to drain will storm.
+					 */
 
 					/*
 					 * Synaptics TouchComm. The driver

@@ -53,12 +53,12 @@ install -m444 "$src"/clk-zumapro-hsi0.c drivers/clk/samsung/clk-zumapro-hsi0.c
 printf 'obj-y\t+= clk-zumapro-hsi0.o\n' >> drivers/clk/samsung/Makefile
 
 # --- PMIC: the touchscreen's two rails -----------------------------------
-# S2MPG14 LDO4M (AVDD 3.3V) and LDO25M (DVDD 1.8V). Offsets from Google's
-# s2mpg14-register.h and confirmed against a live read of the part; see the
-# driver. Not mainline's sec-acpm/s2mps11, whose S2MPG10 map puts LDO4M where
-# this part keeps LDO25M.
-install -m444 "$src"/zumapro-s2mpg14-regulator.c drivers/regulator/zumapro-s2mpg14-regulator.c
-printf 'obj-y\t+= zumapro-s2mpg14-regulator.o\n' >> drivers/regulator/Makefile
+# S2MPG14 LDO4M (AVDD 3.3V) and LDO25M (DVDD 1.8V), through mainline's
+# sec-acpm MFD rather than a driver of our own. Both offsets come from
+# Google's s2mpg14-register.h and were confirmed against a live read of the
+# part before either was trusted. See the patcher for the three places the
+# zumapro-mainline tree gets this part wrong.
+python3 "$src"/sec-acpm-s2mpg14.py "$src"/s2mpg14.h
 
 # --- Touchscreen: Synaptics TouchComm over SPI ---------------------------
 # Mainline has no TouchComm driver at all (only RMI4, a different protocol).
@@ -127,6 +127,9 @@ python3 "$src"/zumapro-ufs-host.py
 
 # --- touch SPI: manual chip select, the way Google drives this part ---
 python3 "$src"/spi-manual-cs.py
+
+# --- pinctrl: bank data for this SoC, so gpp1/gpn0 are real GPIOs ---
+python3 "$src"/zuma-pinctrl.py "$src"/zuma-pinctrl-data.c
 
 # --- Watchdog: let Linux pet the one BL2 arms ----------------------------
 # "WD: enabled(60s, 1/3)" in the bootloader log, and nothing petted it, so a
