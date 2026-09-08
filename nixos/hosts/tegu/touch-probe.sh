@@ -256,11 +256,16 @@ else
 	# Keep stderr out of the hex. Last time spi-pipe was missing from the
 	# unit's PATH and its "command not found" got dumped as if it were the
 	# touchscreen's reply -- readable only because it happened to be ASCII.
-	if err=$(head -c 16 /dev/zero | spi-pipe -d "$dev" -s 10000000 2>&1 >/tmp/spi.bin); then
-		log "tegu-probe: spi read 16 bytes:$(od -An -tx1 < /tmp/spi.bin | tr -s " \n" " ")"
-	else
-		log "tegu-probe: spi-pipe failed: $err"
-	fi
+	# Report the exit status, never branch on it. spi-pipe returns 1 for a
+	# partial block -- 16 bytes against its 32-byte default -- so a perfectly
+	# good transfer looks like a failure, and this script threw the data away
+	# and printed "spi-pipe failed:" with an empty error for the first boot on
+	# which the bus actually worked. What distinguishes them is the output:
+	# bytes read means the transfer ran, nothing means it did not.
+	err=$(head -c 16 /dev/zero | spi-pipe -d "$dev" -s 10000000 2>&1 >/tmp/spi.bin)
+	rc=$?
+	log "tegu-probe: spi rc=$rc err=[$err]"
+	log "tegu-probe: spi read $(wc -c < /tmp/spi.bin) bytes:$(od -An -tx1 < /tmp/spi.bin | tr -s " \n" " ")"
 	log "tegu-probe: irq after transfer:  DAT=$(devmem $GPN0_DAT 32)"
 fi
 
