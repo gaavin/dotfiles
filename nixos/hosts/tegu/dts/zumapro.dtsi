@@ -549,6 +549,18 @@
 			#clock-cells = <1>;
 			mboxes = <&ap2apm_mailbox>;
 			shmem = <&apm_sram>;
+
+			/*
+			 * Read-only. The touch rails are S2MPG14 LDO25M and
+			 * LDO4M, but nothing here describes S2MPG14's register
+			 * map, and "samsung,s2mpg10-pmic" would install a
+			 * regmap-irq chip that writes mask registers at probe
+			 * -- wrong offsets, live PMIC, every rail on the board.
+			 * Measure the map first; see the driver.
+			 */
+			pmic_dump: pmic-dump {
+				compatible = "google,zumapro-pmic-dump";
+			};
 		};
 
 		cmu_hsi0: clock-controller@11000000 {

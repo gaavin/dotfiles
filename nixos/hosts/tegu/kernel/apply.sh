@@ -52,6 +52,14 @@ printf 'obj-y\t+= clk-zumapro-hsi2.o\n' >> drivers/clk/samsung/Makefile
 install -m444 "$src"/clk-zumapro-hsi0.c drivers/clk/samsung/clk-zumapro-hsi0.c
 printf 'obj-y\t+= clk-zumapro-hsi0.o\n' >> drivers/clk/samsung/Makefile
 
+# --- PMIC: read-only dump over ACPM --------------------------------------
+# ACPM is confirmed working, but the PMIC's register map is not: this phone
+# has S2MPG14/15 and mainline's sec-acpm.c only knows S2MPG10/11. Borrowing
+# that driver would install a regmap-irq chip, which writes mask registers at
+# probe -- into a live PMIC, at offsets from the wrong part. Read first.
+install -m444 "$src"/zumapro-pmic-dump.c drivers/soc/samsung/zumapro-pmic-dump.c
+printf 'obj-y\t+= zumapro-pmic-dump.o\n' >> drivers/soc/samsung/Makefile
+
 # --- UFS pins: restore what the bootloader parked ------------------------
 # Measured: the bootloader switches the UFS device's VCC rail off (gpp0[1])
 # and parks the reference clock output (gph5[0]) as a low GPIO. A bring-up
