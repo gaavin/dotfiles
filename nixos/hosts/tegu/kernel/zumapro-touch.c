@@ -144,6 +144,18 @@
 #define TOUCH_TAT_US_MIN	50
 #define TOUCH_TAT_US_MAX	100
 
+/*
+ * A read is not one transfer. syna_tcm_v1_read() reads, checks that byte 0 is
+ * the marker, and on anything else sleeps and reads the whole packet again --
+ * ten times before giving up (RD_RETRY_US_MIN..MAX). The device re-presents
+ * its message from the marker on the next read, and that retry is how the
+ * vendor resynchronises. This driver read once and called the result a
+ * failure.
+ */
+#define TOUCH_READ_RETRIES	10
+#define TOUCH_RETRY_US_MIN	5000
+#define TOUCH_RETRY_US_MAX	10000
+
 /* Command responses: the vendor polls every 10 ms up to 3 s. */
 #define TOUCH_RESP_POLL_MS	10
 #define TOUCH_RESP_TRIES	100
@@ -279,6 +291,42 @@ static int zumapro_touch_spi_read(struct zumapro_touch *ts, u8 *buf, size_t len)
 }
 
 /*
+ * Read until byte 0 is the marker, as syna_tcm_v1_read() does.
+ *
+ * Every message read goes through here -- header and continued read both --
+ * because the vendor's primitive is not "one transfer" but "read the packet,
+ * and if it did not begin at a marker, read it again". A single unsynchronised
+ * read is what produced a continued read beginning 53 33 39 30: "S390", which
+ * is part_number[0..3] of struct tcm_identification_info. The payload was
+ * arriving two bytes into itself, with the a5 03 that should have preceded it
+ * nowhere in the window -- a packet read from the wrong offset, which is
+ * precisely the condition this retry exists to clear.
+ */
+static int zumapro_touch_read_sync(struct zumapro_touch *ts, u8 *buf,
+				   size_t len)
+{
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < TOUCH_READ_RETRIES; i++) {
+		if (i)
+			usleep_range(TOUCH_RETRY_US_MIN, TOUCH_RETRY_US_MAX);
+
+		ret = zumapro_touch_spi_read(ts, buf, len);
+		if (ret)
+			return ret;
+
+		if (buf[0] == TCM_MARKER)
+			return 0;
+	}
+
+	dev_err(&ts->spi->dev, "no marker in %u reads of %zu bytes: %*ph\n",
+		TOUCH_READ_RETRIES, len, (int)min(len, (size_t)32), buf);
+
+	return -ENOMSG;
+}
+
+/*
  * Read one whole message. Returns the payload length, with the payload at
  * ts->rxbuf, or negative.
  *
@@ -300,12 +348,9 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 	u8 *buf = ts->msgbuf;
 	int ret, len;
 
-	ret = zumapro_touch_spi_read(ts, ts->hdr, TCM_HEADER_SIZE);
+	ret = zumapro_touch_read_sync(ts, ts->hdr, TCM_HEADER_SIZE);
 	if (ret)
 		return ret;
-
-	if (ts->hdr[0] != TCM_MARKER)
-		return -ENOMSG;
 
 	*code = ts->hdr[1];
 	len = ts->hdr[2] | (ts->hdr[3] << 8);
@@ -324,20 +369,18 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 	 */
 	usleep_range(TOUCH_TAT_US_MIN, TOUCH_TAT_US_MAX);
 
-	ret = zumapro_touch_spi_read(ts, buf, len + 3);
+	ret = zumapro_touch_read_sync(ts, buf, len + 3);
 	if (ret)
 		return ret;
 
 	/*
-	 * Only the status byte, because that is all the vendor checks:
-	 * syna_tcm_v1_continued_read() reads temp.buf[1] and never looks at
-	 * the marker. Being stricter than the device's own driver is how a
-	 * good message gets thrown away.
+	 * The marker is already guaranteed by the synchronising read, so this
+	 * is the status byte alone -- which is all syna_tcm_v1_continued_read()
+	 * checks once its own read has returned.
 	 */
 	if (buf[1] != STATUS_CONTINUED_READ) {
-		dev_err(&ts->spi->dev,
-			"continued read for %d bytes began %*ph\n",
-			len, 4, buf);
+		dev_err(&ts->spi->dev, "continued read for %d bytes: %*ph\n",
+			len, min(len + 3, 32), buf);
 		return -ENOMSG;
 	}
 
@@ -1114,6 +1157,21 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	 * device is willing to state.
 	 */
 	ts->max_objects = TCM_MAX_OBJECTS;
+
+	/*
+	 * If it never identified, everything below is a command to a part that
+	 * is not listening, and the replies -- three lots of a hundred polls --
+	 * are what leave it wedged and answering 0x00 to userspace fifteen
+	 * seconds later. Stop here instead, and leave it in a state the sysfs
+	 * instrument can still ask questions of.
+	 */
+	if (len < 0) {
+		dev_err(dev, "no identify; not commanding the part further\n");
+		ts->max_x = 1079;
+		ts->max_y = 2423;
+		goto input;
+	}
+
 	ret = zumapro_touch_request(ts, CMD_GET_APPLICATION_INFO, NULL, 0);
 	if (ret >= APP_INFO_MAX_OBJECTS + 2) {
 		ts->max_x = get_unaligned_le16(&ts->rxbuf[APP_INFO_MAX_X]);
@@ -1145,6 +1203,7 @@ static int zumapro_touch_probe(struct spi_device *spi)
 			ret);
 	}
 
+input:
 	ts->input = devm_input_allocate_device(dev);
 	if (!ts->input) {
 		ret = -ENOMEM;
@@ -1163,6 +1222,11 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	ret = input_register_device(ts->input);
 	if (ret)
 		goto err;
+
+	if (len < 0) {
+		dev_err(dev, "not polling; \"poll 1\" through tcm_xfer starts it\n");
+		return 0;
+	}
 
 	/* Ask for touch reports; without this the part stays quiet. */
 	code = REPORT_TOUCH;
