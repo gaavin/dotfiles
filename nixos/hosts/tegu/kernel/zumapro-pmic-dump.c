@@ -43,6 +43,8 @@
 #define TYPE_RTC		0x02
 #define TYPE_METER		0x0a
 
+/* exynos-acpm-pmic.c: ACPM_PMIC_BULK_MAX_COUNT, a hard cap of 8. */
+#define BULK_MAX		8
 #define DUMP_LEN		0x40
 
 static void zumapro_pmic_dump_type(struct acpm_handle *acpm, struct device *dev,
@@ -55,16 +57,20 @@ static void zumapro_pmic_dump_type(struct acpm_handle *acpm, struct device *dev,
 	memset(buf, 0, sizeof(buf));
 
 	/*
-	 * bulk_read in one go: a per-register loop would be 64 ACPM round
-	 * trips and the failure of any one of them would be hard to tell from
-	 * a register that genuinely reads zero.
+	 * In chunks of ACPM_PMIC_BULK_MAX_COUNT. exynos-acpm-pmic.c rejects
+	 * anything larger with -EINVAL before a single word reaches ACPM, so
+	 * asking for all 64 at once -- which this did at first -- says nothing
+	 * about the PMIC. Report per chunk: a failure partway through is a
+	 * different fact from a failure at offset 0.
 	 */
-	ret = pmic->bulk_read(acpm, PMIC_ACPM_CHAN, type, 0x00, speedy,
-			      DUMP_LEN, buf);
-	if (ret) {
-		dev_err(dev, "speedy%u %-6s: bulk_read failed: %d\n",
-			speedy, name, ret);
-		return;
+	for (i = 0; i < DUMP_LEN; i += BULK_MAX) {
+		ret = pmic->bulk_read(acpm, PMIC_ACPM_CHAN, type, i, speedy,
+				      BULK_MAX, buf + i);
+		if (ret) {
+			dev_err(dev, "speedy%u %-6s +0x%02x: bulk_read failed: %d\n",
+				speedy, name, i, ret);
+			return;
+		}
 	}
 
 	for (i = 0; i < DUMP_LEN; i += 16)
