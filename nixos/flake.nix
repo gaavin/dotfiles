@@ -115,6 +115,9 @@
               nixpkgs.overlays = [
                 claude-code.overlays.default
                 helium-browser.overlays.default
+                (final: _prev: {
+                  ghidra-cli = final.callPackage ./pkgs/ghidra-cli { };
+                })
               ];
             }
             {
@@ -184,6 +187,15 @@
           {
             nixos = self.nixosConfigurations.tegu;
           };
+
+      # Reverse-engineering tooling. Upstream ships no Nix packaging, so it
+      # lives in pkgs/ and is wrapped to use nixpkgs' Ghidra and JDK rather
+      # than the tarball its own `ghidra setup` would download.
+      packages.x86_64-linux.ghidra-cli =
+        nixpkgs.legacyPackages.x86_64-linux.callPackage ./pkgs/ghidra-cli { };
+
+      packages.aarch64-linux.ghidra-cli =
+        nixpkgs.legacyPackages.aarch64-linux.callPackage ./pkgs/ghidra-cli { };
 
       # From an x86_64 host the kernel is cross-compiled natively rather than
       # under QEMU user emulation, and the images are assembled natively too;
