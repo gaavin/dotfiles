@@ -84,21 +84,62 @@ framebuffer, UART console, watchdog, ACPM.
 - The part was silent because it is unpowered. Its rails are S2MPG14 LDO4M
   (AVDD 3.3 V, reg 0x2E) and LDO25M (DVDD 1.8 V, reg 0x43), enable at BIT(7).
   A live read had both correctly programmed and switched **off**.
-- **Just flashed, not yet tested:** `kernel/zumapro-s2mpg14-regulator.c`
-  (enables those two rails over ACPM) and `kernel/zumapro-touch.c` (Synaptics
-  TouchComm v1 over SPI). Nobody has seen this boot yet.
+- **The part is alive.** `kernel/zumapro-s2mpg14-regulator.c` enabled both
+  rails, `kernel/zumapro-touch.c` brought it out of reset, and TouchComm
+  traffic appeared on the bus. The whole chain is proven: CMU_HSI0 clock, SPI
+  controller, ACPM, PMIC rails, reset shim.
 
-### What to look for in the first log
+### Where it got to, and the open question
 
-	zumapro-s2mpg14-regulator ...: LDO4M: sel 60 -> 3300000 uV, on
-	zumapro-s2mpg14-regulator ...: LDO25M: sel 44 -> 1800000 uV, on
+Two logs in. The first showed the driver sliding out of sync with the message
+stream — `report 0x18, 512 bytes: a5 10 ff ...`, i.e. a marker and a
+REPORT_IDENTIFY *inside* a payload. That was a framing bug, not a confused
+device, and both causes are now fixed:
+
+1. `spi_read()` transmits zeroes, and on TouchComm a MOSI byte is a command
+   byte — so every read was feeding the part 0x00. Google fills TX with 0xff
+   for reads (`syna_tcm2_platform_spi.c`); the driver now does the same via an
+   explicit `spi_transfer`.
+2. An idle bus reads all 0xff, so a header of `ff ff ff ff` was taken as a
+   65535-byte message, clamped to 512, and printed as filler. Implausible
+   lengths now resynchronise instead.
+
+The second log is the important one. **The ATTN line proved the part is
+powered and behaving.**
+
 	zumapro-touch ...: rails up: vdd 1800000 uV, avdd 3300000 uV
-	zumapro-touch ...: IDENTIFY -> code 0x10, N bytes: ...
+	zumapro-touch ...: gpn0 DAT = 0x00000001        <- idles HIGH
+	zumapro-touch ...: irq sample 0..9: DAT = 0     <- LOW after reset
 
-`IDENTIFY -> code 0x10` is the touchscreen speaking for the first time. If
-instead you see `no answer to IDENTIFY`, the part is powered but silent and
-the next suspects are the reset shim and the TouchComm framing — not the SPI
-bus.
+That line had read 0 on every boot of the whole port, even with a pull-up
+enabled — an unpowered part clamping through its ESD diodes, not an
+assertion. It now idles high and asserts low after a reset, which is a live
+TouchComm part saying "message waiting". That question is closed; so is
+`DIV_CLK_USI2 = 0x09` (the HSI0 driver programming the real divider) and
+`CS_REG = 0x23` (transfers ran).
+
+It still said `no answer to IDENTIFY (-42)`, and that was **this driver's read
+logic, not the hardware**. Google's core polls for a command response every
+`CMD_RESPONSE_POLLING_DELAY_MS` (10 ms) up to `CMD_RESPONSE_TIMEOUT_MS`
+(3000 ms) and retries a wrong-marker header with a 5–10 ms sleep; this driver
+read *once*, 20 ms after the command, and called the part silent. Fixed and
+**flashed but not yet seen on hardware**:
+
+- `zumapro_touch_read_wait()` retries 100 × 10 ms, matching the vendor timeout.
+- The poll loop is gated on ATTN (`zumapro_touch_attn()`, gpn0 DAT read
+  directly at `0x15060000` + 0x04, active low) so the bus is only touched when
+  a message is actually waiting.
+- An IDENTIFY timeout no longer fails probe. The bus and rails are known good,
+  and failing took the only instrument off the device — which is why the last
+  log went quiet 4.8 s in.
+
+**Next log to read.** Want a clean `IDENTIFY -> code 0x10` with a short,
+non-0xff payload — that is the part's real identity, and the point where
+decoding touch reports becomes reading data instead of guessing. If framing is
+still off, compare against `syna_tcm_v1_read()` in
+`/tmp/tegu-work/synaptics/syna_c10/tcm/synaptics_touchcom_core_v1.c`;
+candidates not yet examined are the bus turn-around delay (`TAT_DELAY_US`) and
+whether header and payload must share one CS assertion.
 
 ### Known-incomplete in the touch driver
 

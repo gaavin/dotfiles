@@ -65,6 +65,28 @@
 #define TOUCH_POLL_MS		16
 
 /*
+ * Google polls for a command response every CMD_RESPONSE_POLLING_DELAY_MS up
+ * to CMD_RESPONSE_TIMEOUT_MS, and retries a header whose marker is wrong with
+ * a 5-10 ms sleep between tries (synaptics_touchcom_core_v1.c). A single read
+ * 20 ms after the command -- which is what this driver did first -- is simply
+ * too early, and reported the part as silent when it was not.
+ */
+#define TOUCH_RESP_POLL_MS	10
+#define TOUCH_RESP_TRIES	100
+
+/*
+ * The ATTN line, gpn0-0 in the alive block, active low. No pinctrl driver, so
+ * it is read directly like the reset pad. Measured: it idles high on a
+ * powered part and goes low when a message is waiting -- for the whole of
+ * this port until the rails came up it read 0 through a pull-up, which is an
+ * unpowered part clamping through its ESD diodes, not an assertion.
+ */
+#define ALIVE_BASE		0x15060000
+#define ALIVE_SIZE		0x10
+#define GPN0_DAT		0x04
+#define GPN0_ATTN_PIN		0
+
+/*
  * peric0's GPIO block, and gpp1 within it. Banks are 0x20 apart and gpp1 is
  * the second, so CON is +0x20 and DAT +0x24; each pin takes 4 bits of CON,
  * so pin 1 is bits [7:4], and 1 there means output. The touch reset is
@@ -83,6 +105,7 @@ struct zumapro_touch {
 	struct regulator *avdd;
 	struct delayed_work poll;
 	void __iomem *peric0;
+	void __iomem *alive;
 	u8 rxbuf[512];
 	u8 txfill[512];		/* all 0xff; see zumapro_touch_spi_read() */
 };
@@ -189,12 +212,43 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 	return len;
 }
 
+/* True when the part has a message waiting. Assume yes if unmapped. */
+static bool zumapro_touch_attn(struct zumapro_touch *ts)
+{
+	if (!ts->alive)
+		return true;
+
+	return !(readl(ts->alive + GPN0_DAT) & BIT(GPN0_ATTN_PIN));
+}
+
+/*
+ * Wait for a message, retrying as Google's core does rather than reading once
+ * and declaring the part silent.
+ */
+static int zumapro_touch_read_wait(struct zumapro_touch *ts, u8 *code)
+{
+	int ret, i;
+
+	for (i = 0; i < TOUCH_RESP_TRIES; i++) {
+		ret = zumapro_touch_read(ts, code);
+		if (ret != -ENOMSG)
+			return ret;
+
+		msleep(TOUCH_RESP_POLL_MS);
+	}
+
+	return -ETIMEDOUT;
+}
+
 static void zumapro_touch_poll(struct work_struct *work)
 {
 	struct zumapro_touch *ts =
 		container_of(work, struct zumapro_touch, poll.work);
 	u8 code = 0;
 	int len;
+
+	if (!zumapro_touch_attn(ts))
+		goto again;
 
 	len = zumapro_touch_read(ts, &code);
 	if (len >= 0) {
@@ -208,6 +262,7 @@ static void zumapro_touch_poll(struct work_struct *work)
 			code, len, min(len, 16), ts->rxbuf);
 	}
 
+again:
 	schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
 }
 
@@ -253,6 +308,10 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	if (!ts->peric0)
 		dev_err(dev, "no peric0 mapping; reset will not be driven\n");
 
+	ts->alive = devm_ioremap(dev, ALIVE_BASE, ALIVE_SIZE);
+	if (!ts->alive)
+		dev_err(dev, "no alive mapping; polling without ATTN\n");
+
 	zumapro_touch_reset(ts);
 
 	ret = zumapro_touch_cmd(ts, CMD_IDENTIFY, NULL, 0);
@@ -261,16 +320,21 @@ static int zumapro_touch_probe(struct spi_device *spi)
 		goto err;
 	}
 
-	msleep(20);
+	dev_err(dev, "attn after reset: %s\n",
+		zumapro_touch_attn(ts) ? "asserted" : "idle");
 
-	len = zumapro_touch_read(ts, &code);
-	if (len < 0) {
-		dev_err(dev, "no answer to IDENTIFY (%d); part silent\n", len);
-		goto err;
-	}
-
-	dev_err(dev, "IDENTIFY -> code 0x%02x, %d bytes: %*ph\n",
-		code, len, min(len, 24), ts->rxbuf);
+	len = zumapro_touch_read_wait(ts, &code);
+	if (len < 0)
+		/*
+		 * Not fatal. The bus and the rails are known good, so keep the
+		 * poll loop running and report what does arrive -- failing the
+		 * probe here would take the only instrument off the device.
+		 */
+		dev_err(dev, "no answer to IDENTIFY (%d); polling anyway\n",
+			len);
+	else
+		dev_err(dev, "IDENTIFY -> code 0x%02x, %d bytes: %*ph\n",
+			code, len, min(len, 24), ts->rxbuf);
 
 	ts->input = devm_input_allocate_device(dev);
 	if (!ts->input) {
