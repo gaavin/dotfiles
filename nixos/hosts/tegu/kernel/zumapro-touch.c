@@ -84,6 +84,7 @@ struct zumapro_touch {
 	struct delayed_work poll;
 	void __iomem *peric0;
 	u8 rxbuf[512];
+	u8 txfill[512];		/* all 0xff; see zumapro_touch_spi_read() */
 };
 
 static void zumapro_touch_reset(struct zumapro_touch *ts)
@@ -123,17 +124,49 @@ static int zumapro_touch_cmd(struct zumapro_touch *ts, u8 cmd,
 }
 
 /*
- * Read one message. Returns the payload length, or negative. The marker is
- * the only thing that distinguishes a real message from an idle bus, which
- * on this hardware reads as all zeroes -- so a missing marker is reported as
- * -ENOMSG rather than treated as an error worth logging every poll.
+ * Clock bytes in while holding MOSI high.
+ *
+ * This is not spi_read(). spi_read() sends zeroes, and on TouchComm a byte on
+ * MOSI is a command byte -- so reading with it feeds the device a stream of
+ * 0x00 and walks the message framing off its boundaries. The first log from
+ * this driver showed exactly that: 0xa5 markers and a 0x10 REPORT_IDENTIFY
+ * appearing *inside* what had been read as payload. Google's platform layer
+ * fills its TX buffer with 0xff for every read (syna_tcm2_platform_spi.c),
+ * and so does this.
+ */
+static int zumapro_touch_spi_read(struct zumapro_touch *ts, u8 *buf, size_t len)
+{
+	struct spi_transfer xfer = {
+		.tx_buf = ts->txfill,
+		.rx_buf = buf,
+		.len = len,
+	};
+	struct spi_message msg;
+
+	if (len > sizeof(ts->txfill))
+		return -EINVAL;
+
+	spi_message_init(&msg);
+	spi_message_add_tail(&xfer, &msg);
+
+	return spi_sync(ts->spi, &msg);
+}
+
+/*
+ * Read one message. Returns the payload length, or negative.
+ *
+ * An idle TouchComm bus reads as all 0xff, so a header of ff ff ff ff is
+ * "nothing to say" rather than a message of 65535 bytes -- taking that length
+ * at face value is what produced 512-byte dumps of filler. Both that and a
+ * missing marker are reported as -ENOMSG, which the poll loop ignores
+ * silently; anything else would flood a receive-only UART every 16 ms.
  */
 static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 {
 	u8 hdr[TCM_HEADER_SIZE];
 	int ret, len;
 
-	ret = spi_read(ts->spi, hdr, sizeof(hdr));
+	ret = zumapro_touch_spi_read(ts, hdr, sizeof(hdr));
 	if (ret)
 		return ret;
 
@@ -142,11 +175,13 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 
 	*code = hdr[1];
 	len = hdr[2] | (hdr[3] << 8);
+
+	/* Filler, or a length this driver has no buffer for: resynchronise. */
 	if (len > sizeof(ts->rxbuf))
-		len = sizeof(ts->rxbuf);
+		return -ENOMSG;
 
 	if (len) {
-		ret = spi_read(ts->spi, ts->rxbuf, len);
+		ret = zumapro_touch_spi_read(ts, ts->rxbuf, len);
 		if (ret)
 			return ret;
 	}
@@ -189,6 +224,7 @@ static int zumapro_touch_probe(struct spi_device *spi)
 
 	ts->spi = spi;
 	spi_set_drvdata(spi, ts);
+	memset(ts->txfill, 0xff, sizeof(ts->txfill));
 
 	ts->vdd = devm_regulator_get(dev, "vdd");
 	if (IS_ERR(ts->vdd))
