@@ -18,6 +18,9 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/soc/samsung,exynos-usi.h>
 
+/* Same directory, and this SoC's pin controller is gs101's. */
+#include "gs101-pinctrl.h"
+
 / {
 	compatible = "google,zumapro";
 	#address-cells = <2>;
@@ -644,6 +647,29 @@
 				compatible = "samsung,exynos7-wakeup-eint";
 			};
 
+			/*
+			 * The ATTN line, exactly as Google configures it in
+			 * zuma-tegu-common-touch.dtsi (&pinctrl_1, ts-irq).
+			 *
+			 * This matters more than a pin-config usually does.
+			 * The bootloader leaves gpn0-0 with a pull-down --
+			 * PUD reads 0x1 for that pin, measured on this phone
+			 * -- and ATTN is active low, so the line reads
+			 * asserted whenever nothing drives it: rails off,
+			 * reset held, or the part still booting. A driver
+			 * that gates its reads on the level then reads a part
+			 * that has said nothing. Google clears the pull, and
+			 * with it cleared the level means what it says.
+			 *
+			 * Their drive-strength (ZUMA_PIN_DRV_X1) is not
+			 * copied: this pin is an input, and this port has no
+			 * verified zumapro drive-strength encoding.
+			 */
+			ts_irq_pins: ts-irq-pins {
+				samsung,pins = "gpn0-0";
+				samsung,pin-pud = <GS101_PIN_PULL_NONE>;
+			};
+
 			gpn0: gpn0-gpio-bank {
 				gpio-controller;
 				#gpio-cells = <2>;
@@ -737,6 +763,18 @@
 				interrupt-controller;
 				#interrupt-cells = <2>;
 			};
+			/*
+			 * Touch reset, from the same file (&pinctrl_11,
+			 * ts-reset). Google also pins the power-down state
+			 * (con-pdn PREV, pud-pdn NONE) so the part is not
+			 * reset by a suspend; that is left out until this
+			 * port suspends at all and can test it.
+			 */
+			ts_reset_pins: ts-reset-pins {
+				samsung,pins = "gpp1-1";
+				samsung,pin-pud = <GS101_PIN_PULL_NONE>;
+			};
+
 			gpp1: gpp1-gpio-bank {
 				gpio-controller;
 				#gpio-cells = <2>;
@@ -932,6 +970,14 @@
 					 * which could drive a pad but never
 					 * supply an interrupt.
 					 */
+					/*
+					 * Applied by the driver core before
+					 * probe runs, so ATTN has no pull by
+					 * the time the driver first reads it.
+					 */
+					pinctrl-names = "default";
+					pinctrl-0 = <&ts_irq_pins &ts_reset_pins>;
+
 					reset-gpios = <&gpp1 1 GPIO_ACTIVE_LOW>;
 					attn-gpios = <&gpn0 0 GPIO_ACTIVE_LOW>;
 					/*

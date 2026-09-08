@@ -115,11 +115,26 @@
 /*
  * How long to wait for the part after reset. Google's reset-delay-ms of 50 is
  * not enough on its own: measured here, reads return 0x00 -- the part driving
- * MISO low while it boots -- for well past that. Rather than pick a bigger
- * magic number, poll until it produces a real marker.
+ * MISO low while it boots -- for well past that.
+ *
+ * The line is watched for TOUCH_BOOT_TRACE_MS without touching the bus, then
+ * read TOUCH_BOOT_READS times at TOUCH_BOOT_READ_MS apart. Reads are few and
+ * far apart on purpose: MOSI is held high through one, every MOSI byte is a
+ * command byte to this part, and a hundred blind retries have wedged it here
+ * before.
  */
-#define TOUCH_BOOT_TRIES	100
 #define TOUCH_BOOT_POLL_MS	10
+#define TOUCH_BOOT_TRACE_MS	500
+#define TOUCH_BOOT_READS	8
+#define TOUCH_BOOT_READ_MS	50
+
+/*
+ * Consecutive markerless reads before the poll loop gives up. ATTN can read
+ * asserted with no message behind it (see zumapro_touch_wait_boot), and a
+ * poll loop that believes it then clocks 0xff at the part every 16 ms for as
+ * long as the machine is up.
+ */
+#define TOUCH_POLL_MAX_BAD	64
 
 /* Command responses: the vendor polls every 10 ms up to 3 s. */
 #define TOUCH_RESP_POLL_MS	10
@@ -172,7 +187,9 @@ struct zumapro_touch {
 
 	u8 hdr[TCM_HEADER_SIZE];	/* last header read, for diagnostics */
 	unsigned int rxlen;		/* bytes the last sysfs read returned */
+	unsigned int badreads;		/* consecutive markerless polled reads */
 	u32 speed_hz;			/* 0 = the device's own maximum */
+	bool drive_mosi;		/* transmit 0xff through reads */
 	bool polling;
 
 	/* What the part told us about itself. */
@@ -216,17 +233,29 @@ static int zumapro_touch_cmd(struct zumapro_touch *ts, u8 cmd,
 }
 
 /*
- * Clock bytes in while holding MOSI high.
+ * Clock bytes in without transmitting anything.
  *
- * This is not spi_read(). spi_read() sends zeroes, and on TouchComm a byte on
- * MOSI is a command byte -- so reading with it feeds the device a stream of
- * 0x00 and walks the message framing off its boundaries. Google's platform
- * layer fills its TX buffer with 0xff for every read, and so does this.
+ * This is not spi_read(), which sends zeroes, and it is no longer a buffer of
+ * 0xff either. Both put bytes on MOSI, and on TouchComm every MOSI byte is a
+ * command byte, so a read that transmits walks the part's framing and -- the
+ * driver has seen this -- eventually leaves it answering nothing at all.
+ *
+ * Google's platform layer does fill 0xff, but only on the path it takes when
+ * synaptics,spi-byte-delay-us is nonzero. tegu sets it to 0, so the read this
+ * part actually gets from Android is syna_spi_read()'s other branch: one
+ * transfer with tx_buf = NULL. That is not a buffer of zeroes. spi-s3c64xx
+ * only sets CH_TXCH_ON when tx_buf is non-NULL, and s3c64xx never asks the
+ * core for a dummy TX buffer, so the transmit channel stays off and MOSI is
+ * not driven for the whole read. The clock still runs and data still shifts
+ * in: the RX-only path sets PACKET_CNT itself, exactly so it can generate the
+ * clocks with no TX.
+ *
+ * So: tx_buf = NULL, and read what the part is saying without saying anything.
  */
 static int zumapro_touch_spi_read(struct zumapro_touch *ts, u8 *buf, size_t len)
 {
 	struct spi_transfer xfer = {
-		.tx_buf = ts->txfill,
+		.tx_buf = ts->drive_mosi ? ts->txfill : NULL,
 		.rx_buf = buf,
 		.len = len,
 	};
@@ -324,15 +353,111 @@ static int zumapro_touch_read_attn(struct zumapro_touch *ts, u8 *code,
 				   unsigned int tries)
 {
 	unsigned int i;
+	int ret = -ETIMEDOUT;
 
 	for (i = 0; i < tries; i++) {
-		if (zumapro_touch_attn(ts))
-			return zumapro_touch_read(ts, code);
+		if (zumapro_touch_attn(ts)) {
+			ret = zumapro_touch_read(ts, code);
+
+			/*
+			 * A read that produced no marker is not an answer and
+			 * not a failure of the wait: ATTN reads asserted
+			 * whenever nothing drives it, so this is the ordinary
+			 * shape of a part that is not talking yet. Keep
+			 * waiting. Anything else -- a message, a bus error --
+			 * ends the wait.
+			 */
+			if (ret != -ENOMSG)
+				return ret;
+		}
 
 		msleep(TOUCH_RESP_POLL_MS);
 	}
 
-	return -ETIMEDOUT;
+	return ret;
+}
+
+/*
+ * Watch ATTN across the part's boot, then read what it queued.
+ *
+ * ATTN asserted is necessary but not sufficient evidence of a message. The
+ * line is level-low and only the part drives it, so it reads asserted whenever
+ * the part does not: while the rails are off, while reset is held, and for
+ * however long it takes to boot after reset is released. That is what "part
+ * did not report in after reset (-42)" was -- the wait read on the first
+ * assert, twelve milliseconds after reset release, into a part that had not
+ * booted, and called the first header it saw a lost message.
+ *
+ * The device tree now clears the bootloader's pull-down on gpn0-0, as Google's
+ * board file does, so the level is at least the part's own doing and not a
+ * resistor's. Nothing drives it high until the part does.
+ *
+ * So sample the line first and say what it does, without putting a single
+ * byte on the bus, and only then read. Every header that is not a marker is
+ * logged: what comes back off an idle bus here is the one measurement that
+ * says whether the part is mute, still booting, or talking out of frame.
+ */
+static int zumapro_touch_wait_boot(struct zumapro_touch *ts, u8 *code)
+{
+	struct device *dev = &ts->spi->dev;
+	unsigned int ms, i, edges = 0;
+	int ret = -ETIMEDOUT;
+	bool attn, last;
+
+	last = zumapro_touch_attn(ts);
+	dev_info(dev, "boot: attn %s at reset release\n",
+		 last ? "asserted" : "idle");
+
+	/*
+	 * One read here, before anything else, because this is where the old
+	 * unconditional wait read -- and where it used to come back with
+	 * a5 10 ... from a part that had never been reset by Linux at all.
+	 * Whether that still happens separates "the part is slow to boot"
+	 * from "the part stopped answering when the shims came out".
+	 */
+	if (last) {
+		ret = zumapro_touch_read(ts, code);
+		if (ret != -ENOMSG)
+			return ret;
+
+		dev_info(dev, "boot: first read header %*ph\n",
+			 TCM_HEADER_SIZE, ts->hdr);
+	}
+
+	for (ms = TOUCH_BOOT_POLL_MS; ms <= TOUCH_BOOT_TRACE_MS;
+	     ms += TOUCH_BOOT_POLL_MS) {
+		msleep(TOUCH_BOOT_POLL_MS);
+
+		attn = zumapro_touch_attn(ts);
+		if (attn == last)
+			continue;
+
+		dev_info(dev, "boot: attn %s at %u ms\n",
+			 attn ? "asserted" : "idle", ms);
+		last = attn;
+		edges++;
+	}
+
+	/* Say so even when nothing happened; silence is not a measurement. */
+	dev_info(dev, "boot: attn %s after %u ms, %u transitions\n",
+		 last ? "asserted" : "idle", TOUCH_BOOT_TRACE_MS, edges);
+
+	for (i = 0; i < TOUCH_BOOT_READS; i++) {
+		if (!zumapro_touch_attn(ts)) {
+			dev_info(dev, "boot: read %u skipped, attn idle\n", i);
+		} else {
+			ret = zumapro_touch_read(ts, code);
+			if (ret != -ENOMSG)
+				return ret;
+
+			dev_info(dev, "boot: read %u header %*ph\n",
+				 i, TCM_HEADER_SIZE, ts->hdr);
+		}
+
+		msleep(TOUCH_BOOT_READ_MS);
+	}
+
+	return ret;
 }
 
 /*
@@ -647,10 +772,54 @@ static ssize_t tcm_xfer_store(struct device *dev, struct device_attribute *attr,
 
 	if (sscanf(buf, "poll %u", &val) == 1) {
 		ts->polling = !!val;
-		if (ts->polling)
+		if (ts->polling) {
+			ts->badreads = 0;
 			schedule_delayed_work(&ts->poll, 0);
-		else
+		} else {
 			cancel_delayed_work(&ts->poll);
+		}
+		return count;
+	}
+
+	/*
+	 * The feedback tap the controller samples MISO on. Mainline writes it
+	 * once from samsung,spi-feedback-delay, which defaults to 0, and it is
+	 * the standing suspect for headers that start right and degrade: the
+	 * loopback that proved this bus never leaves the controller, so it has
+	 * no round trip for a tap to compensate.
+	 *
+	 * Settable here so all four can be swept from userspace against a real
+	 * device without a rebuild. Once one of them reads a clean header, put
+	 * it in the device tree and this goes away.
+	 */
+	if (sscanf(buf, "fb %u", &val) == 1) {
+		if (!ts->spiregs)
+			return -ENODEV;
+
+		if (val > 3)
+			return -EINVAL;
+
+		writel(val, ts->spiregs + SPI_FB_CLK);
+		dev_err(dev, "fb %u -> %08x\n", val,
+			readl(ts->spiregs + SPI_FB_CLK));
+		return count;
+	}
+
+	/*
+	 * The ATTN line, both ways round: the level on the pad and what the
+	 * driver concludes from it. The poll loop is gated on this, and it has
+	 * never been validated against a part that was known to be talking.
+	 */
+	if (sscanf(buf, "mosi %u", &val) == 1) {
+		ts->drive_mosi = !!val;
+		return count;
+	}
+
+	if (sysfs_streq(buf, "attn")) {
+		int raw = ts->attn ? gpiod_get_raw_value_cansleep(ts->attn) : -1;
+
+		dev_err(dev, "attn: raw %d, %s\n", raw,
+			zumapro_touch_attn(ts) ? "asserted" : "idle");
 		return count;
 	}
 
@@ -798,8 +967,27 @@ static void zumapro_touch_poll(struct work_struct *work)
 		goto again;
 
 	len = zumapro_touch_read(ts, &code);
+	if (len == -ENOMSG) {
+		/*
+		 * ATTN says a message is waiting and there is none. Stop
+		 * before this becomes a 0xff every 16 ms for the life of the
+		 * machine; "poll 1" through sysfs starts it again.
+		 */
+		if (++ts->badreads >= TOUCH_POLL_MAX_BAD) {
+			dev_err(&ts->spi->dev,
+				"attn asserted but no marker in %u reads; polling stopped\n",
+				ts->badreads);
+			ts->polling = false;
+			return;
+		}
+
+		goto again;
+	}
+
 	if (len < 0)
 		goto again;
+
+	ts->badreads = 0;
 
 	if (code == REPORT_TOUCH && ts->config_len)
 		zumapro_touch_report(ts, ts->rxbuf, len);
@@ -878,7 +1066,7 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	 * wait for that rather than for a fixed delay -- reset-delay-ms of 50
 	 * is measurably not long enough, and reads return 0x00 while it boots.
 	 */
-	len = zumapro_touch_read_attn(ts, &code, TOUCH_BOOT_TRIES);
+	len = zumapro_touch_wait_boot(ts, &code);
 
 	if (len < 0) {
 		dev_err(dev, "part did not report in after reset (%d)\n", len);
