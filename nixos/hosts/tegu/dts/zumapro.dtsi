@@ -166,22 +166,26 @@
 	};
 
 	/*
-	 * The 400 MHz that CMU_TOP feeds PERIC1_IP with, computed from the CMU
-	 * as the bootloader leaves it and read on hardware:
+	 * What CMU_TOP feeds HSI0_PERI with, read off the hardware rather than
+	 * assumed:
 	 *
-	 *   CMU_TOP PERIC1_IP mux = 1 -> PLL_SHARED2_D2, div = 0.
-	 *   pll_shared2_rate_table[] is 800 MHz and the D2 tap halves it.
+	 *   PLL_CON3_PLL_SHARED2 (0x260401cc) = 0xa0820400: enabled, stable,
+	 *   M = 130, P = 4, S = 0, so 24576000 * 130 / 4 = 798720000 and the
+	 *   D2 tap halves it to 399360000. The round 400 MHz this node used to
+	 *   claim was never measured.
+	 *   CMU_TOP HSI0_PERI mux (0x26041098) = 1 -> PLL_SHARED2_D2, div = 0.
+	 *   CMU_HSI0 PERI_USER (0x11000680) = 0x10 -> that feed, not OSCCLK.
+	 *   CMU_HSI0 MUX_CLK_HSI0_USI2 (0x1100101c) = 0 -> PERI_USER.
 	 *
-	 * It is the parent of the USI11 divider in cmu_peric1, not the SPI's
-	 * clock directly: spi-s3c64xx sets the bit rate with clk_set_rate(),
-	 * because gs101's port config sets clk_from_cmu and the controller has
-	 * no prescaler of its own.
+	 * It is the parent of the USI2 divider in cmu_hsi0, not the SPI's bit
+	 * clock: spi-s3c64xx sets that with clk_set_rate(), because gs101's
+	 * port config sets clk_from_cmu and the controller has no prescaler.
 	 */
-	usi_touch_src: clock-5 {
+	hsi0_peri: clock-5 {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <400000000>;
-		clock-output-names = "usi-touch-src";
+		clock-frequency = <399360000>;
+		clock-output-names = "hsi0-peri";
 	};
 
 	pmu {
@@ -477,14 +481,20 @@
 		 * its CS_REG went 0 -> 1, S3C64XX_SPI_CS_SIG_INACT -- so this
 		 * address is confirmed, not inferred.
 		 */
-		cmu_peric1: clock-controller@10c00000 {
-			compatible = "google,zumapro-cmu-peric1";
-			reg = <0x10c00000 0x8000>;
-			clocks = <&usi_touch_src>;
+		cmu_hsi0: clock-controller@11000000 {
+			compatible = "google,zumapro-cmu-hsi0";
+			reg = <0x11000000 0x8000>;
+			clocks = <&hsi0_peri>;
 			#clock-cells = <1>;
 		};
 
-		sysreg_peric_usi: syscon@11020000 {
+		/*
+		 * Named for what the stock tree calls it. Only +0x101c, this
+		 * USI's mode select, is known to be backed: a blind read of
+		 * +0x0014 upwards faulted, and +0x1000 raised a fatal SError.
+		 * Do not scan this region.
+		 */
+		sysreg_hsi0: syscon@11020000 {
 			compatible = "google,zumapro-sysreg", "syscon";
 			reg = <0x11020000 0x10000>;
 		};
@@ -503,9 +513,9 @@
 			ranges;
 			#address-cells = <1>;
 			#size-cells = <1>;
-			clocks = <&cmu_peric1 0>, <&cmu_peric1 1>;
+			clocks = <&cmu_hsi0 0>, <&cmu_hsi0 1>;
 			clock-names = "pclk", "ipclk";
-			samsung,sysreg = <&sysreg_peric_usi 0x101c>;
+			samsung,sysreg = <&sysreg_hsi0 0x101c>;
 			samsung,mode = <USI_V2_SPI>;
 
 			spi_touch: spi@111d0000 {
@@ -513,7 +523,7 @@
 				reg = <0x111d0000 0x30>;
 				#address-cells = <1>;
 				#size-cells = <0>;
-				clocks = <&cmu_peric1 0>, <&cmu_peric1 1>;
+				clocks = <&cmu_hsi0 0>, <&cmu_hsi0 1>;
 				clock-names = "spi", "spi_busclk0";
 				interrupts = <GIC_SPI 408 IRQ_TYPE_LEVEL_HIGH 0>;
 				/*

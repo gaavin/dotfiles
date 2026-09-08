@@ -220,10 +220,16 @@ in
       RemainAfterExit = true;
       ExecStart = "${pkgs.runtimeShell} ${./tegu-cmd.sh}";
     };
+    # systemd.services.<name>.path REPLACES PATH rather than extending it, so
+    # everything a probe script reaches has to be listed. NixOS prepends
+    # coreutils/findutils/gnugrep/gnused itself, which is why od and tr work
+    # here without being named. This has cost three rounds: a bare "sh", then
+    # spi-pipe, then gzip once the command channel started compressing.
     path = [
       devmem
       pkgs.spi-tools
       pkgs.util-linux
+      pkgs.gzip
     ];
   };
 
