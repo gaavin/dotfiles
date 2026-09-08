@@ -661,6 +661,20 @@
 					spi-max-frequency = <10000000>;
 
 					/*
+					 * Google's controller-data for this
+					 * part sets cs-clock-delay = <2>,
+					 * which their driver applies as a 2 us
+					 * wait between asserting chip select
+					 * and the first clock -- but only in
+					 * manual chip-select mode, which is
+					 * what samsung,spi-chip-select-mode =
+					 * <0> selects. Mainline has no such
+					 * property, so the delay is expressed
+					 * the standard way instead.
+					 */
+					spi-cs-setup-delay-ns = <2000>;
+
+					/*
 					 * Synaptics TouchComm. The driver
 					 * enables these itself and waits
 					 * Google's 200 ms power-delay-ms

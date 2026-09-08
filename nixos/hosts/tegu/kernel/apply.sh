@@ -125,6 +125,9 @@ python3 "$src"/hcs-trace.py
 # this SoC; PRDT_BYTE_GRAN is the one that misplaces every response UPIU.
 python3 "$src"/zumapro-ufs-host.py
 
+# --- touch SPI: manual chip select, the way Google drives this part ---
+python3 "$src"/spi-manual-cs.py
+
 # --- Watchdog: let Linux pet the one BL2 arms ----------------------------
 # "WD: enabled(60s, 1/3)" in the bootloader log, and nothing petted it, so a
 # working system was reset on a timer. Adds a variant with no PMU access,
