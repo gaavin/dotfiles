@@ -89,6 +89,7 @@ static int zumapro_cmu_hsi0_probe(struct platform_device *pdev)
 	const char *parent;
 	void __iomem *base;
 	void __iomem *top;
+	struct resource *res;
 	struct clk_hw *hw;
 
 	base = devm_platform_ioremap_resource(pdev, 0);
@@ -99,9 +100,22 @@ static int zumapro_cmu_hsi0_probe(struct platform_device *pdev)
 	if (!parent)
 		return dev_err_probe(dev, -EINVAL, "no parent clock\n");
 
-	top = devm_platform_ioremap_resource(pdev, 1);
-	if (IS_ERR(top))
-		return dev_err_probe(dev, PTR_ERR(top), "no CMU_TOP divider\n");
+	/*
+	 * Map, do not claim. clk-zumapro-hsi2.c already requests CMU_TOP as
+	 * 0x26040000 + 0x8000 for the UFS path, and 0x1890 is inside it, so
+	 * devm_platform_ioremap_resource() here returns -EBUSY and takes the
+	 * whole clock controller down with it -- which is exactly what it did:
+	 * "supplier 11000000.clock-controller not ready", no SPI, no touch.
+	 * Two drivers touching disjoint registers of one CMU is the normal
+	 * shape of this SoC; neither should own the window.
+	 */
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	if (!res)
+		return dev_err_probe(dev, -EINVAL, "no CMU_TOP divider reg\n");
+
+	top = devm_ioremap(dev, res->start, resource_size(res));
+	if (!top)
+		return dev_err_probe(dev, -ENOMEM, "cannot map CMU_TOP\n");
 
 	data = devm_kzalloc(dev, struct_size(data, hws, 2), GFP_KERNEL);
 	if (!data)
