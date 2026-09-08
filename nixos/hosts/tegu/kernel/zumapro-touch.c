@@ -119,10 +119,32 @@
 #define TOUCH_RESP_POLL_MS	10
 #define TOUCH_RESP_TRIES	100
 
-/* One message read in one chip select: header plus the largest payload. */
-#define TCM_MSG_MAX		512
+/*
+ * One message read in one chip select: header plus payload, in a single
+ * transfer. TCM_READ_MAX is what actually goes on the wire, and every buffer
+ * involved has to be at least that big -- reading header+payload out of a
+ * txfill sized for the payload alone made spi_read() reject every transfer
+ * with -EINVAL before it reached the bus.
+ *
+ * 256 payload bytes covers everything this part sends: identify is 24, the
+ * application info 32, the report config a few dozen, a touch report under a
+ * hundred. At 9.984 MHz a full read is ~208 us against a 16 ms poll.
+ */
+#define TCM_PAYLOAD_MAX		256
+#define TCM_READ_MAX		(TCM_HEADER_SIZE + TCM_PAYLOAD_MAX)
 #define TCM_CONFIG_MAX		128
 #define TCM_MAX_OBJECTS		10
+
+/*
+ * Offsets into struct tcm_application_info. Eight u16 fields, then
+ * customer_config_id[MAX_SIZE_CONFIG_ID] -- and that constant is 16, not the
+ * 10 this driver first assumed, which put max_x six bytes early, inside the
+ * config id. Wrong offsets here do not fail loudly; they yield screen bounds
+ * that look like plausible numbers.
+ */
+#define APP_INFO_MAX_X		32
+#define APP_INFO_MAX_Y		34
+#define APP_INFO_MAX_OBJECTS	36
 
 /*
  * The ATTN line, gpn0-0, active low, read directly for want of a pinctrl
@@ -182,8 +204,9 @@ struct zumapro_touch {
 	unsigned int max_x;
 	unsigned int max_y;
 
-	u8 rxbuf[TCM_MSG_MAX];
-	u8 txfill[TCM_MSG_MAX];		/* all 0xff; see zumapro_touch_spi_read() */
+	u8 msgbuf[TCM_READ_MAX];	/* one whole message, header included */
+	u8 rxbuf[TCM_PAYLOAD_MAX];	/* its payload, and sysfs reads */
+	u8 txfill[TCM_READ_MAX];	/* all 0xff; see zumapro_touch_spi_read() */
 };
 
 static void zumapro_touch_reset(struct zumapro_touch *ts)
@@ -259,10 +282,10 @@ static int zumapro_touch_spi_read(struct zumapro_touch *ts, u8 *buf, size_t len)
  */
 static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 {
-	u8 buf[TCM_HEADER_SIZE + TCM_MSG_MAX];
+	u8 *buf = ts->msgbuf;
 	int ret, len;
 
-	ret = zumapro_touch_spi_read(ts, buf, sizeof(buf));
+	ret = zumapro_touch_spi_read(ts, buf, TCM_READ_MAX);
 	if (ret)
 		return ret;
 
@@ -275,7 +298,7 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 	len = buf[2] | (buf[3] << 8);
 
 	/* Filler, or a length this driver has no buffer for: resynchronise. */
-	if (len > TCM_MSG_MAX)
+	if (len > TCM_PAYLOAD_MAX)
 		return -ENOMSG;
 
 	if (len)
@@ -297,25 +320,6 @@ static bool zumapro_touch_attn(struct zumapro_touch *ts)
 		return true;
 
 	return !(zumapro_touch_attn_dat(ts) & BIT(GPN0_ATTN_PIN));
-}
-
-/*
- * Wait for a message, retrying as Google's core does rather than reading once
- * and declaring the part silent.
- */
-static int zumapro_touch_read_wait(struct zumapro_touch *ts, u8 *code)
-{
-	int ret, i;
-
-	for (i = 0; i < TOUCH_RESP_TRIES; i++) {
-		ret = zumapro_touch_read(ts, code);
-		if (ret != -ENOMSG)
-			return ret;
-
-		msleep(TOUCH_RESP_POLL_MS);
-	}
-
-	return -ETIMEDOUT;
 }
 
 /*
@@ -543,7 +547,7 @@ static void zumapro_touch_report(struct zumapro_touch *ts, const u8 *report,
  * The second transfer restarted the device's message, so chip select really
  * does drop between transfers of one message here.
  */
-#define TCM_XFER_MAX		256
+#define TCM_XFER_MAX		TCM_PAYLOAD_MAX
 
 static int zumapro_touch_parse_hex(const char *p, u8 *out, size_t max,
 				   const char **end)
@@ -902,12 +906,11 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	 */
 	ts->max_objects = TCM_MAX_OBJECTS;
 	ret = zumapro_touch_request(ts, CMD_GET_APPLICATION_INFO, NULL, 0);
-	if (ret >= 30) {
-		ts->max_x = get_unaligned_le16(&ts->rxbuf[26]);
-		ts->max_y = get_unaligned_le16(&ts->rxbuf[28]);
-		if (ret >= 32)
-			ts->max_objects = min_t(unsigned int, TCM_MAX_OBJECTS,
-						get_unaligned_le16(&ts->rxbuf[30]));
+	if (ret >= APP_INFO_MAX_OBJECTS + 2) {
+		ts->max_x = get_unaligned_le16(&ts->rxbuf[APP_INFO_MAX_X]);
+		ts->max_y = get_unaligned_le16(&ts->rxbuf[APP_INFO_MAX_Y]);
+		ts->max_objects = min_t(unsigned int, TCM_MAX_OBJECTS,
+					get_unaligned_le16(&ts->rxbuf[APP_INFO_MAX_OBJECTS]));
 
 		dev_info(dev, "app info: %ux%u, %u objects\n",
 			 ts->max_x, ts->max_y, ts->max_objects);
