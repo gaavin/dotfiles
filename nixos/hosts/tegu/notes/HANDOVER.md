@@ -76,96 +76,70 @@ Working: boot to userspace, own device tree, UFS at gear 4 (boots from an
 11 GB ext4 root), Plasma Mobile, panel console via the bootloader's
 framebuffer, UART console, watchdog, ACPM.
 
-**Touchscreen — the current task.**
+**Touchscreen — the current task.** Reads work perfectly. Writes do nothing.
 
-- The SPI bus is *finished and proven*. Internal loopback echoes
-  `a5 5a 0f f0` byte for byte at 9.98 MHz. Controller, clock, datapath and
-  FIFOs are all good. Do not re-investigate this.
-- The rails are real and mainline drives them. LDO4M (AVDD 3.3 V) and LDO25M
-  (DVDD 1.8 V) come up through `sec-acpm`, and ATTN goes from low to high the
-  moment they do -- the first time that line has ever read high here.
-- Pinctrl is real. Both alive controllers probe, `gpn0` exists, and the touch
-  SPI device binds instead of waiting forever for a supplier.
+### Established on hardware. Do not re-investigate.
 
-### Read Google's own sources before designing an experiment
-
-Three trees, cloned under /tmp/tegu-work (tmpfs -- re-clone if gone), from the
-`zumapro-mainline` orbit:
-
-| tree | what it settles |
+| Fact | Evidence |
 | --- | --- |
-| `tegu-dt` | `dts/zuma-tegu-common-touch.dtsi` -- the real `spitouch` node for *this phone* |
-| `synaptics` | `syna_gtd/syna_tcm2_platform_spi.c`, `tcm/synaptics_touchcom_core_v1.c` |
-| `soc-gs` | SoC hardware tables (sparse clone -- ask `git ls-tree`, not the filesystem) |
+| SPI bus, clock, controller | loopback echoes `a5 5a 0f f0` at 9.98 MHz |
+| Both rails | `sec-acpm`; vdd 1.8 V, avdd 3.3 V, and ATTN goes high the moment they do |
+| pinctrl, reset, ATTN | `gpn0` PUD reads 0; forcing a pull-**up** still read low, so the part drives it; idles high after a clean reset |
+| The part | Synaptics **S3908**, fw `GA1B0-15.0`, build 4468578, TouchComm **v1**, mode 1 = `MODE_APPLICATION_FIRMWARE` |
+| A whole message in one read | `r 29` returns `a5 10 18 00 01 01 "S3908GA1B0-15.0\0" 62 2f 44 00 00 04 5a` — header, payload, end-of-message, exact |
+| Command codes, hex parser | checked byte-for-byte against the vendor enum |
 
-Every touch question answered on 2026-09-08 was answered by reading these, and
-each had cost boots to guess at. Look here first.
+**A message must be read in one transfer.** Reading the 4-byte header and
+coming back for the rest loses exactly 4 bytes — the `a5 03` and the two
+payload bytes after it — so the payload arrives starting at `part_number[0]`.
+`s3c64xx_spi_transfer_one()` calls `s3c64xx_flush_fifo()` after every transfer,
+which drains and discards the RX FIFO. Stay under the 64-byte FIFO too: a
+transfer of `fifo_depth` or more is split into `fifo_depth - 1` chunks, each
+its own datapath enable, which puts that boundary back inside the message.
 
-### Where it got to
+**Reads must not transmit.** `synaptics,spi-byte-delay-us = <0>` on tegu, so
+`syna_spi_read()` takes its `tx_buf = NULL` branch. `spi-s3c64xx` sets
+`CH_TXCH_ON` only for a non-NULL `tx_buf` and never requests a dummy buffer, so
+MOSI is undriven for the whole read. Every MOSI byte is a command byte to this
+part.
 
-Stages 1 and 2 are done on hardware. What is left is the part itself.
+**`FB_CLK_SEL` is not a suspect.** Google sets `samsung,spi-feedback-delay = <0>`,
+which is mainline's default.
 
-Three defects were fixed together, each against vendor evidence:
+### The open question: writes have no effect
 
-1. **The ATTN gate trusted a pulled line.** The bootloader leaves a pull-*down*
-   on gpn0-0 (PUD reads 0x1, measured). ATTN is active low, so the line reads
-   asserted whenever nothing drives it -- rails off, reset held, or the part
-   still booting. `-42` after reset was a read twelve milliseconds after reset
-   release into a part that had not booted, and the wait returned the first
-   header it saw instead of retrying. Google's `ts-irq` clears that pull; the
-   device tree now does too, and `-ENOMSG` no longer ends a wait.
-2. **Reads were transmitting.** The driver held MOSI high, believing Google
-   fills 0xff. Google does -- but only when `synaptics,spi-byte-delay-us` is
-   nonzero, and tegu sets it to 0. The real path is `tx_buf = NULL`, and
-   `spi-s3c64xx` sets `CH_TXCH_ON` only for a non-NULL `tx_buf` and never asks
-   the core for a dummy buffer, so **MOSI is not driven at all** through an
-   Android read. Every MOSI byte is a command byte to this part.
-3. **The poll loop could hammer forever** on that same untrustworthy gate. It
-   now stops after 64 markerless reads and says so.
+	W: id     a5 10 18 00 01 01 53 33 ... 5a   <- perfect
+	W: ident  5a 5a 5a ...                     <- CMD_IDENTIFY, nothing
+	W: rst    5a 5a 5a ...                     <- CMD_RESET, nothing
 
-**`FB_CLK_SEL` is retired as a suspect.** Google's `controller-data` sets
-`samsung,spi-feedback-delay = <0>`, which is mainline's default. The earlier
-note naming it the prime cause of degrading headers was wrong.
+`CMD_RESET` is unmistakable if it lands, and it does not. Reads need MISO, CLK
+and CS; writes additionally need MOSI. Splitting "MOSI never reaches the pad"
+from "the part ignores commands" is the next job. Note there is **no `gpb` bank
+anywhere in this SoC** — the banks are `gpp*`, `gph*`, `gpn*`, `gps*` — so the
+SPI pads have no pinctrl behind them and the mux cannot be inspected that way.
 
-### Next log to read
+### Rules that were learned the hard way
 
-The post-reset wait is now an instrument. It samples ATTN for 500 ms without
-putting a byte on the bus and logs every transition -- and says so when there
-are none -- then reads eight times at 50 ms apart, logging every header that is
-not a marker:
+- **The probe must not talk to the part beyond identify.** A failing command is
+  a hundred polls; three of them take the part from `5a` padding to `0x00` to
+  not driving MISO at all, within thirty seconds of boot. Every userspace
+  experiment run before this rule was measuring wreckage. `poll 1` through
+  `tcm_xfer` starts the report loop by hand.
+- **Trace every path that touches the bus before flashing.** An early return
+  guarded on the *failure* path let the *success* path fall through into
+  `CMD_ENABLE_REPORT` and the poll loop, and cost a boot to discover.
+- **A log line must print what was actually read.** `ts->hdr` is only written
+  by a successful read; printing it after a failure shows the previous
+  message's header as if it were this one.
+- **Rate-limit anything the poll loop can print.** An unbounded `dev_err` there
+  made whole boots unreadable and forced logs to be pasted by hand.
+- **The UART dies for up to a minute across a reboot** (shared USB-C hub takes
+  the XIAO down with the phone). Do not paper over it with `sleep` in a
+  `tegu-cmd` script — that output is lost too. Keep scripts prompt and re-run.
+- **`tcm_xfer` only exists after `probe()` returns.** The driver core adds
+  `dev_groups` after probe, so a `tegu-cmd` script must wait for the file
+  rather than assume it.
 
-	zumapro-touch ...: boot: attn asserted at reset release
-	zumapro-touch ...: boot: first read header a5 10 18 00
-	zumapro-touch ...: boot: attn idle at 120 ms
-	zumapro-touch ...: boot: attn asserted after 500 ms, 2 transitions
-	zumapro-touch ...: boot: read 0 header ff ff ff ff
-
-Read it as: does ATTN ever idle (is the line the part's to speak for), and what
-comes back off the bus (mute, still booting, or out of frame).
-
-`tcm_xfer` gained `fb N`, `mosi 0|1` and `attn`, so the feedback tap, the MOSI
-drive and the line itself can be swept from userspace through `tegu-cmd`
-without a rebuild.
-
-
-### Known-incomplete in the touch driver
-
-- **The ATTN gate is honest now but still unproven.** The pull-down is cleared
-  and the poll loop backs off after 64 markerless reads instead of hammering,
-  but no message has yet been read *because* the line said one was waiting.
-  Until that happens, treat a quiet log as "the gate may be wrong", not as
-  "the part is quiet" — `echo attn > tcm_xfer` prints the raw level.
-
-- **No coordinate decoding.** TouchComm's touch report is a bitfield sequence
-  described by a report-config the part supplies at runtime. It is deliberately
-  not written yet: the driver logs raw reports so the layout can be read off
-  real data. Google's decoder is in
-  `/tmp/tegu-work/synaptics/syna_c10/tcm/synaptics_touchcom_func_touch.c`.
-- **Still polling, by choice.** Reset and ATTN are real gpiods now, and `gpn0`
-  has an irq_domain, so `interrupts-extended` would resolve today. The line is
-  level-low and stays asserted until the message is drained, so a handler that
-  failed to drain would storm the machine. One line to change once a read has
-  succeeded.
 
 ### Next after touch
 
