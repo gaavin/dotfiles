@@ -13,10 +13,14 @@ Welcome to NixOS 26.11 (Zokor)!
 tegu login:
 ```
 
-Not yet a usable phone. The known gap is that **the device powers off on its
-own after a few minutes**; the cause is not yet established, and the leading
-candidate is the cluster watchdog, which this port describes nowhere and
-therefore never pets. See "Next steps".
+Not yet a usable phone: no touch input, no USB, no WLAN, no modem, no GPU.
+
+The "powers off after a few minutes" that this file used to describe was the
+cluster watchdog. BL2 arms it for 60 s (`WD: enabled(60s, 1/3)`) and nothing
+petted it, so a working system was reset on a timer — `RST_STAT: 0x1 -
+CLUSTER0_NONCPU_WDTRESET`. Linux now owns it. Each such reset also burned an
+A/B retry, and at zero ABL forces fastboot and marks the slot unbootable;
+`fastboot --set-active=a` restores it.
 
 Everything below was established on hardware. Where something is inferred
 rather than observed it says so.
@@ -43,8 +47,13 @@ sources, then tested by booting it.
 | Register access from userspace | **Yes**, `/dev/mem` (`STRICT_DEVMEM` deliberately off) |
 | Rescue userspace | **Yes**, linked into the kernel image |
 | Serial console | **Yes**, with a USB-C debug board (read-only) |
-| Storage | **Past the PHY.** Link startup fails with `device_present=0`: the UFS device is silent. Needs regulators |
-| USB, WLAN, modem, GPU, touch, audio, camera | No |
+| Storage | **Yes.** UFS at gear 4, 2 lanes; boots from an 11 GB ext4 root |
+| Graphical session | **Yes.** Plasma Mobile, on the bootloader's framebuffer |
+| Watchdog | **Yes.** BL2 arms a 60 s cluster watchdog; Linux now owns it |
+| Touch SPI bus | **Yes.** Loopback echoes at 9.98 MHz. The part itself is unpowered |
+| ACPM | **Yes.** Mailbox, SRAM and protocol confirmed; the route to the PMIC |
+| Touch input | No — needs the S2MPG14 rails, pinctrl, and a TouchComm driver |
+| USB, WLAN, modem, GPU, audio, camera | No |
 
 ## The panel console
 
@@ -170,6 +179,37 @@ Things that are not documented anywhere and cost real time to discover:
    flash immediately before jumping to it. Anything that fails afterwards is
    something Linux does to a working block, not setup that was never done.
 
+10. **A pad name is not a clock domain.** The touch reset line's pad is called
+    `XAPC_USI11_RTSn_DI`, and that "USI11" sent this port at a divider in
+    CMU_PERIC1 for weeks. The SPI is CMU_HSI0's USI2. A clock provider that
+    accepts `clk_set_rate()` and reports the rate back through debugfs proves
+    only that software agrees with itself — the stock DTB's `clocks` phandle
+    is the authority.
+
+11. **`vendor_boot` must not carry a cmdline.** ABL concatenates boot.img's and
+    vendor_boot's, and the last `init=` wins. vendor_boot is the one image
+    small enough to reflash alone (24 KB against 18 MB), which makes it
+    exactly the image that must not be able to name a closure the rootfs does
+    not have. Getting this wrong ends in "Failed to start Find NixOS closure".
+
+12. **`flash.sh`'s vbmeta step fails on this device** — `Failed to find
+    AVB_MAGIC at offset: 0` — and under `set -eu` that aborted the script
+    *before* `flash userdata`, leaving a new boot.img against an old rootfs.
+    It is now non-fatal. Verification is already disabled on an unlocked
+    device booting unsigned kernels.
+
+13. **Do not blind-scan an MMIO region.** Sweeping `sysreg_hsi0` with `devmem`
+    faulted at +0x0014 and raised a fatal SError at +0x1000. The stock DTS
+    declares that node as `reg = <0x11020000 0x10000>`, but that is an
+    address-map allocation, not a promise that every word answers. Widen
+    dumps across *named* registers, never across an address range.
+
+14. **A successful probe can be completely silent.** Every message in
+    `exynos-acpm.c` is an error path, so an empty boot log said nothing about
+    whether ACPM worked. `/sys/bus/platform/devices/*/driver` and the
+    `gs101-acpm-clk` device answered it in one boot. Check the driver model,
+    not the log.
+
 ## Layout
 
 | File | Purpose |
@@ -180,6 +220,12 @@ Things that are not documented anywhere and cost real time to discover:
 | `kernel/zumapro-bootfb.c` | Boot framebuffer adoption, staged reset probes, early stripe |
 | `kernel/apply.sh` | Grafts everything below into the kernel tree; fails loudly if an upstream anchor moves |
 | `kernel/clk-zumapro-hsi2.c` | CMU_HSI2 clock provider for UFS. Its writes are no-ops (see fact 8); needed so the UFS node can resolve its clocks |
+| `kernel/clk-zumapro-hsi0.c` | CMU_HSI0 USI2 divider — the touch SPI's real clock (see fact 10) |
+| `kernel/zumapro-ufs-host.py` | Tensor G4 host-controller corrections: PCS `0x202` (the 38.4 MHz reference), PCS RX `0x2f`, and the four quirks the stock tree drops |
+| `kernel/zumapro-pmic-dump.c` | Read-only dump of the S2MPG14 register map over ACPM. Never writes; see the file for why that matters |
+| `kernel/add-zumapro-wdt.py` | `google,zumapro-wdt`, with no PMU quirks — zumapro's PMU offsets are unverified and gs101's differ |
+| `touch-probe.sh` | Boot-time register dump for the touch stack, via `devmem` (never `dd`: arm64 restricts `/dev/mem` `read()` to real memory) |
+| `tegu-cmd.sh`, `../../tools/tegu-cmd` | Run a shell command passed on the kernel command line. The write half of the debug loop on a phone with a receive-only UART |
 | `kernel/add-zumapro-ufs-phy.py` | Adds the `google,zumapro-ufs-phy` variant: isolation offset, calibration-done register, Tensor G4 PMA table, failure diagnostics |
 | `kernel/dump-ufs-clkstop.py` | Diagnostic: prints `HCI_CLKSTOP_CTRL` at calibration time |
 | `kernel/keep-boot-phy.py` | Adds `phy_exynos_ufs.keep_boot_phy=1` to skip the PRE_INIT table |
@@ -251,254 +297,122 @@ Restore with a GrapheneOS factory image.
 
 Recovering a bootloop: hold Power ~15 s, then Volume Down + Power for fastboot.
 
+## Storage: solved
+
+UFS works. The phone boots from it, mounts an 11 GB ext4 root and reaches a
+Plasma Mobile session. Getting there took most of this port, and the useful
+part is not the fixes but which beliefs turned out to be wrong.
+
+**What actually fixed it.** Tensor G4's M-PHY runs from a 38.4 MHz reference,
+selected by PCS attribute `0x202 = 0x22` (`USE_38_4_MHZ` in Google's
+`ufs-cal.h`; the 26 MHz alternative is `0x12`). gs101 never writes `0x202` at
+all, so mainline left the PHY on the wrong reference and calibration could
+never converge. Alongside it: PCS RX `0x2f` is `0x79` here rather than
+gs101's `0x69`; the `fixed-prdt-req_list-ocs` quirks the stock tree sets, of
+which `UFSHCD_QUIRK_PRDT_BYTE_GRAN` misplaced every response UPIU; Tensor
+G4's own hibern8 tables; empty PHY power-mode tables; and no `wait_for_cdr`,
+which polls a register this SoC does not have.
+
+**What was believed and was wrong,** each held with confidence at the time:
+
+- That the bootloader tore the UFS clock path down. It does not — it leaves
+  every gate running. The evidence was self-inflicted: the gates had been
+  registered without `CLK_IS_CRITICAL`, so the clock framework disabled what
+  the bootloader had left on. The driver was performing the teardown it
+  claimed to be repairing.
+- That calibration was failing. It was never starting — a 50 ms window
+  watching all 3072 PMA registers showed not one bit move.
+- That restoring the reference-clock pin fixed calibration. It was inferred
+  from a re-bind that showed no errors, but `phy_init()` skips `ops->init`
+  when `init_count` is non-zero, so the re-bound driver was skipping
+  calibration silently. Silence was read as success.
+
+## Touch: the SPI bus works, the part is unpowered
+
+The controller is finished and proven. In internal loopback it echoes
+`a5 5a 0f f0` byte for byte at 9.98 MHz, so the clock, the datapath and the
+FIFOs are all good. A normal transfer completes and returns `00 00 00 00` —
+the bus drives, and the part says nothing.
+
+**The bug was the wrong CMU.** `spi@111d0000` is clocked by CMU_HSI0's USI2,
+not CMU_PERIC1's USI11. The stock DTB settles it: the node's `clocks` resolve
+through Google's `zuma.h` to `VDOUT_CLK_HSI0_USI2_USI` and
+`GATE_HSI0_USI2_USI`. "USI11" came from the *pad name* of the touch reset
+line, `XAPC_USI11_RTSn_DI` — a label on a pad, not the block behind the
+controller.
+
+The old driver looked like it worked: `clk_set_rate()` returned success, the
+register changed, debugfs reported 40 MHz. It was software agreeing with
+itself against a register belonging to another peripheral. The cost is
+visible in `CH_CFG`, read back mid-failure as `0x43` — `CH_HS_EN | RXCH_ON |
+TXCH_ON`. `spi-s3c64xx` only sets `CH_HS_EN` at 30 MHz and above, and
+`cur_speed` is `clk_get_rate(src_clk) / 4`, so every transfer was configured
+for a **100 MHz bit clock against a part rated at 10 MHz**.
+
+Six hypotheses were tested against hardware and refuted before that one:
+`ENCLK_ENABLE` (the register is read-only zero, which is what `clk_from_cmu`
+means), the USI's `CLKSTOP_ON` (already clear), the PERIC1 gates, `CS_REG`'s
+`SIG_INACT`, the USI2 Q-Channel (every QCH in CMU_HSI0 reads `0x2`, including
+blocks that plainly work), and clock gating generally. Every finding that
+survived came from a dump; no hypothesis did.
+
+**Why the part is silent.** Its rails are S2MPG14 `LDO25M` (DVDD 1.8 V) and
+`LDO4M` (AVDD 3.3 V), and nothing enables them — Google's driver turns them on
+itself with a 200 ms settle, so nothing before Linux has reason to. It also
+explains the one measurement that fitted nothing else: the active-low IRQ on
+`gpn0-0` reads 0 even with a pull-up enabled and reading back `0x3`. An idle
+input with a pull-up reads 1; an unpowered part clamps it low through its ESD
+diodes.
+
+## ACPM works, and the PMIC map does not exist here
+
+ACPM is up on Tensor G4 with mainline's gs101 driver unchanged:
+
+    soc@0:power-management -> exynos-acpm-protocol
+    15110000.mailbox       -> exynos-acpm-mbox
+    gs101-acpm-clk                (exists)
+    devices_deferred              (empty)
+
+That confirms the mailbox at `0x15110000`, IRQ 80, the SRAM at `0x15700000`
+and the `0xa000` initdata offset. Note the protocol needed no zumapro
+variant: mainline's `ACPM_GS101_INITDATA_BASE` is `0xa000` and zumapro's own
+device tree declares `initdata-base = <0xa000>`.
+
+It had to be confirmed from the driver model, not the log. **Every message in
+`exynos-acpm.c` is an error path, so a successful probe prints nothing** — a
+silent boot is equally consistent with "worked" and "never bound".
+`gs101-acpm-clk` is the real signal, since the driver only creates it after a
+successful probe.
+
+**The next step is blocked on a register map, not on code.** This phone has
+S2MPG14/15; mainline's `sec-acpm.c` knows S2MPG10/11, and no source available
+to this port describes S2MPG14 — `google-modules/soc/gs` names it once, in
+`exynos-pm.c`, with no table.
+
+Borrowing the driver by declaring `samsung,s2mpg10-pmic` is **not** a harmless
+experiment: `sec_pmic_probe()` installs a regmap-irq chip, and regmap-irq
+*writes* the interrupt mask registers at probe. On a part whose map differs
+those writes land at S2MPG10's offsets inside a live PMIC that controls every
+rail on the board, including the ones the phone boots from. Hence
+`kernel/zumapro-pmic-dump.c`: it references only `bulk_read`, dumps 64
+registers of each access type on both speedy channels, and never writes.
+
 ## Next steps, in order
 
-1. **Storage. This is the blocker, and the cause is not yet known.**
-
-       samsung-ufs-phy 13204000.phy: zumapro: failed to get phy cal done -110
-       exynos-ufshc 13200000.ufs: link startup failed 1
-
-   Three real bugs were found and fixed on the way here. None of them made
-   the link come up, and it is worth being explicit that each was believed to
-   be *the* fix at the time:
-
-   - **PHY isolation offset.** Mainline's gs101 data writes PMU `0x3ec8`;
-     zumapro's control is `0x3ec0`. Before this the first PHY access raised
-     an SError and panicked the kernel. Fixed; necessary, not sufficient.
-   - **Calibration-done register.** gs101 polls TRSV `0x338` bit 3. This SoC
-     reports in TRSV `0x31d` bit 0 (Google's `PHY_EMB_CAL_WAIT` entry,
-     `{0x0000, 0xC74, 0x01, ...}`). Fixed; necessary, not sufficient.
-   - **The PMA calibration table was Tensor G1's.** Mainline ships only
-     gs101's analogue table. Replaced with this SoC's, transcribed from
-     Google's `init_cfg_evt1` and verified entry-for-entry by script.
-     Necessary, not sufficient.
-
-   ### What the hardware now says
-
-   Every input to calibration that this port can reach is correct, and
-   calibration still never completes:
-
-   | Probe | Reading |
-   | --- | --- |
-   | PMA register readback | all five sampled registers hold what we wrote (`ok`) |
-   | `cal_done` (TRSV `0x31d`) | `0x38` — a live value, but bit 0 never sets |
-   | `HCI_CLKSTOP_CTRL` | `0x00000000` — `REFCLK_STOP`, `REFCLKOUT_STOP`, `MPHY_APBCLK_STOP` all clear |
-   | `HCI_MISC` | `0x00000d10` — `CLK_CTRL_EN_MASK` cleared, as `ungate_clks` intends |
-   | PMU isolation `0x3ec0` | `0x00000001` with `en=0x1` — PHY genuinely un-isolated |
-   | Lanes | `rx=2 tx=2` — UniPro answers capability queries |
-   | Clock tree | bootloader already had it all running (fact 8) |
-
-   Read together: the PHY's **digital domain is alive and correctly
-   addressed**, and the **calibration state machine never starts**. That is
-   not a register-programming fault, which is why three rounds of register
-   fixes did not move it.
-
-   ### Eliminated, with the evidence
-
-   Recorded so none of this is repeated:
-
-   - *Timeout too short* — Google allows `100 * 40us` = 4 ms; we allow 40 ms.
-   - *Missing probe-time setup* — Google's `ufs_cal_init` only stores a
-     pointer; it does nothing to the hardware.
-   - *Lane iteration differences* — Google skips COMN registers on lane 1
-     exactly as mainline does.
-   - *M-PHY APB gating around PMA access* — Google only does that under
-     `__UFS_CAL_FW__`, a bootloader-only build; the kernel path is plain.
-   - *Transcription error in the table* — gs101's own table has the identical
-     shape (enter cal, configure, trigger, clear) on register `0x43` with
-     `0x10/0x18/0x00` against our `0x50` and `0x08/0x0c/0x00`.
-   - *Wrong clocks, or our clock driver breaking them* — fact 8. The
-     bootloader's values and ours are identical.
-   - *`unipro` region too small* — the driver's highest offset is `0x78c0`;
-     we map `0x8000`.
-   - *`pll_lock_status`* was quoted as evidence in earlier working notes.
-     Disregard it: this SoC's tables contain no `PHY_PLL_WAIT` entry, so
-     register `0x1e` is not the PLL status here.
-
-   ### The PMA never runs. Calibration does not fail -- it never starts.
-
-   The register-space dump (`kernel/pma-dump.py`) settles it:
-
-       pma A->B table+trigger: 54 register(s) changed
-       pma B->C 50ms idle:      0 register(s) changed
-
-   `A->B` is the control and it passes -- the 36-entry table lands, so the
-   addressing and the diff machinery are sound. `B->C` is 50 ms in which
-   nothing writes the PMA, watching all 3072 registers of the mapped
-   window, and **not one bit moves**. Every attempt, every boot.
-
-   A calibration that is running and failing must move *something*: a
-   status bit, a trim, a counter. Nothing moving anywhere means the state
-   machine is not executing.
-
-   **This retires most of the storage work above as necessarily
-   irrelevant.** The PMA table contents, the cal-done register, the wait
-   timeout, the trigger sequence: none of them could ever have mattered,
-   because nothing was going to read them. Several were changed with
-   confidence and two were briefly believed to be the fix.
-
-   The register file itself is alive -- writes land and read back, and one
-   attempt shows `cal_done` moving (`0x31d` `0x28` -> `0x38`) while *we*
-   write the table. APB access works. What is dead is whatever executes
-   behind it.
-
-   That is a different class of fault from anything examined so far, and it
-   narrows the search to things that gate an engine rather than configure
-   one: a reset held over the PMA core, a power domain that is off, or an
-   enable outside the PMA window -- `vs_hci` or a sysreg bit rather than
-   anything in the PHY's own registers.
-
-   Also settled: snapshot A, the state at hand-over, contains the values
-   once read as evidence of a completed calibration (`0x15`, `0x4a`,
-   `0xea`). They are just what the block powers up with.
-
-   ### Superseded: power and pins are correct, calibration still fails
-
-   The shim (`kernel/zumapro-ufs-pins.c`) runs at arch_initcall and is
-   confirmed to set everything before the UFS driver probes:
-
-       zumapro-ufs-pins: gpp0 CON 0x00002011 DAT 0x0000000b,
-                         gph5 CON 0x00000022 PUD 0x00000000
-
-   i.e. VCC on, reference-clock pin at function 2, pull cleared -- at
-   0.66s, against a UFS probe at 1.18s. Calibration still fails on all four
-   attempts, `cal_done` still reads 0x38, `device_present` is still 0.
-
-   **This is a clean negative and it retires two claims made earlier in
-   this port.** Restoring the reference-clock pin does not fix calibration;
-   an earlier commit said it did, and that was wrong. It was inferred from
-   a re-bind showing no calibration errors, but `phy_init()` only calls
-   `ops->init` when `init_count` is zero, and a failed probe never calls
-   `phy_exit` -- so a re-bound driver *skips* calibration silently. Silence
-   was read as success.
-
-   Three boots were spent on userspace-then-rebind evidence that could not
-   have meant anything, because that path skips calibration and cannot
-   reach HCI registers (writes to `HCI_GPIO_OUT` from userspace after a
-   failed probe read back as zero).
-
-   ### Superseded: the earlier reading of calibration
-
-   Settled on hardware. The bootloader tears UFS down two ways: it drops the
-   VCC rail (`gpp0[1]`, low) and parks the reference clock output
-   (`gph5[0]`) as a plain GPIO driven low instead of function 2. Restoring
-   both from the rescue shell and re-binding the driver makes PHY
-   calibration **pass** -- in the same boot, the first probe shows
-   `failed to get phy cal done -110` on every attempt and the re-bind shows
-   none at all, with the attempt spacing dropping from ~207ms to ~104ms
-   because the 40ms timeouts are gone.
-
-   So calibration was never a table problem, a wrong-register problem, or an
-   already-calibrated-by-the-bootloader problem. The PMA simply had no
-   reference clock, because the pin feeding it was parked. The ported table
-   and the corrected cal-done register are both right and are both used.
-   `keep_boot_phy` is a workaround that is no longer needed.
-
-   The earlier reading of this, kept as a caution: with the table skipped,
-   the PHY's trim registers read back values differing from the table's, and
-   that was taken as evidence of a completed calibration. It is equally
-   consistent with a torn-down PHY, and that ambiguity was not weighed at
-   the time.
-
-   ### Superseded: the earlier reading of calibration
-
-   Confirmed on hardware. Booting with `phy_exynos_ufs.keep_boot_phy=1`,
-   which skips the PRE_INIT table and the calibration wait, removes
-   `phy poweron failed --> -110` entirely -- it had appeared on every
-   previous boot.
-
-   With the table skipped, the PHY's trim registers read back values that
-   differ from the ones the table writes (COMN `0x05` reads `0x15` against
-   `0x19`, `0x0b` reads `0x4a` against `0x44`, `0x0c` reads `0xea` against
-   `0xc4`). Those are the table's values *as adjusted by a calibration that
-   already ran*: the bootloader calibrated this PHY and read the kernel over
-   it. `TRSV 0x201` matching exactly is consistent, since not every trim is
-   adjusted.
-
-   `cal_done` bit 0 is clear even when nothing is written at all, so it is
-   not a persistent "this PHY is calibrated" flag; it does not survive the
-   UniPro/link software reset at `HCI_SW_RST`. That reset is not a mainline
-   bug -- mainline and Google use the identical `UFS_SW_RST_MASK` of
-   `UNIPRO|LINK`. **The wait was polling for an event that had already
-   happened and left no standing flag.**
-
-   Two follow-on bugs, both ours, both fixed:
-
-   - `keep_boot_phy` initially skipped only configuration and the wait, not
-     teardown. On a link-startup retry `exynos_ufs_phy_init()` calls
-     `phy_power_off()`, which re-isolates the PHY through the PMU; isolating
-     a block the controller is still driving raised an SError and panicked
-     the kernel (`lr : phy_power_off+0x64`, with `x6 = 0x3ec0`, the isolation
-     offset). "Leave the PHY alone" has to hold on every path.
-   - The three earlier "fixes" (isolation offset aside) were solving a
-     problem that did not exist. The PMA table and the cal-done register are
-     correct as ported, but **should not be used on this SoC** while the
-     bootloader has already calibrated the PHY.
-
-   ### Where it stands now
-
-   Storage gets past the PHY and fails later, cleanly and without panicking:
-
-       exynos-ufshc 13200000.ufs: link startup failed 1
-       exynos-ufshc 13200000.ufs: probe with driver exynos-ufshc failed with error -5
-
-   Four link-startup attempts, roughly 110 ms apart, then the driver gives
-   up. No SError. The kernel boots on to userspace normally.
-
-   The link state was then read at each attempt, identically all four times:
-
-       HCS 0x00000000 device_present=0, UECPA 0x00100000, UECDL 0x00000000,
-       GPIO_OUT 0x00000001 dev_rst_n=1
-
-   Read carefully:
-
-   - **`device_present=0`.** The interconnect layer does not see a UFS
-     device at all. Whatever is wrong is not in the UniPro programming --
-     no attribute would make a silent device answer. This kills the third
-     candidate below outright.
-   - **`dev_rst_n=1`.** `HCI_GPIO_OUT` bit 0 is high, so the controller has
-     released the device's reset line. The device is not being held in
-     reset by anything we control.
-   - **`UECPA` bit 31 is clear**, so by the specification the latched value
-     is *not valid* and the `0x00100000` in it means nothing. Do not read
-     an error code out of it. `UECDL` is zero.
-   - `HCS` being zero also means `UIC_COMMAND_READY` is clear, but the probe
-     runs at PRE_CHANGE immediately after `ufshcd_hba_enable()`, so that is
-     expected timing rather than a fault.
-
-   No device, no reset asserted, and no error latched at any layer: the link
-   never got far enough to record a failure, which is what "nothing on the
-   other end" looks like.
-
-   ### What that leaves
-
-   Everything on the SoC side that this port can reach is now verified
-   correct: clocks running, PHY un-isolated and carrying the bootloader's
-   own calibration, reference clock not stopped, device reset released, two
-   lanes reported. The controller issues `DME_LINKSTARTUP` and the device
-   says nothing.
-
-   The remaining difference between this and a working Android boot is
-   **device power**. `vcc`, `vccq` and `vccq2` are still "assuming enabled"
-   because there is no PMIC driver, and those rails feed the UFS device
-   itself -- the component that is now demonstrably silent. The bootloader
-   powers the device to read the boot image; Android's kernel then owns
-   those regulators through its PMIC driver. Ours cannot, so if the
-   bootloader drops them on the way out, nothing turns them back on.
-
-   That makes regulators the next piece of work, and it is now supported by
-   measurement rather than chosen by elimination. It is not from scratch:
-   mainline already carries `drivers/firmware/samsung/exynos-acpm-pmic.c`
-   and the S2MPG10/11 MFD and regulator drivers for this SoC family, so the
-   job is adapting them to Tensor G4's PMICs and describing the UFS supplies
-   in the device tree.
-
-   Still unmeasured, and worth checking before committing to that: whether
-   the `ufs_rst_n` and `ufs_refclk_out` **pins** are muxed to the UFS block.
-   `REFCLKOUT_STOP` is clear, so the controller is driving the reference
-   clock, and `dev_rst_n` reads high -- but both of those are register-side
-   observations. If the pins are not muxed, neither signal reaches the
-   device, and this SoC has no pinctrl driver either.
+1. **Read S2MPG14's register map** with `zumapro-pmic-dump.c`, compare against
+   mainline's S2MPG10 tables, and confirm whether channel 2 / speedy 0 are
+   right for this part. Only then write regulator descriptors and enable
+   `LDO25M`/`LDO4M`.
+2. **A zumapro pinctrl driver.** It blocks two things at once: `sec-acpm`
+   requires an interrupt (`platform_get_irq` is mandatory in its probe) and
+   gs101 supplies it from a GPIO, and touch needs `irq-gpio = <&gpn0 0>` and
+   `reset-gpio = <&gpp1 1>` — currently poked with `devmem` from a shell
+   script, which no driver can rely on. Mainline has the Samsung pinctrl
+   driver and gs101 bank tables; zumapro needs its own. The stock DTS gives
+   the bank lists and their GIC interrupts, and hardware confirms the 0x20
+   bank stride; per-bank pin counts are the missing piece.
+3. **A `synaptics,tcm-spi` driver.** Absent from mainline in any form — only
+   RMI4, a different protocol.
 
 2. **USB.** `usb@11210000`, PHY `@11100000`. Establish the power state from
    userspace first (item 5 above). A gadget serial console ends the
