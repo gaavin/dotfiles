@@ -63,6 +63,7 @@
 
 #define STATUS_IDLE		0x00
 #define STATUS_OK		0x01
+#define STATUS_CONTINUED_READ	0x03
 
 #define CMD_IDENTIFY		0x02
 #define CMD_RESET		0x04
@@ -120,18 +121,17 @@
 #define TOUCH_RESP_TRIES	100
 
 /*
- * One message read in one chip select: header plus payload, in a single
- * transfer. TCM_READ_MAX is what actually goes on the wire, and every buffer
- * involved has to be at least that big -- reading header+payload out of a
- * txfill sized for the payload alone made spi_read() reject every transfer
- * with -EINVAL before it reached the bus.
+ * The largest single read: a continued read is two header bytes, the payload
+ * and one end-of-message byte. Every buffer involved has to be at least that
+ * big -- sizing txfill for the payload alone made spi_read() reject transfers
+ * with -EINVAL before they reached the bus.
  *
  * 256 payload bytes covers everything this part sends: identify is 24, the
  * application info 32, the report config a few dozen, a touch report under a
- * hundred. At 9.984 MHz a full read is ~208 us against a 16 ms poll.
+ * hundred.
  */
 #define TCM_PAYLOAD_MAX		256
-#define TCM_READ_MAX		(TCM_HEADER_SIZE + TCM_PAYLOAD_MAX)
+#define TCM_READ_MAX		(TCM_PAYLOAD_MAX + 4)
 #define TCM_CONFIG_MAX		128
 #define TCM_MAX_OBJECTS		10
 
@@ -275,34 +275,49 @@ static int zumapro_touch_spi_read(struct zumapro_touch *ts, u8 *buf, size_t len)
  * Read one whole message. Returns the payload length, with the payload at
  * ts->rxbuf, or negative.
  *
- * Header and payload come back in a single chip-select assertion, so this
- * reads a generous fixed block once rather than reading the header and then
- * going back for the body: a second transfer is a second chip select, and the
- * part restarts its message on each one.
+ * Read the header, then exactly the payload, and not one byte more.
+ *
+ * Over-reading is not free on this bus. Every MOSI byte is a command byte to
+ * a TouchComm part, and a read holds MOSI high, so clocking past the end of a
+ * message feeds the device a run of 0xff commands. An earlier version of this
+ * function read a fixed 260-byte block to get header and payload in one chip
+ * select; it retrieved the identify report exactly once and then left the
+ * part answering STATUS_IDLE to every command that followed.
+ *
+ * The second read is a continued read, which is what STATUS_CONTINUED_READ
+ * exists for: marker, that status, the payload, then an end-of-message 0x5a
+ * (syna_tcm_v1_continued_read()).
  */
 static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 {
 	u8 *buf = ts->msgbuf;
 	int ret, len;
 
-	ret = zumapro_touch_spi_read(ts, buf, TCM_READ_MAX);
+	ret = zumapro_touch_spi_read(ts, ts->hdr, TCM_HEADER_SIZE);
 	if (ret)
 		return ret;
 
-	memcpy(ts->hdr, buf, TCM_HEADER_SIZE);
-
-	if (buf[0] != TCM_MARKER)
+	if (ts->hdr[0] != TCM_MARKER)
 		return -ENOMSG;
 
-	*code = buf[1];
-	len = buf[2] | (buf[3] << 8);
+	*code = ts->hdr[1];
+	len = ts->hdr[2] | (ts->hdr[3] << 8);
 
 	/* Filler, or a length this driver has no buffer for: resynchronise. */
 	if (len > TCM_PAYLOAD_MAX)
 		return -ENOMSG;
 
-	if (len)
-		memcpy(ts->rxbuf, buf + TCM_HEADER_SIZE, len);
+	if (!len)
+		return 0;
+
+	ret = zumapro_touch_spi_read(ts, buf, len + 3);
+	if (ret)
+		return ret;
+
+	if (buf[0] != TCM_MARKER || buf[1] != STATUS_CONTINUED_READ)
+		return -ENOMSG;
+
+	memcpy(ts->rxbuf, buf + 2, len);
 
 	return len;
 }
