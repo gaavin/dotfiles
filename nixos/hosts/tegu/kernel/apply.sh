@@ -131,6 +131,9 @@ python3 "$src"/spi-manual-cs.py
 # --- pinctrl: bank data for this SoC, so gpp1/gpn0 are real GPIOs ---
 python3 "$src"/zuma-pinctrl.py "$src"/zuma-pinctrl-data.c
 
+# DIAGNOSTIC: make samsung_pinctrl_probe() report where it dies.
+python3 "$src"/pinctrl-loud.py
+
 # --- Watchdog: let Linux pet the one BL2 arms ----------------------------
 # "WD: enabled(60s, 1/3)" in the bootloader log, and nothing petted it, so a
 # working system was reset on a timer. Adds a variant with no PMU access,
