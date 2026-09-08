@@ -135,14 +135,7 @@
  * long as the machine is up.
  */
 #define TOUCH_POLL_MAX_BAD	64
-
-/*
- * Bus turnaround. syna_tcm_v1_continued_read() sleeps this long before every
- * chunk it reads, and this driver went straight from the header read into the
- * continued read with nothing in between.
- */
-#define TOUCH_TAT_US_MIN	50
-#define TOUCH_TAT_US_MAX	100
+#define TOUCH_POLL_SLOW_MS	200
 
 /*
  * A read is not one transfer. syna_tcm_v1_read() reads, checks that byte 0 is
@@ -170,6 +163,25 @@
  * application info 32, the report config a few dozen, a touch report under a
  * hundred.
  */
+/*
+ * One read, one datapath enable.
+ *
+ * A message read must not be split. Reading the four-byte header and coming
+ * back for the rest loses exactly four bytes -- the a5 03 and the first two
+ * payload bytes -- so the payload always arrived starting at part_number[0]
+ * and the driver called a perfectly good identify a lost message. A single
+ * 31-byte read of the same message on the same hardware returns it whole:
+ *
+ *   a5 10 18 00 01 01 "S3908GA1B0-15.0" 00 62 2f 44 00 00 04 5a 5a 5a
+ *
+ * spi-s3c64xx splits any transfer of fifo_depth or more into chunks of
+ * fifo_depth - 1, each with its own PACKET_CNT programming inside the one
+ * chip select, so a large read reintroduces the very boundary that loses
+ * those bytes. The FIFO here is 64. Stay below it and every message arrives
+ * in one piece.
+ */
+#define TCM_ONE_READ		60
+
 #define TCM_PAYLOAD_MAX		256
 #define TCM_READ_MAX		(TCM_PAYLOAD_MAX + 4)
 #define TCM_CONFIG_MAX		128
@@ -327,64 +339,47 @@ static int zumapro_touch_read_sync(struct zumapro_touch *ts, u8 *buf,
 }
 
 /*
- * Read one whole message. Returns the payload length, with the payload at
- * ts->rxbuf, or negative.
+ * Read one whole message: header, payload and the end-of-message byte, in one
+ * transfer. Returns the payload length with the payload at ts->rxbuf.
  *
- * Read the header, then exactly the payload, and not one byte more.
- *
- * Over-reading is not free on this bus. Every MOSI byte is a command byte to
- * a TouchComm part, and a read holds MOSI high, so clocking past the end of a
- * message feeds the device a run of 0xff commands. An earlier version of this
- * function read a fixed 260-byte block to get header and payload in one chip
- * select; it retrieved the identify report exactly once and then left the
- * part answering STATUS_IDLE to every command that followed.
- *
- * The second read is a continued read, which is what STATUS_CONTINUED_READ
- * exists for: marker, that status, the payload, then an end-of-message 0x5a
- * (syna_tcm_v1_continued_read()).
+ * Reading past the end of a message is safe now and was not before. The part
+ * pads with 0x5a, and since reads leave MOSI undriven those padding bytes are
+ * not command bytes -- which is what made the earlier fixed-block read wedge
+ * it. That failure was the 0xff fill, not the block.
  */
 static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 {
 	u8 *buf = ts->msgbuf;
 	int ret, len;
 
-	ret = zumapro_touch_read_sync(ts, ts->hdr, TCM_HEADER_SIZE);
+	ret = zumapro_touch_read_sync(ts, buf, TCM_ONE_READ);
 	if (ret)
 		return ret;
 
-	*code = ts->hdr[1];
-	len = ts->hdr[2] | (ts->hdr[3] << 8);
+	memcpy(ts->hdr, buf, TCM_HEADER_SIZE);
+	*code = buf[1];
+	len = buf[2] | (buf[3] << 8);
+
+	if (!len)
+		return 0;
 
 	/* Filler, or a length this driver has no buffer for: resynchronise. */
 	if (len > TCM_PAYLOAD_MAX)
 		return -ENOMSG;
 
-	if (!len)
-		return 0;
-
 	/*
-	 * The part needs the bus back before it will answer again. Without
-	 * this the continued read returned padding -- 5a 5a 5a 5a -- to a
-	 * header that had just arrived perfectly formed as a5 10 18 00.
+	 * Longer than one read can hold. Say the length rather than truncating
+	 * to it: nothing this part has been seen to send comes near, and if
+	 * something does, the number is what tells us how to read it.
 	 */
-	usleep_range(TOUCH_TAT_US_MIN, TOUCH_TAT_US_MAX);
-
-	ret = zumapro_touch_read_sync(ts, buf, len + 3);
-	if (ret)
-		return ret;
-
-	/*
-	 * The marker is already guaranteed by the synchronising read, so this
-	 * is the status byte alone -- which is all syna_tcm_v1_continued_read()
-	 * checks once its own read has returned.
-	 */
-	if (buf[1] != STATUS_CONTINUED_READ) {
-		dev_err(&ts->spi->dev, "continued read for %d bytes: %*ph\n",
-			len, min(len + 3, 32), buf);
-		return -ENOMSG;
+	if (len + TCM_HEADER_SIZE + 1 > TCM_ONE_READ) {
+		dev_err(&ts->spi->dev,
+			"message 0x%02x of %d bytes exceeds a single read\n",
+			*code, len);
+		return -EMSGSIZE;
 	}
 
-	memcpy(ts->rxbuf, buf + 2, len);
+	memcpy(ts->rxbuf, buf + TCM_HEADER_SIZE, len);
 
 	return len;
 }
@@ -1041,13 +1036,10 @@ static void zumapro_touch_poll(struct work_struct *work)
 		 * before this becomes a 0xff every 16 ms for the life of the
 		 * machine; "poll 1" through sysfs starts it again.
 		 */
-		if (++ts->badreads >= TOUCH_POLL_MAX_BAD) {
+		if (++ts->badreads == TOUCH_POLL_MAX_BAD)
 			dev_err(&ts->spi->dev,
-				"attn asserted but no marker in %u reads; polling stopped\n",
+				"attn asserted but no marker in %u reads; backing off\n",
 				ts->badreads);
-			ts->polling = false;
-			return;
-		}
 
 		goto again;
 	}
@@ -1064,7 +1056,15 @@ static void zumapro_touch_poll(struct work_struct *work)
 			code, len, min(len, 16), ts->rxbuf);
 
 again:
-	schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
+	/*
+	 * Slow down rather than stop. Reads leave MOSI undriven now, so a line
+	 * that lies costs clock cycles and nothing else -- and a touchscreen
+	 * that gives up for the rest of the boot is worse than one that keeps
+	 * asking.
+	 */
+	schedule_delayed_work(&ts->poll,
+			      msecs_to_jiffies(ts->badreads >= TOUCH_POLL_MAX_BAD ?
+					       TOUCH_POLL_SLOW_MS : TOUCH_POLL_MS));
 }
 
 static int zumapro_touch_probe(struct spi_device *spi)
