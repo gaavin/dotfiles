@@ -45,7 +45,15 @@
 
 /* exynos-acpm-pmic.c: ACPM_PMIC_BULK_MAX_COUNT, a hard cap of 8. */
 #define BULK_MAX		8
-#define DUMP_LEN		0x40
+/*
+ * 0xc0, not 0x40. The first dump stopped at 0x40 and the LDO block starts
+ * there: S2MPG10 puts L1M_CTRL at 0x40 with the LDOs consecutive after it, so
+ * the two rails the touchscreen needs -- LDO4M and LDO25M -- sit just past
+ * where the window ended. The bucks below 0x40 also read as (value, 0xf8)
+ * pairs rather than S2MPG10's CTRL/OUT1/OUT2 triplets, so this part's layout
+ * is its own and the offsets have to be found, not assumed.
+ */
+#define DUMP_LEN		0xc0
 
 static void zumapro_pmic_dump_type(struct acpm_handle *acpm, struct device *dev,
 				   const char *name, u8 type, u8 speedy)
