@@ -451,17 +451,10 @@ static int zumapro_touch_read_attn(struct zumapro_touch *ts, u8 *code,
 /*
  * Watch ATTN across the part's boot, then read what it queued.
  *
- * ATTN asserted is necessary but not sufficient evidence of a message. The
- * line is level-low and only the part drives it, so it reads asserted whenever
- * the part does not: while the rails are off, while reset is held, and for
- * however long it takes to boot after reset is released. That is what "part
- * did not report in after reset (-42)" was -- the wait read on the first
- * assert, twelve milliseconds after reset release, into a part that had not
- * booted, and called the first header it saw a lost message.
- *
- * The device tree now clears the bootloader's pull-down on gpn0-0, as Google's
- * board file does, so the level is at least the part's own doing and not a
- * resistor's. Nothing drives it high until the part does.
+ * The line is active high -- measured; see the device tree -- so it rises when
+ * the part has a message and falls when that message is read. Until the part
+ * has booted it drives nothing and the level means nothing, which is why this
+ * watches the line rather than trusting the first level it sees.
  *
  * So sample the line first and say what it does, without putting a single
  * byte on the bus, and only then read. Every header that is not a marker is
@@ -1171,26 +1164,6 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	 */
 	ts->max_objects = TCM_MAX_OBJECTS;
 
-	/*
-	 * Probe stops at identify.
-	 *
-	 * The command path does not work yet and its failure mode is
-	 * destructive: three requests, a hundred polls each, against a part
-	 * that answers nothing leaves it dead to everything -- 0x5a, then
-	 * 0x00, then not driving MISO at all -- long before anything in
-	 * userspace gets a chance to look at it. Every experiment run through
-	 * tcm_xfer so far has been measuring that wreckage rather than the
-	 * device.
-	 *
-	 * So the driver claims the part, says what it is, and stops. The panel
-	 * defaults stand in for the application info, and "poll 1" through
-	 * tcm_xfer starts the report loop by hand. Restore the sequence below
-	 * once a command has been seen to answer.
-	 */
-	ts->max_x = 1079;
-	ts->max_y = 2423;
-	goto input;
-
 	ret = zumapro_touch_request(ts, CMD_GET_APPLICATION_INFO, NULL, 0);
 	if (ret >= APP_INFO_MAX_OBJECTS + 2) {
 		ts->max_x = get_unaligned_le16(&ts->rxbuf[APP_INFO_MAX_X]);
@@ -1222,7 +1195,6 @@ static int zumapro_touch_probe(struct spi_device *spi)
 			ret);
 	}
 
-input:
 	ts->input = devm_input_allocate_device(dev);
 	if (!ts->input) {
 		ret = -ENOMEM;
@@ -1250,16 +1222,6 @@ input:
 	 * looks. Guarding this on "len < 0" meant the successful path -- the
 	 * only one that matters -- still ran it.
 	 */
-	/*
-	 * Before the return, not after it. "poll 1" through tcm_xfer schedules
-	 * this work, and scheduling one that was never initialised is an oops
-	 * -- reached by using the very escape hatch the line below advertises.
-	 */
-	INIT_DELAYED_WORK(&ts->poll, zumapro_touch_poll);
-
-	dev_err(dev, "identified only; \"poll 1\" through tcm_xfer starts reports\n");
-	return 0;
-
 	/* Ask for touch reports; without this the part stays quiet. */
 	code = REPORT_TOUCH;
 	ret = zumapro_touch_request(ts, CMD_ENABLE_REPORT, &code, 1);
@@ -1267,6 +1229,7 @@ input:
 		dev_err(dev, "could not enable touch reports (%d)\n", ret);
 
 	ts->polling = true;
+	INIT_DELAYED_WORK(&ts->poll, zumapro_touch_poll);
 	schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
 
 	return 0;

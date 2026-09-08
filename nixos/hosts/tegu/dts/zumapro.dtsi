@@ -979,7 +979,25 @@
 					pinctrl-0 = <&ts_irq_pins &ts_reset_pins>;
 
 					reset-gpios = <&gpp1 1 GPIO_ACTIVE_LOW>;
-					attn-gpios = <&gpn0 0 GPIO_ACTIVE_LOW>;
+					/*
+					 * Active HIGH, measured, against both this
+					 * port's previous assumption and Google's
+					 * synaptics,irq-on-state = <0>. Eight reads
+					 * correlated the level with what came back:
+					 *
+					 *   [1 pre=1 MSG post=0] [2 pre=0 pad post=0]
+					 *   ... [8 pre=0 pad post=0]
+					 *
+					 * high means a message is waiting, reading it
+					 * drives the line low, and low yields nothing
+					 * but 0x5a padding. Every earlier measurement
+					 * fits this and none fits active low: the line
+					 * is low while unpowered, goes high when the
+					 * rails come up and the part queues its
+					 * identify, and idles high after a bare reset
+					 * pulse that nothing ever reads.
+					 */
+					attn-gpios = <&gpn0 0 GPIO_ACTIVE_HIGH>;
 					/*
 					 * No interrupts-extended. The driver polls
 					 * ATTN through attn-gpios and never requests
