@@ -145,7 +145,13 @@
  * vendor resynchronises. This driver read once and called the result a
  * failure.
  */
-#define TOUCH_READ_RETRIES	10
+/*
+ * Two, not the vendor's ten. Their retry runs against a line that means what
+ * it says; here ATTN can claim a message with nothing behind it, and ten
+ * 60-byte reads every poll is what left this part answering 0x00 and then
+ * nothing at all. A read that finds no marker is over.
+ */
+#define TOUCH_READ_RETRIES	2
 #define TOUCH_RETRY_US_MIN	5000
 #define TOUCH_RETRY_US_MAX	10000
 
@@ -1159,18 +1165,24 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	ts->max_objects = TCM_MAX_OBJECTS;
 
 	/*
-	 * If it never identified, everything below is a command to a part that
-	 * is not listening, and the replies -- three lots of a hundred polls --
-	 * are what leave it wedged and answering 0x00 to userspace fifteen
-	 * seconds later. Stop here instead, and leave it in a state the sysfs
-	 * instrument can still ask questions of.
+	 * Probe stops at identify.
+	 *
+	 * The command path does not work yet and its failure mode is
+	 * destructive: three requests, a hundred polls each, against a part
+	 * that answers nothing leaves it dead to everything -- 0x5a, then
+	 * 0x00, then not driving MISO at all -- long before anything in
+	 * userspace gets a chance to look at it. Every experiment run through
+	 * tcm_xfer so far has been measuring that wreckage rather than the
+	 * device.
+	 *
+	 * So the driver claims the part, says what it is, and stops. The panel
+	 * defaults stand in for the application info, and "poll 1" through
+	 * tcm_xfer starts the report loop by hand. Restore the sequence below
+	 * once a command has been seen to answer.
 	 */
-	if (len < 0) {
-		dev_err(dev, "no identify; not commanding the part further\n");
-		ts->max_x = 1079;
-		ts->max_y = 2423;
-		goto input;
-	}
+	ts->max_x = 1079;
+	ts->max_y = 2423;
+	goto input;
 
 	ret = zumapro_touch_request(ts, CMD_GET_APPLICATION_INFO, NULL, 0);
 	if (ret >= APP_INFO_MAX_OBJECTS + 2) {
