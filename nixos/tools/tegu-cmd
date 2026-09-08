@@ -27,7 +27,11 @@ fi
 
 # This script lives in nixos/tools, so one level up is the flake itself.
 flake=$(cd "$(dirname "$0")/.." && pwd)
-img=$(nix build --no-link --print-out-paths "$flake#tegu-images")
+# Sending a command must not depend on building anything: only the dtb and
+# the cmdline length are needed, and both belong to the image already on
+# the phone. Point TEGU_IMG at it. Without this an unrelated kernel edit
+# turns "ask the phone a question" into a twenty-minute rebuild.
+img=${TEGU_IMG:-$(nix build --no-link --print-out-paths "$flake#tegu-images")}
 # Only for the size budget: boot.img already carries this exact string and
 # ABL concatenates both cmdlines, so vendor_boot must NOT repeat it.
 #

@@ -52,6 +52,23 @@
 #define DIVRATIO_WIDTH			4
 
 /*
+ * CMU_TOP's divider on the way in, the second reg of this node.
+ *
+ *	SFR(CLK_CON_DIV_CLKCMU_HSI0_PERI, 0x1890, CMU_TOP)
+ *	SFR_ACCESS(..._DIVRATIO, 0, 4, ...)
+ *
+ * Modelled so the bus can actually be slowed down. With only the HSI0
+ * divider the floor is 399.36 MHz / 16 / 4 = 6.24 MHz, which is 1.6x below
+ * the default and proved nothing when the touch part behaved identically at
+ * both. Chaining this one reaches about 390 kHz, which is a real test.
+ *
+ * It reads 0 (divide by one) on this hardware and only moves when something
+ * asks for a rate the HSI0 divider alone cannot reach.
+ */
+#define CLK_CON_DIV_CLKCMU_HSI0_PERI	0x0
+#define CMU_TOP_DIVRATIO_WIDTH		4
+
+/*
  * The HSI0 NOC clock, which becomes this USI's APB clock. Measured, not
  * assumed: PLL_CON0_MUX_CLKCMU_HSI0_NOC_USER (0x11000620) reads 0, so bit 4
  * selects OSCCLK_HSI0 rather than the CMU_TOP feed -- HSI0's bus is parked on
@@ -71,6 +88,7 @@ static int zumapro_cmu_hsi0_probe(struct platform_device *pdev)
 	struct clk_hw_onecell_data *data;
 	const char *parent;
 	void __iomem *base;
+	void __iomem *top;
 	struct clk_hw *hw;
 
 	base = devm_platform_ioremap_resource(pdev, 0);
@@ -80,6 +98,10 @@ static int zumapro_cmu_hsi0_probe(struct platform_device *pdev)
 	parent = of_clk_get_parent_name(dev->of_node, 0);
 	if (!parent)
 		return dev_err_probe(dev, -EINVAL, "no parent clock\n");
+
+	top = devm_platform_ioremap_resource(pdev, 1);
+	if (IS_ERR(top))
+		return dev_err_probe(dev, PTR_ERR(top), "no CMU_TOP divider\n");
 
 	data = devm_kzalloc(dev, struct_size(data, hws, 2), GFP_KERNEL);
 	if (!data)
@@ -105,7 +127,19 @@ static int zumapro_cmu_hsi0_probe(struct platform_device *pdev)
 	 * and above -- while asking the pads for a 100 MHz bit clock. That is
 	 * ten times the touch part's rated maximum, from Google's board file.
 	 */
-	hw = devm_clk_hw_register_divider(dev, "hsi0_usi2_ipclk", parent, 0,
+	hw = devm_clk_hw_register_divider(dev, "hsi0_peri_div", parent, 0,
+					  top + CLK_CON_DIV_CLKCMU_HSI0_PERI,
+					  DIVRATIO_SHIFT, CMU_TOP_DIVRATIO_WIDTH,
+					  0, &zumapro_hsi0_lock);
+	if (IS_ERR(hw))
+		return dev_err_probe(dev, PTR_ERR(hw), "peri div\n");
+
+	/*
+	 * CLK_SET_RATE_PARENT so a request the local divider cannot satisfy
+	 * walks up to CMU_TOP instead of being clamped silently.
+	 */
+	hw = devm_clk_hw_register_divider(dev, "hsi0_usi2_ipclk",
+					  "hsi0_peri_div", CLK_SET_RATE_PARENT,
 					  base + CLK_CON_DIV_CLK_HSI0_USI2,
 					  DIVRATIO_SHIFT, DIVRATIO_WIDTH, 0,
 					  &zumapro_hsi0_lock);

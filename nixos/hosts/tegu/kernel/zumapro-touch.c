@@ -38,6 +38,7 @@
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/io.h>
+#include <linux/ktime.h>
 #include <linux/hex.h>
 #include <linux/kernel.h>
 #include <linux/mod_devicetable.h>
@@ -304,7 +305,17 @@ static int zumapro_touch_read_wait(struct zumapro_touch *ts, u8 *code)
  *	echo 'mode 0'      > .../tcm_xfer   set SPI mode, 0-3
  *	echo 'hz 6000000'  > .../tcm_xfer   set speed for later transfers
  *	echo 'poll 0'      > .../tcm_xfer   silence the report poller
+ *	echo 't 02 00 00'  > .../tcm_xfer   full duplex: send those, capture MISO
+ *	echo 'regs'        > .../tcm_xfer   dump the controller's registers
  *	cat  .../tcm_xfer                   the bytes the last read returned
+ *
+ * Every transfer logs how long it took. That distinguishes the two things a
+ * buffer of 0xff cannot: a device that stopped driving MISO, and a
+ * controller that stopped clocking. At 390 kHz a 256-byte read must take
+ * about 5 ms, and anything much shorter means the clock stopped early.
+ *
+ * "t" matters because a plain "w" throws MISO away, so anything the part
+ * says while a command is being written has been invisible until now.
  *
  * "x" is the interesting one. The SPI core is meant to hold chip select
  * across the transfers of a single message, but this controller runs with
@@ -351,6 +362,26 @@ static int zumapro_touch_parse_hex(const char *p, u8 *out, size_t max,
 	return n;
 }
 
+/*
+ * spi_sync(), timed. A read that returns all 0xff looks the same whether the
+ * part went quiet or the controller stopped clocking; the elapsed time tells
+ * them apart, because the clock cannot stop early and still take as long as
+ * the bit count demands.
+ */
+static int zumapro_touch_timed_sync(struct zumapro_touch *ts,
+				    struct spi_message *msg, const char *tag)
+{
+	ktime_t t0 = ktime_get();
+	int ret;
+
+	ret = spi_sync(ts->spi, msg);
+
+	dev_err(&ts->spi->dev, "%s: %lld us, ret %d\n", tag,
+		ktime_us_delta(ktime_get(), t0), ret);
+
+	return ret;
+}
+
 static ssize_t tcm_xfer_store(struct device *dev, struct device_attribute *attr,
 			      const char *buf, size_t count)
 {
@@ -390,8 +421,40 @@ static ssize_t tcm_xfer_store(struct device *dev, struct device_attribute *attr,
 		return count;
 	}
 
+	if (sysfs_streq(buf, "regs")) {
+		if (!ts->spiregs)
+			return -ENODEV;
+
+		dev_err(dev, "ch_cfg %08x clk_cfg %08x mode_cfg %08x cs %08x int %08x status %08x pkt %08x swap %08x fb %08x\n",
+			readl(ts->spiregs + 0x00), readl(ts->spiregs + 0x04),
+			readl(ts->spiregs + SPI_MODE_CFG),
+			readl(ts->spiregs + SPI_CS_REG),
+			readl(ts->spiregs + 0x10), readl(ts->spiregs + 0x14),
+			readl(ts->spiregs + 0x20),
+			readl(ts->spiregs + SPI_SWAP_CFG),
+			readl(ts->spiregs + SPI_FB_CLK));
+		return count;
+	}
+
 	spi_message_init(&msg);
 	ts->rxlen = 0;
+
+	/* Full duplex: send the given bytes and keep what comes back. */
+	if (!strncmp(p, "t ", 2)) {
+		n = zumapro_touch_parse_hex(p + 2, tx, sizeof(tx), &p);
+		if (n <= 0)
+			return -EINVAL;
+
+		xfer[0].tx_buf = tx;
+		xfer[0].rx_buf = ts->rxbuf;
+		xfer[0].len = n;
+		xfer[0].speed_hz = ts->speed_hz;
+		spi_message_add_tail(&xfer[0], &msg);
+		ts->rxlen = n;
+
+		ret = zumapro_touch_timed_sync(ts, &msg, "t");
+		return ret ? ret : count;
+	}
 
 	if (!strncmp(p, "r ", 2)) {
 		if (kstrtouint(p + 2, 0, &val) || !val || val > TCM_XFER_MAX)
@@ -405,7 +468,7 @@ static ssize_t tcm_xfer_store(struct device *dev, struct device_attribute *attr,
 		spi_message_add_tail(&xfer[0], &msg);
 		ts->rxlen = val;
 
-		ret = spi_sync(ts->spi, &msg);
+		ret = zumapro_touch_timed_sync(ts, &msg, "r");
 		return ret ? ret : count;
 	}
 

@@ -592,7 +592,15 @@
 
 		cmu_hsi0: clock-controller@11000000 {
 			compatible = "google,zumapro-cmu-hsi0";
-			reg = <0x11000000 0x8000>;
+			/*
+			 * CMU_HSI0, then the single CMU_TOP register that
+			 * divides HSI0_PERI on the way in
+			 * (CLK_CON_DIV_CLKCMU_HSI0_PERI, 0x1890 in CMU_TOP).
+			 * Four bytes, not a range: this port has already taken
+			 * a fatal SError from sweeping an address window that
+			 * a reg property said was there.
+			 */
+			reg = <0x11000000 0x8000>, <0x26041890 0x4>;
 			clocks = <&hsi0_peri>;
 			#clock-cells = <1>;
 		};
