@@ -38,6 +38,7 @@
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/io.h>
+#include <linux/kernel.h>
 #include <linux/mod_devicetable.h>
 #include <linux/of.h>
 #include <linux/regulator/consumer.h>
@@ -106,6 +107,31 @@
 #define GPP1_DAT		0x24
 #define GPP1_RESET_PIN		1
 
+/*
+ * The SPI controller's own registers, mapped read-only except for FB_CLK.
+ *
+ * FB_CLK_SEL is the feedback clock delay: the controller samples MISO on a
+ * clock fed back through the pad, and this picks which of four taps. Mainline
+ * writes it once at setup from samsung,spi-feedback-delay, which defaults to
+ * 0. At 10 MHz through a real pad and cable the round trip matters, and the
+ * symptom of getting it wrong is exactly what this port sees -- the first
+ * byte after chip select is clean and later ones are not.
+ *
+ * Writing it between transfers is a diagnostic, not a design. If one setting
+ * reads a clean message, the fix is a controller-data node in the DT and this
+ * whole block comes out.
+ */
+#define SPI_BASE		0x111d0000
+#define SPI_SIZE		0x30
+#define SPI_CH_CFG		0x00
+#define SPI_MODE_CFG		0x08
+#define SPI_SWAP_CFG		0x28
+#define SPI_FB_CLK		0x2c
+#define SPI_FB_CLK_TAPS		4
+
+/* Header plus a v1 identify packet (24 bytes) plus padding, rounded up. */
+#define TOUCH_DUMP_LEN		32
+
 struct zumapro_touch {
 	struct spi_device *spi;
 	struct input_dev *input;
@@ -114,6 +140,7 @@ struct zumapro_touch {
 	struct delayed_work poll;
 	void __iomem *peric0;
 	void __iomem *alive;
+	void __iomem *spiregs;
 	u8 hdr[TCM_HEADER_SIZE];	/* last header read, for diagnostics */
 	u8 rxbuf[512];
 	u8 txfill[512];		/* all 0xff; see zumapro_touch_spi_read() */
@@ -268,6 +295,75 @@ static int zumapro_touch_read_wait(struct zumapro_touch *ts, u8 *code)
 	return -ETIMEDOUT;
 }
 
+/*
+ * Clock out one long burst and print it verbatim. No framing, no
+ * interpretation -- the point is to see what the wire carries when the whole
+ * message fits in a single chip-select assertion, which four-byte header
+ * reads cannot show.
+ */
+static void zumapro_touch_dump(struct zumapro_touch *ts, u32 hz,
+			       const char *tag)
+{
+	u8 buf[TOUCH_DUMP_LEN];
+	struct spi_transfer xfer = {
+		.tx_buf = ts->txfill,
+		.rx_buf = buf,
+		.len = sizeof(buf),
+		.speed_hz = hz,
+	};
+	struct spi_message msg;
+	int ret;
+
+	spi_message_init(&msg);
+	spi_message_add_tail(&xfer, &msg);
+
+	ret = spi_sync(ts->spi, &msg);
+	if (ret) {
+		dev_err(&ts->spi->dev, "dump %s: failed %d\n", tag, ret);
+		return;
+	}
+
+	dev_err(&ts->spi->dev, "dump %s: %16ph | %16ph\n", tag, buf, buf + 16);
+}
+
+/*
+ * Walk the four feedback-clock taps, reading the same message at each. The
+ * device re-presents its header on every chip-select assertion, so each pass
+ * sees the same bytes and the taps are directly comparable.
+ */
+static void zumapro_touch_probe_fb(struct zumapro_touch *ts)
+{
+	char tag[16];
+	u32 fb;
+
+	if (!ts->spiregs) {
+		zumapro_touch_dump(ts, 0, "default");
+		return;
+	}
+
+	dev_err(&ts->spi->dev, "spi: ch_cfg 0x%08x mode_cfg 0x%08x swap 0x%08x fb %u\n",
+		readl(ts->spiregs + SPI_CH_CFG),
+		readl(ts->spiregs + SPI_MODE_CFG),
+		readl(ts->spiregs + SPI_SWAP_CFG),
+		readl(ts->spiregs + SPI_FB_CLK));
+
+	for (fb = 0; fb < SPI_FB_CLK_TAPS; fb++) {
+		writel(fb, ts->spiregs + SPI_FB_CLK);
+		snprintf(tag, sizeof(tag), "fb%u", fb);
+		zumapro_touch_dump(ts, 0, tag);
+	}
+
+	/*
+	 * And once more slowly. The divider is four bits off a fixed 399.36
+	 * MHz parent and spi-s3c64xx divides by four again, so the slowest
+	 * this bus can go today is about 6.24 MHz -- asking for less just
+	 * lands there. Not slow enough to be conclusive on its own, but a
+	 * clean read here against a dirty one above is still a timing answer.
+	 */
+	writel(0, ts->spiregs + SPI_FB_CLK);
+	zumapro_touch_dump(ts, 1500000, "slow");
+}
+
 static void zumapro_touch_poll(struct work_struct *work)
 {
 	struct zumapro_touch *ts =
@@ -326,6 +422,10 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	if (!ts->alive)
 		dev_err(dev, "no alive mapping; polling without ATTN\n");
 
+	ts->spiregs = devm_ioremap(dev, SPI_BASE, SPI_SIZE);
+	if (!ts->spiregs)
+		dev_err(dev, "no spi register mapping; no feedback sweep\n");
+
 	/*
 	 * Sample the interrupt line before anything is powered. If it reads
 	 * the same here as it does with both rails up and the part out of
@@ -357,11 +457,19 @@ static int zumapro_touch_probe(struct spi_device *spi)
 			readl(ts->peric0 + GPP1_DAT),
 			zumapro_touch_attn_dat(ts));
 
+	/*
+	 * A TouchComm part queues a REPORT_IDENTIFY of its own after reset, so
+	 * there is something to read before any command is sent.
+	 */
+	zumapro_touch_probe_fb(ts);
+
 	ret = zumapro_touch_cmd(ts, CMD_IDENTIFY, NULL, 0);
 	if (ret) {
 		dev_err(dev, "IDENTIFY write failed: %d\n", ret);
 		goto err;
 	}
+
+	zumapro_touch_dump(ts, 0, "after IDENTIFY");
 
 	len = zumapro_touch_read_wait(ts, &code);
 	if (len < 0)
