@@ -13,6 +13,10 @@
 set -euo pipefail
 
 fastboot=$(command -v fastboot || echo /nix/store/mcbpd0lzv6gl5pan8njd72wzczi3v3r2-android-tools-37.0.0/bin/fastboot)
+# Same rule as flash.sh: name the device when more than one is attached,
+# because fastboot with no serial quietly picks one for you.
+fbargs=()
+[ -n "${FASTBOOT_SERIAL:-}" ] && fbargs=(-s "$FASTBOOT_SERIAL")
 mkbootimg=$(command -v mkbootimg || echo /nix/store/mcbpd0lzv6gl5pan8njd72wzczi3v3r2-android-tools-37.0.0/bin/mkbootimg)
 
 if [ "${1:-}" = "-f" ]; then
@@ -82,5 +86,5 @@ mkdir "$work/empty"
 	--vendor_boot "$work/vendor_boot.img"
 
 echo "tegu-cmd: $cmd"
-"$fastboot" flash vendor_boot "$work/vendor_boot.img"
+"$fastboot" "${fbargs[@]}" flash vendor_boot "$work/vendor_boot.img"
 echo "tegu-cmd: flashed. reboot the phone; the reply appears on the UART."

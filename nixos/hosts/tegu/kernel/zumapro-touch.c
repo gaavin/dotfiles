@@ -38,6 +38,7 @@
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/io.h>
+#include <linux/hex.h>
 #include <linux/kernel.h>
 #include <linux/mod_devicetable.h>
 #include <linux/of.h>
@@ -129,10 +130,6 @@
 #define SPI_CS_REG		0x0c
 #define SPI_SWAP_CFG		0x28
 #define SPI_FB_CLK		0x2c
-#define SPI_FB_CLK_TAPS		4
-
-/* Header plus a v1 identify packet (24 bytes) plus padding, rounded up. */
-#define TOUCH_DUMP_LEN		32
 
 struct zumapro_touch {
 	struct spi_device *spi;
@@ -144,6 +141,9 @@ struct zumapro_touch {
 	void __iomem *alive;
 	void __iomem *spiregs;
 	u8 hdr[TCM_HEADER_SIZE];	/* last header read, for diagnostics */
+	unsigned int rxlen;		/* bytes the last sysfs read returned */
+	u32 speed_hz;			/* 0 = the device's own maximum */
+	bool polling;
 	u8 rxbuf[512];
 	u8 txfill[512];		/* all 0xff; see zumapro_touch_spi_read() */
 };
@@ -256,15 +256,6 @@ static u32 zumapro_touch_attn_dat(struct zumapro_touch *ts)
 	return ts->alive ? readl(ts->alive + GPN0_DAT) : ~0u;
 }
 
-/* True when the part has a message waiting. Assume yes if unmapped. */
-static bool zumapro_touch_attn(struct zumapro_touch *ts)
-{
-	if (!ts->alive)
-		return true;
-
-	return !(zumapro_touch_attn_dat(ts) & BIT(GPN0_ATTN_PIN));
-}
-
 /*
  * Wait for a message, retrying as Google's core does rather than reading once
  * and declaring the part silent.
@@ -298,178 +289,200 @@ static int zumapro_touch_read_wait(struct zumapro_touch *ts, u8 *code)
 }
 
 /*
- * Clock out one long burst and print it verbatim. No framing, no
- * interpretation -- the point is to see what the wire carries when the whole
- * message fits in a single chip-select assertion, which four-byte header
- * reads cannot show.
+ * A runtime interface for talking to this part, because a kernel change here
+ * costs an eleven-minute flash of an 11 GB rootfs -- any change to the kernel
+ * moves the closure, so init= moves with it and the rootfs has to match.
+ * Hard-coding one experiment per build is the wrong trade at that price.
+ *
+ * Everything below is driven from userspace over the command channel:
+ *
+ *	echo 'r 32'        > .../tcm_xfer   read 32 bytes, MOSI high
+ *	echo 'w 07'        > .../tcm_xfer   write raw bytes, one chip select
+ *	echo 'wr 07 4'     > .../tcm_xfer   write, then read: separate selects
+ *	echo 'x 07 4'      > .../tcm_xfer   write and read in ONE message
+ *	echo 'reset'       > .../tcm_xfer   pulse the reset pad
+ *	echo 'mode 0'      > .../tcm_xfer   set SPI mode, 0-3
+ *	echo 'hz 6000000'  > .../tcm_xfer   set speed for later transfers
+ *	echo 'poll 0'      > .../tcm_xfer   silence the report poller
+ *	cat  .../tcm_xfer                   the bytes the last read returned
+ *
+ * "x" is the interesting one. The SPI core is meant to hold chip select
+ * across the transfers of a single message, but this controller runs with
+ * S3C64XX_SPI_QUIRK_CS_AUTO, where the hardware drives nSS from PACKET_CNT
+ * per transfer. A split read measured that directly:
+ *
+ *	split 4+12: a5 18 ff ff | a5 18 ff ff ff ff ff ff ff ff ff ff
+ *
+ * The second transfer restarted the device's message, so chip select really
+ * does drop between transfers of one message here.
  */
-static void zumapro_touch_dump(struct zumapro_touch *ts, unsigned int len,
-			       const char *tag)
+#define TCM_XFER_MAX		256
+
+static int zumapro_touch_parse_hex(const char *p, u8 *out, size_t max,
+				   const char **end)
 {
-	u8 buf[TOUCH_DUMP_LEN];
-	struct spi_transfer xfer = {
-		.tx_buf = ts->txfill,
-		.rx_buf = buf,
-		.len = min_t(unsigned int, len, sizeof(buf)),
-	};
-	struct spi_message msg;
-	int ret;
+	unsigned int n = 0;
+	int v;
 
-	memset(buf, 0, sizeof(buf));
-	spi_message_init(&msg);
-	spi_message_add_tail(&xfer, &msg);
+	while (*p == ' ')
+		p++;
 
-	ret = spi_sync(ts->spi, &msg);
-	if (ret) {
-		dev_err(&ts->spi->dev, "%s: failed %d\n", tag, ret);
-		return;
+	while (n < max) {
+		v = hex_to_bin(p[0]);
+		if (v < 0)
+			break;
+
+		/*
+		 * A lone digit is the trailing read count, not a malformed
+		 * byte -- "wr 02 00 00 4" ends in one. Returning -EINVAL here
+		 * is what made every wr/x command fail on the first run.
+		 */
+		if (hex_to_bin(p[1]) < 0)
+			break;
+
+		out[n++] = (v << 4) | hex_to_bin(p[1]);
+		p += 2;
+
+		while (*p == ' ')
+			p++;
 	}
 
-	dev_err(&ts->spi->dev, "%s (%u): %*ph\n", tag, xfer.len,
-		(int)xfer.len, buf);
+	*end = p;
+	return n;
 }
 
-/*
- * The same number of bytes, but split across two transfers of one message.
- * The SPI core holds chip select across transfers unless cs_change is set, so
- * if this reads further into the message than a single transfer does, then
- * something is dropping CS mid-transfer and the device is restarting.
- */
-static void zumapro_touch_dump_split(struct zumapro_touch *ts)
+static ssize_t tcm_xfer_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
 {
-	u8 buf[16];
-	struct spi_transfer xfer[2] = {
-		{ .tx_buf = ts->txfill, .rx_buf = buf,     .len = 4  },
-		{ .tx_buf = ts->txfill, .rx_buf = buf + 4, .len = 12 },
-	};
+	struct zumapro_touch *ts = spi_get_drvdata(to_spi_device(dev));
+	struct spi_transfer xfer[2] = { };
+	u8 tx[TCM_XFER_MAX];
 	struct spi_message msg;
-	int ret;
+	const char *p = buf;
+	unsigned int val;
+	int n, ret;
 
-	memset(buf, 0, sizeof(buf));
-	spi_message_init(&msg);
-	spi_message_add_tail(&xfer[0], &msg);
-	spi_message_add_tail(&xfer[1], &msg);
-
-	ret = spi_sync(ts->spi, &msg);
-	if (ret) {
-		dev_err(&ts->spi->dev, "split: failed %d\n", ret);
-		return;
+	if (sysfs_streq(buf, "reset")) {
+		zumapro_touch_reset(ts);
+		return count;
 	}
 
-	dev_err(&ts->spi->dev, "split 4+12: %16ph\n", buf);
-}
+	if (sscanf(buf, "mode %u", &val) == 1) {
+		if (val > 3)
+			return -EINVAL;
 
-/*
- * Google's board file says synaptics,spi-mode = <0>, but that is their driver
- * setting spi->mode, and this port has been wrong before about which of
- * Google's numbers apply to it. Four modes, eight bytes each, costs one boot
- * to rule out for good.
- */
-static void zumapro_touch_mode_sweep(struct zumapro_touch *ts)
-{
-	u16 saved = ts->spi->mode;
-	char tag[16];
-	int m, ret;
-
-	for (m = 0; m < 4; m++) {
-		ts->spi->mode = (saved & ~(SPI_CPOL | SPI_CPHA)) | m;
-
+		ts->spi->mode = (ts->spi->mode & ~(SPI_CPOL | SPI_CPHA)) | val;
 		ret = spi_setup(ts->spi);
-		if (ret) {
-			dev_err(&ts->spi->dev, "mode%d: setup failed %d\n",
-				m, ret);
-			continue;
+		return ret ? ret : count;
+	}
+
+	if (sscanf(buf, "hz %u", &val) == 1) {
+		ts->speed_hz = val;
+		return count;
+	}
+
+	if (sscanf(buf, "poll %u", &val) == 1) {
+		ts->polling = !!val;
+		if (ts->polling)
+			schedule_delayed_work(&ts->poll, 0);
+		else
+			cancel_delayed_work(&ts->poll);
+		return count;
+	}
+
+	spi_message_init(&msg);
+	ts->rxlen = 0;
+
+	if (!strncmp(p, "r ", 2)) {
+		if (kstrtouint(p + 2, 0, &val) || !val || val > TCM_XFER_MAX)
+			return -EINVAL;
+
+		memset(tx, 0xff, val);
+		xfer[0].tx_buf = tx;
+		xfer[0].rx_buf = ts->rxbuf;
+		xfer[0].len = val;
+		xfer[0].speed_hz = ts->speed_hz;
+		spi_message_add_tail(&xfer[0], &msg);
+		ts->rxlen = val;
+
+		ret = spi_sync(ts->spi, &msg);
+		return ret ? ret : count;
+	}
+
+	if (!strncmp(p, "w ", 2) || !strncmp(p, "wr ", 3) ||
+	    !strncmp(p, "x ", 2)) {
+		bool split = (p[0] == 'w' && p[1] == 'r');
+		bool one_cs = (p[0] == 'x');
+
+		p += split ? 3 : 2;
+
+		n = zumapro_touch_parse_hex(p, tx, sizeof(tx), &p);
+		if (n <= 0)
+			return -EINVAL;
+
+		xfer[0].tx_buf = tx;
+		xfer[0].len = n;
+		xfer[0].speed_hz = ts->speed_hz;
+
+		/* Plain "w": write and stop. */
+		if (!split && !one_cs) {
+			spi_message_add_tail(&xfer[0], &msg);
+			ret = spi_sync(ts->spi, &msg);
+			return ret ? ret : count;
 		}
 
-		snprintf(tag, sizeof(tag), "mode%d", m);
-		zumapro_touch_dump(ts, 8, tag);
+		if (kstrtouint(p, 0, &val) || !val || val > TCM_XFER_MAX)
+			return -EINVAL;
+
+		memset(ts->txfill, 0xff, val);
+		xfer[1].tx_buf = ts->txfill;
+		xfer[1].rx_buf = ts->rxbuf;
+		xfer[1].len = val;
+		xfer[1].speed_hz = ts->speed_hz;
+		ts->rxlen = val;
+
+		if (one_cs) {
+			/* Both transfers in one message. */
+			spi_message_add_tail(&xfer[0], &msg);
+			spi_message_add_tail(&xfer[1], &msg);
+			ret = spi_sync(ts->spi, &msg);
+			return ret ? ret : count;
+		}
+
+		/* Separate messages, so separate chip selects. */
+		spi_message_add_tail(&xfer[0], &msg);
+		ret = spi_sync(ts->spi, &msg);
+		if (ret)
+			return ret;
+
+		spi_message_init(&msg);
+		spi_message_add_tail(&xfer[1], &msg);
+		ret = spi_sync(ts->spi, &msg);
+		return ret ? ret : count;
 	}
 
-	ts->spi->mode = saved;
-	if (spi_setup(ts->spi))
-		dev_err(&ts->spi->dev, "could not restore spi mode\n");
+	return -EINVAL;
 }
 
-/*
- * What the last boot established: in one 32-byte chip-select assertion the
- * device drives exactly two bytes, a5 18, and lets MISO idle high for the
- * other thirty. All four feedback-clock taps gave the same thing, so it is
- * not a sampling problem, and the clock is right -- CMU_TOP's HSI0_PERI mux
- * reads 1, which Google's cmucal table names PLL_SHARED2_D2, and
- * PLL_CON3_SHARED2 decodes to 798.72 MHz, so the bus is at 9.984 MHz against
- * a part rated for 10.
- *
- * So the device starts a reply and stops. These three experiments say why.
- */
-/*
- * What Google's driver actually does first, from syna_tcm_detect_device():
- *
- *	data[0] = 0x07;
- *	syna_tcm_write(tcm_dev, &data[0], 1);
- *	syna_tcm_read(tcm_dev, data, 4);
- *
- * A single raw byte -- CMD_TCM2_ACK, harmless to a v1 part -- and only then a
- * four-byte read. This driver has never sent it; it went straight to a v1
- * IDENTIFY packet. Everything else about the framing matches: the command
- * packet really is [cmd][len_lo][len_hi] per syna_tcm_v1_write(), and the
- * part really is v1, because Google tries v2 first and decides by a crc-6
- * over the header, which every header seen here fails.
- */
-static void zumapro_touch_stock_detect(struct zumapro_touch *ts, const char *tag)
+static ssize_t tcm_xfer_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
 {
-	static const u8 magic = CMD_TCM2_ACK;
-	char label[32];
-	int ret;
+	struct zumapro_touch *ts = spi_get_drvdata(to_spi_device(dev));
 
-	ret = spi_write(ts->spi, &magic, 1);
-	if (ret) {
-		dev_err(&ts->spi->dev, "%s: magic write failed %d\n", tag, ret);
-		return;
-	}
+	if (!ts->rxlen)
+		return sysfs_emit(buf, "\n");
 
-	snprintf(label, sizeof(label), "%s 4", tag);
-	zumapro_touch_dump(ts, 4, label);
-
-	ret = spi_write(ts->spi, &magic, 1);
-	if (ret)
-		return;
-
-	snprintf(label, sizeof(label), "%s 32", tag);
-	zumapro_touch_dump(ts, 32, label);
+	return sysfs_emit(buf, "%*ph\n", (int)min_t(unsigned int, ts->rxlen, 64),
+			  ts->rxbuf);
 }
 
-static void zumapro_touch_experiments(struct zumapro_touch *ts)
-{
-	if (ts->spiregs)
-		dev_err(&ts->spi->dev,
-			"spi: ch_cfg 0x%08x mode_cfg 0x%08x cs 0x%08x swap 0x%08x fb %u\n",
-			readl(ts->spiregs + SPI_CH_CFG),
-			readl(ts->spiregs + SPI_MODE_CFG),
-			readl(ts->spiregs + SPI_CS_REG),
-			readl(ts->spiregs + SPI_SWAP_CFG),
-			readl(ts->spiregs + SPI_FB_CLK));
+static DEVICE_ATTR_RW(tcm_xfer);
 
-	/*
-	 * Does the number of bytes the device drives depend on how many we
-	 * ask for? If every length returns the same two bytes, the device is
-	 * ending the reply itself; if the good bytes track the length, the
-	 * controller is cutting it short.
-	 */
-	/* Google's own opening move, before anything of this driver's. */
-	zumapro_touch_stock_detect(ts, "detect");
-
-	zumapro_touch_dump(ts, 2, "len2");
-	zumapro_touch_dump(ts, 4, "len4");
-	zumapro_touch_dump(ts, 8, "len8");
-	zumapro_touch_dump(ts, 16, "len16");
-
-	zumapro_touch_dump_split(ts);
-	zumapro_touch_mode_sweep(ts);
-
-	/* Stock resets the part and then detects; do it in that order too. */
-	zumapro_touch_reset(ts);
-	zumapro_touch_stock_detect(ts, "detect after reset");
-}
+static struct attribute *zumapro_touch_attrs[] = {
+	&dev_attr_tcm_xfer.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(zumapro_touch);
 
 static void zumapro_touch_poll(struct work_struct *work)
 {
@@ -478,8 +491,8 @@ static void zumapro_touch_poll(struct work_struct *work)
 	u8 code = 0;
 	int len;
 
-	if (!zumapro_touch_attn(ts))
-		goto again;
+	if (!ts->polling)
+		return;
 
 	len = zumapro_touch_read(ts, &code);
 	if (len >= 0) {
@@ -493,7 +506,6 @@ static void zumapro_touch_poll(struct work_struct *work)
 			code, len, min(len, 16), ts->rxbuf);
 	}
 
-again:
 	schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
 }
 
@@ -530,8 +542,13 @@ static int zumapro_touch_probe(struct spi_device *spi)
 		dev_err(dev, "no alive mapping; polling without ATTN\n");
 
 	ts->spiregs = devm_ioremap(dev, SPI_BASE, SPI_SIZE);
-	if (!ts->spiregs)
-		dev_err(dev, "no spi register mapping; no feedback sweep\n");
+	if (ts->spiregs)
+		dev_err(dev, "spi: ch_cfg 0x%08x mode_cfg 0x%08x cs 0x%08x swap 0x%08x fb %u\n",
+			readl(ts->spiregs + SPI_CH_CFG),
+			readl(ts->spiregs + SPI_MODE_CFG),
+			readl(ts->spiregs + SPI_CS_REG),
+			readl(ts->spiregs + SPI_SWAP_CFG),
+			readl(ts->spiregs + SPI_FB_CLK));
 
 	/*
 	 * Sample the interrupt line before anything is powered. If it reads
@@ -568,15 +585,12 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	 * A TouchComm part queues a REPORT_IDENTIFY of its own after reset, so
 	 * there is something to read before any command is sent.
 	 */
-	zumapro_touch_experiments(ts);
-
 	ret = zumapro_touch_cmd(ts, CMD_IDENTIFY, NULL, 0);
 	if (ret) {
 		dev_err(dev, "IDENTIFY write failed: %d\n", ret);
 		goto err;
 	}
 
-	zumapro_touch_dump(ts, 16, "after IDENTIFY");
 
 	len = zumapro_touch_read_wait(ts, &code);
 	if (len < 0)
@@ -610,7 +624,8 @@ static int zumapro_touch_probe(struct spi_device *spi)
 		goto err;
 
 	INIT_DELAYED_WORK(&ts->poll, zumapro_touch_poll);
-	schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
+	if (ts->polling)
+		schedule_delayed_work(&ts->poll, msecs_to_jiffies(TOUCH_POLL_MS));
 
 	return 0;
 
@@ -639,6 +654,7 @@ static struct spi_driver zumapro_touch_driver = {
 	.driver = {
 		.name = "zumapro-touch",
 		.of_match_table = zumapro_touch_of_match,
+		.dev_groups = zumapro_touch_groups,
 	},
 	.probe = zumapro_touch_probe,
 	.remove = zumapro_touch_remove,
