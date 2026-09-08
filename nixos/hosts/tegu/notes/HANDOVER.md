@@ -84,62 +84,65 @@ framebuffer, UART console, watchdog, ACPM.
 - The part was silent because it is unpowered. Its rails are S2MPG14 LDO4M
   (AVDD 3.3 V, reg 0x2E) and LDO25M (DVDD 1.8 V, reg 0x43), enable at BIT(7).
   A live read had both correctly programmed and switched **off**.
-- **The part is alive.** `kernel/zumapro-s2mpg14-regulator.c` enabled both
-  rails, `kernel/zumapro-touch.c` brought it out of reset, and TouchComm
-  traffic appeared on the bus. The whole chain is proven: CMU_HSI0 clock, SPI
-  controller, ACPM, PMIC rails, reset shim.
+- `kernel/zumapro-s2mpg14-regulator.c` writes the enable bit over ACPM and
+  `kernel/zumapro-touch.c` drives reset, but **the part has never answered**.
+  What is proven is the CMU_HSI0 clock, the SPI controller, ACPM, the
+  register map, and that reset is driven. What is *not* proven is that the
+  rails actually come up.
 
 ### Where it got to, and the open question
 
-Two logs in. The first showed the driver sliding out of sync with the message
-stream — `report 0x18, 512 bytes: a5 10 ff ...`, i.e. a marker and a
-REPORT_IDENTIFY *inside* a payload. That was a framing bug, not a confused
-device, and both causes are now fixed:
+Three logs in, IDENTIFY still times out. Fixed along the way, all real bugs:
 
 1. `spi_read()` transmits zeroes, and on TouchComm a MOSI byte is a command
    byte — so every read was feeding the part 0x00. Google fills TX with 0xff
-   for reads (`syna_tcm2_platform_spi.c`); the driver now does the same via an
-   explicit `spi_transfer`.
+   for reads (`syna_tcm2_platform_spi.c`); the driver now does the same.
 2. An idle bus reads all 0xff, so a header of `ff ff ff ff` was taken as a
-   65535-byte message, clamped to 512, and printed as filler. Implausible
-   lengths now resynchronise instead.
+   65535-byte message and printed as filler. Implausible lengths now
+   resynchronise.
+3. A single read 20 ms after the command called the part silent. Google's
+   core polls every `CMD_RESPONSE_POLLING_DELAY_MS` (10 ms) up to
+   `CMD_RESPONSE_TIMEOUT_MS` (3000 ms) and retries a wrong-marker header with
+   a 5–10 ms sleep. The driver now retries 100 × 10 ms.
 
-The second log is the important one. **The ATTN line proved the part is
-powered and behaving.**
+**A correction you need, because it is in the git history.** One log was read
+as showing `gpn0` idling high, and a commit and a README section were written
+saying the part had come alive. That was a misread: in a bank dump the words
+are CON, DAT, PUD, DRV, and the `0x00000001` was PUD. `gpn0` DAT reads 0 in
+every measurement, including through a pull-up that reads back as enabled.
 
-	zumapro-touch ...: rails up: vdd 1800000 uV, avdd 3300000 uV
-	zumapro-touch ...: gpn0 DAT = 0x00000001        <- idles HIGH
-	zumapro-touch ...: irq sample 0..9: DAT = 0     <- LOW after reset
+That reading is *ambiguous* and cannot settle anything on its own — 0 is what
+an asserted active-low ATTN looks like and equally what an unpowered part
+clamping through its ESD diodes looks like. (`gpn3`, one bank along, reads 1,
+so the block and the reads are sound.) Do not use this line as evidence in
+either direction until the part has answered once.
 
-That line had read 0 on every boot of the whole port, even with a pull-up
-enabled — an unpowered part clamping through its ESD diodes, not an
-assertion. It now idles high and asserts low after a reset, which is a live
-TouchComm part saying "message waiting". That question is closed; so is
-`DIV_CLK_USI2 = 0x09` (the HSI0 driver programming the real divider) and
-`CS_REG = 0x23` (transfers ran).
+**The open question is whether the rails actually come up.**
+`regulator_enable()` returning 0 means ACPM accepted the message and reported
+no PMIC error. It is not a read of the bit. The enable path now reads the
+register back and logs `0xNN -> 0xNN`, and fails with `-EIO` if bit 7 did not
+stick.
 
-It still said `no answer to IDENTIFY (-42)`, and that was **this driver's read
-logic, not the hardware**. Google's core polls for a command response every
-`CMD_RESPONSE_POLLING_DELAY_MS` (10 ms) up to `CMD_RESPONSE_TIMEOUT_MS`
-(3000 ms) and retries a wrong-marker header with a 5–10 ms sleep; this driver
-read *once*, 20 ms after the command, and called the part silent. Fixed and
-**flashed but not yet seen on hardware**:
+**Next log to read**, in priority order:
 
-- `zumapro_touch_read_wait()` retries 100 × 10 ms, matching the vendor timeout.
-- The poll loop is gated on ATTN (`zumapro_touch_attn()`, gpn0 DAT read
-  directly at `0x15060000` + 0x04, active low) so the bus is only touched when
-  a message is actually waiting.
-- An IDENTIFY timeout no longer fails probe. The bus and rails are known good,
-  and failing took the only instrument off the device — which is why the last
-  log went quiet 4.8 s in.
+	zumapro-s2mpg14-regulator ...: LDO4M: reg 0x2e: 0x3c -> 0xbc (want bit 7 set)
+	zumapro-s2mpg14-regulator ...: LDO25M: reg 0x43: 0x2c -> 0xac (want bit 7 set)
+	zumapro-touch ...: gpn0 before power / rails on / after reset
+	zumapro-touch ...: try 0: hdr XX XX XX XX, gpn0 0xNNNNNNNN
 
-**Next log to read.** Want a clean `IDENTIFY -> code 0x10` with a short,
-non-0xff payload — that is the part's real identity, and the point where
-decoding touch reports becomes reading data instead of guessing. If framing is
-still off, compare against `syna_tcm_v1_read()` in
-`/tmp/tegu-work/synaptics/syna_c10/tcm/synaptics_touchcom_core_v1.c`;
-candidates not yet examined are the bus turn-around delay (`TAT_DELAY_US`) and
-whether header and payload must share one CS assertion.
+1. If the enable bit does **not** stick, the touch part is a side issue and
+   the question becomes how this PMIC is really enabled — start with whether
+   ACPM will write this register at all (try `write_reg` with the whole byte
+   rather than `update_reg`), then with `S2MPG14_PM_PCTRLSEL1..11` /
+   `DCTRLSEL1..7` at 0x97–0xA8, which select what actually drives a rail.
+2. If it does stick, read the header bytes. All `0x00` means MISO is held
+   low — a part that is still not powered, despite the bit. All `0xff` means
+   an idle bus and a powered part that is not answering, which moves the
+   search to TouchComm framing: the bus turn-around delay (`TAT_DELAY_US`),
+   whether header and payload must share one chip-select assertion, and
+   `syna_tcm_v1_read()` in
+   `/tmp/tegu-work/synaptics/syna_c10/tcm/synaptics_touchcom_core_v1.c`.
+3. Anything else in the header is real data and the framing is close.
 
 ### Known-incomplete in the touch driver
 
@@ -157,9 +160,20 @@ whether header and payload must share one CS assertion.
 
 1. A **zumapro pinctrl driver**. It unblocks three things: the touch reset and
    IRQ (removing both shims above), and `sec-acpm`'s mandatory interrupt.
-   Mainline has the Samsung pinctrl driver and gs101 bank tables; zumapro needs
-   its own. The stock DTS lists every bank and its GIC interrupts, and hardware
-   confirms the 0x20 bank stride; per-bank pin counts are the missing piece.
+   Mainline has the Samsung pinctrl driver and gs101 bank tables; zumapro
+   needs its own.
+
+   **The bank tables already exist and are complete.** `soc-gs`,
+   `drivers/pinctrl/gs/pinctrl-gs.c`, has `zuma_pin_alive[]`,
+   `zuma_pin_custom[]`, `zuma_pin_far[]`, `zuma_pin_gsacore0..3[]`,
+   `zuma_pin_gsactrl[]`, `zuma_pin_hsi1[]`, `zuma_pin_hsi2[]`,
+   `zuma_pin_hsi2ufs[]` and the peric banks, each entry giving pin count,
+   offset, name and EINT numbers, with the block base in the comment above
+   it. `google,zumapro-pinctrl` shares zuma's data. For example
+   `0x15060000` is GPIO_CUSTOM_ALIVE and holds `gpn0`..`gpn9`, one pin each,
+   0x20 apart, `gpn0` first — which is what makes the touch IRQ readable at
+   `0x15060004` today. Nothing here needs reverse-engineering; it needs
+   transcribing into mainline's `samsung_pin_bank_data` form.
 2. Coordinate decoding, from logged reports.
 3. USB (DWC3 + eUSB/combo PHY) would end the reflash-per-question loop.
 

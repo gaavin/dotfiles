@@ -52,8 +52,8 @@ sources, then tested by booting it.
 | Watchdog | **Yes.** BL2 arms a 60 s cluster watchdog; Linux now owns it |
 | Touch SPI bus | **Yes.** Loopback echoes at 9.98 MHz |
 | ACPM | **Yes.** Mailbox, SRAM and protocol confirmed; the route to the PMIC |
-| S2MPG14 rails | **Yes.** `LDO4M` and `LDO25M` enabled over ACPM; the touch part is powered and its ATTN line answers |
-| Touch input | Not yet — the bus, the rails and the part are all proven; what is left is TouchComm framing and report decoding |
+| S2MPG14 rails | Registers read and decoded correctly over ACPM; the enable write is not yet verified to reach the part |
+| Touch input | No. The bus is proven and the part is still silent; the open question is whether its rails actually come up |
 | USB, WLAN, modem, GPU, audio, camera | No |
 
 ## The panel console
@@ -211,13 +211,18 @@ Things that are not documented anywhere and cost real time to discover:
     `gs101-acpm-clk` device answered it in one boot. Check the driver model,
     not the log.
 
-15. **A pull-up that reads 0 means no power, not an assertion.** `gpn0-0`,
-    the touch IRQ, read 0 through a pull-up that read back as enabled, for
-    the whole of this port. An idle input with a pull-up reads 1; an
-    unpowered part clamps the line low through its ESD diodes. Once the rails
-    came up the same line idled 1 and asserted 0 after a reset pulse. That
-    single bit was the difference between "the driver is wrong" and "the part
-    is not switched on".
+15. **A GPIO bank dump is CON, DAT, PUD, DRV — in that order.** The touch
+    IRQ `gpn0-0` was read as idling high, and this file briefly said the part
+    had come alive, because the `0x00000001` in a bank's dump row was taken
+    for DAT when it is PUD. `gpn0` DAT has read 0 in every measurement of
+    this port, including through a pull-up that reads back as enabled.
+
+    That reading is *ambiguous*, which is the actual lesson: 0 on an
+    active-low ATTN is what an asserted interrupt looks like and equally what
+    an unpowered part clamping through its ESD diodes looks like. `gpn3`, one
+    bank along, reads 1, so the block and the reads are sound. The line
+    cannot settle the question on its own and the driver no longer pretends
+    it can.
 
 16. **`find` lies in a sparse checkout.** `soc-gs` is cloned sparse and
     blobless, so files that exist in the repository are absent from the
@@ -359,7 +364,7 @@ which polls a register this SoC does not have.
   when `init_count` is non-zero, so the re-bound driver was skipping
   calibration silently. Silence was read as success.
 
-## Touch: the bus is proven and the part is alive
+## Touch: the bus is proven, the part is still silent
 
 The controller is finished. In internal loopback it echoes `a5 5a 0f f0` byte
 for byte at 9.98 MHz, so the clock, the datapath and the FIFOs are all good.
@@ -387,34 +392,42 @@ means), the USI's `CLKSTOP_ON` (already clear), the PERIC1 gates, `CS_REG`'s
 blocks that plainly work), and clock gating generally. Every finding that
 survived came from a dump; no hypothesis did.
 
-**The part was silent because it was unpowered.** Its rails are S2MPG14
-`LDO4M` (AVDD 3.3 V, reg `0x2E`) and `LDO25M` (DVDD 1.8 V, reg `0x43`),
-enable at `BIT(7)`. Nothing turns them on before Linux — Google's driver does
-it itself with a 200 ms settle. A live read had both correctly programmed and
-switched off: `0x2E = 0x3c` decodes to 3,300,000 µV and `0x43 = 0x2c` to
-1,800,000 µV, matching Google's board file exactly.
+**The most likely reason it is silent is that it is unpowered.** Its rails
+are S2MPG14 `LDO4M` (AVDD 3.3 V, reg `0x2E`) and `LDO25M` (DVDD 1.8 V, reg
+`0x43`), enable at `BIT(7)` — a single bit for both, confirmed against
+Google's own descriptors, not the two-bit 7:6 field some other rails use.
+Nothing turns them on before Linux; Google's driver does it itself with a
+200 ms settle. A live read had both correctly programmed and switched off:
+`0x2E = 0x3c` decodes to 3,300,000 µV and `0x43 = 0x2c` to 1,800,000 µV,
+matching Google's board file exactly.
 
-`kernel/zumapro-s2mpg14-regulator.c` enables them over ACPM, and it works.
-The proof is not the SPI but the IRQ line:
+`kernel/zumapro-s2mpg14-regulator.c` enables them over ACPM. **Whether that
+write reaches the part has not been verified**, and this is the open
+question. `regulator_enable()` returning 0 means ACPM accepted the message
+and reported no PMIC error; it is not a read of the bit. The driver now reads
+the register back after writing it and logs both values, because this port
+has already lost days to a clock provider that accepted every write and
+reported every rate back while driving nothing.
 
-    zumapro-touch: rails up: vdd 1800000 uV, avdd 3300000 uV
-    zumapro-touch: gpn0 DAT = 0x00000001        <- idles HIGH
-    zumapro-touch: irq sample 0..9: DAT = 0     <- LOW after a reset pulse
+Two framing bugs in `kernel/zumapro-touch.c` are fixed — `spi_read()`
+transmits zeroes and TouchComm reads a MOSI byte as a command byte, so reads
+now drive MOSI high as Google's does; and an idle bus reads all `0xff`, so a
+header of `ff ff ff ff` was being taken as a 65535-byte message rather than
+as nothing. The driver also now waits for a response the way the vendor core
+does, 10 ms polls up to 3 s, instead of reading once 20 ms after the command.
+With all of that, IDENTIFY still times out.
 
-`gpn0-0` had read 0 on every boot of this port, even with a pull-up enabled
-and reading back `0x3` — which is not an assertion but an unpowered part
-clamping the line through its ESD diodes. It now idles high and asserts low
-after reset, which is a live TouchComm part saying "message waiting". The
-whole chain is proven: CMU_HSI0 clock, SPI controller, ACPM, PMIC rails,
-reset.
+The next log has to answer one question: **what does MISO actually carry?**
+All `0x00` is a part holding the line low, which is what an unpowered one
+does — and an early probe did read `00 00 00 00` from a completed transfer.
+All `0xff` is an idle bus and a part that is powered but not answering, which
+would move the search to framing, chip select and turn-around timing. The
+driver logs the raw header bytes on the first attempts and on the last, so
+one boot decides it.
 
-What remains is protocol, in `kernel/zumapro-touch.c`. Two framing bugs are
-fixed — `spi_read()` transmits zeroes and TouchComm reads a MOSI byte as a
-command byte, so reads now drive MOSI high as Google's does; and an idle bus
-reads all `0xff`, so a header of `ff ff ff ff` was being taken as a
-65535-byte message rather than as nothing. The last unverified change waits
-for a response the way the vendor core does — 10 ms polls up to 3 s — instead
-of reading once, 20 ms after the command, and calling the part silent.
+The IRQ line cannot settle it. `gpn0-0` reads 0 in every measurement, pull-up
+or not, and 0 is both what an asserted active-low ATTN looks like and what a
+clamped input on an unpowered part looks like (see fact 15).
 
 Coordinate decoding is deliberately unwritten: TouchComm's touch report is a
 bitfield sequence described by a report-config the part supplies at runtime,
@@ -471,9 +484,13 @@ cannot write an S2MPG10 offset by accident.
    reset is currently written straight into peric0's GPIO block from the
    driver, the touch IRQ is polled at 16 ms instead of taken from `gpn0-0`,
    and `sec-acpm` cannot probe at all without an interrupt. Mainline has the
-   Samsung pinctrl driver and gs101 bank tables; zumapro needs its own. The
-   stock DTS gives the bank lists and their GIC interrupts, and hardware
-   confirms the 0x20 bank stride; per-bank pin counts are the missing piece.
+   Samsung pinctrl driver and gs101 bank tables; zumapro needs its own — and
+   the data is already written down. `soc-gs`'s
+   `drivers/pinctrl/gs/pinctrl-gs.c` carries a full set of `zuma_pin_*[]`
+   tables giving every bank's pin count, offset, name and EINT numbers, with
+   the block base in the comment above each, and `google,zumapro-pinctrl`
+   shares zuma's data. This is a transcription job, not a reverse-engineering
+   one.
 3. **USB.** `usb@11210000`, PHY `@11100000`. A gadget serial console would end
    the reflash-per-question loop that costs this port most of its time;
    `USB_G_SERIAL` and `U_SERIAL_CONSOLE` are already enabled.

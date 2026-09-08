@@ -75,11 +75,19 @@
 #define TOUCH_RESP_TRIES	100
 
 /*
- * The ATTN line, gpn0-0 in the alive block, active low. No pinctrl driver, so
- * it is read directly like the reset pad. Measured: it idles high on a
- * powered part and goes low when a message is waiting -- for the whole of
- * this port until the rails came up it read 0 through a pull-up, which is an
- * unpowered part clamping through its ESD diodes, not an assertion.
+ * The ATTN line, gpn0-0, active low. No pinctrl driver, so it is read
+ * directly like the reset pad.
+ *
+ * The bank layout is from Google's own table (soc-gs,
+ * drivers/pinctrl/gs/pinctrl-gs.c, zuma_pin_custom[]): 0x15060000 is
+ * GPIO_CUSTOM_ALIVE, holding gpn0..gpn9, one pin each, 0x20 apart, gpn0
+ * first. So CON is +0x00 and DAT +0x04, and gpn0's only pin is bit 0.
+ *
+ * This line has read 0 in every measurement in this port, including with a
+ * pull-up enabled and read back as enabled -- and gpn3, in the same block,
+ * reads 1, so the block and the reads are good. 0 is ambiguous: it is what
+ * an asserted ATTN looks like, and also what an unpowered part clamping
+ * through its ESD diodes looks like. It is logged, not trusted.
  */
 #define ALIVE_BASE		0x15060000
 #define ALIVE_SIZE		0x10
@@ -106,6 +114,7 @@ struct zumapro_touch {
 	struct delayed_work poll;
 	void __iomem *peric0;
 	void __iomem *alive;
+	u8 hdr[TCM_HEADER_SIZE];	/* last header read, for diagnostics */
 	u8 rxbuf[512];
 	u8 txfill[512];		/* all 0xff; see zumapro_touch_spi_read() */
 };
@@ -186,10 +195,10 @@ static int zumapro_touch_spi_read(struct zumapro_touch *ts, u8 *buf, size_t len)
  */
 static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 {
-	u8 hdr[TCM_HEADER_SIZE];
+	u8 *hdr = ts->hdr;
 	int ret, len;
 
-	ret = zumapro_touch_spi_read(ts, hdr, sizeof(hdr));
+	ret = zumapro_touch_spi_read(ts, hdr, TCM_HEADER_SIZE);
 	if (ret)
 		return ret;
 
@@ -212,13 +221,19 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 	return len;
 }
 
+/* Raw gpn0 DAT, or ~0 when the block is not mapped. */
+static u32 zumapro_touch_attn_dat(struct zumapro_touch *ts)
+{
+	return ts->alive ? readl(ts->alive + GPN0_DAT) : ~0u;
+}
+
 /* True when the part has a message waiting. Assume yes if unmapped. */
 static bool zumapro_touch_attn(struct zumapro_touch *ts)
 {
 	if (!ts->alive)
 		return true;
 
-	return !(readl(ts->alive + GPN0_DAT) & BIT(GPN0_ATTN_PIN));
+	return !(zumapro_touch_attn_dat(ts) & BIT(GPN0_ATTN_PIN));
 }
 
 /*
@@ -233,6 +248,19 @@ static int zumapro_touch_read_wait(struct zumapro_touch *ts, u8 *code)
 		ret = zumapro_touch_read(ts, code);
 		if (ret != -ENOMSG)
 			return ret;
+
+		/*
+		 * Show the bytes, not just -ENOMSG. All 0x00 is MISO held low,
+		 * which is what an unpowered part does; all 0xff is an idle
+		 * bus and a part that is powered but not answering. That
+		 * distinction decides where to look next, and the previous
+		 * version of this loop threw it away.
+		 */
+		if (i < 3 || i == TOUCH_RESP_TRIES - 1)
+			dev_err(&ts->spi->dev,
+				"try %d: hdr %*ph, gpn0 0x%08x\n", i,
+				TCM_HEADER_SIZE, ts->hdr,
+				zumapro_touch_attn_dat(ts));
 
 		msleep(TOUCH_RESP_POLL_MS);
 	}
@@ -289,6 +317,23 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	if (IS_ERR(ts->avdd))
 		return dev_err_probe(dev, PTR_ERR(ts->avdd), "no avdd\n");
 
+	/* See the comment at the top: no pinctrl, so drive the pads directly. */
+	ts->peric0 = devm_ioremap(dev, PERIC0_BASE, PERIC0_SIZE);
+	if (!ts->peric0)
+		dev_err(dev, "no peric0 mapping; reset will not be driven\n");
+
+	ts->alive = devm_ioremap(dev, ALIVE_BASE, ALIVE_SIZE);
+	if (!ts->alive)
+		dev_err(dev, "no alive mapping; polling without ATTN\n");
+
+	/*
+	 * Sample the interrupt line before anything is powered. If it reads
+	 * the same here as it does with both rails up and the part out of
+	 * reset, the line is telling us nothing and the driver should stop
+	 * treating it as evidence either way.
+	 */
+	dev_err(dev, "gpn0 before power: 0x%08x\n", zumapro_touch_attn_dat(ts));
+
 	ret = regulator_enable(ts->vdd);
 	if (ret)
 		return dev_err_probe(dev, ret, "cannot enable vdd\n");
@@ -300,28 +345,23 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	}
 
 	msleep(TOUCH_POWER_DELAY_MS);
-	dev_err(dev, "rails up: vdd %d uV, avdd %d uV\n",
-		regulator_get_voltage(ts->vdd), regulator_get_voltage(ts->avdd));
-
-	/* See the comment at the top: no pinctrl, so drive the pad directly. */
-	ts->peric0 = devm_ioremap(dev, PERIC0_BASE, PERIC0_SIZE);
-	if (!ts->peric0)
-		dev_err(dev, "no peric0 mapping; reset will not be driven\n");
-
-	ts->alive = devm_ioremap(dev, ALIVE_BASE, ALIVE_SIZE);
-	if (!ts->alive)
-		dev_err(dev, "no alive mapping; polling without ATTN\n");
+	dev_err(dev, "rails on: vdd %d uV, avdd %d uV, gpn0 0x%08x\n",
+		regulator_get_voltage(ts->vdd), regulator_get_voltage(ts->avdd),
+		zumapro_touch_attn_dat(ts));
 
 	zumapro_touch_reset(ts);
+
+	if (ts->peric0)
+		dev_err(dev, "after reset: gpp1 CON 0x%08x DAT 0x%08x, gpn0 0x%08x\n",
+			readl(ts->peric0 + GPP1_CON),
+			readl(ts->peric0 + GPP1_DAT),
+			zumapro_touch_attn_dat(ts));
 
 	ret = zumapro_touch_cmd(ts, CMD_IDENTIFY, NULL, 0);
 	if (ret) {
 		dev_err(dev, "IDENTIFY write failed: %d\n", ret);
 		goto err;
 	}
-
-	dev_err(dev, "attn after reset: %s\n",
-		zumapro_touch_attn(ts) ? "asserted" : "idle");
 
 	len = zumapro_touch_read_wait(ts, &code);
 	if (len < 0)

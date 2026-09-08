@@ -22,8 +22,10 @@
  * and Google's board file (zuma-tegu-common-touch.dtsi) gives AVDD 3300000
  * and DVDD 1800000. Two exact hits, so the map is right. Both also read
  * with bit 7 clear: the rails are correctly programmed and switched off,
- * which is why the touch part is silent on a SPI bus that demonstrably
- * works, and why its active-low IRQ sits at 0 through a pull-up.
+ * which is the most likely reason the touch part is silent on a SPI bus
+ * that demonstrably works. The enable masks are BIT(7) for both LDO4M and
+ * LDO25M in Google's own descriptors, not the two-bit 7:6 field some of
+ * the other rails use, so a single bit is the whole of the enable.
  *
  * Why this is not sec-acpm.c plus s2mps11.c. Mainline's MFD knows only
  * S2MPG10/11, whose register map is not this one -- on S2MPG10 the LDO
@@ -64,6 +66,7 @@
 
 struct zumapro_s2mpg14 {
 	struct acpm_handle *acpm;
+	struct device *dev;
 };
 
 static int s2mpg14_read(struct regulator_dev *rdev, u8 reg, u8 *val)
@@ -84,10 +87,83 @@ static int s2mpg14_update(struct regulator_dev *rdev, u8 reg, u8 val, u8 mask)
 						PMIC_SPEEDY_MAIN, val, mask);
 }
 
+static int s2mpg14_write(struct regulator_dev *rdev, u8 reg, u8 val)
+{
+	struct zumapro_s2mpg14 *pmic = rdev_get_drvdata(rdev);
+
+	return pmic->acpm->ops->pmic.write_reg(pmic->acpm, PMIC_ACPM_CHAN,
+					       PMIC_TYPE_PMIC, reg,
+					       PMIC_SPEEDY_MAIN, val);
+}
+
+/*
+ * Enable, then read the register back and say what it holds.
+ *
+ * ACPM returning 0 means the coprocessor accepted the message and reported
+ * no PMIC error -- it is not evidence that the bit is set in the part. This
+ * port has already spent days on a clock provider that accepted every write
+ * and reported every rate back correctly while driving nothing, so the rule
+ * here is that a write is not believed until it is read back.
+ */
 static int s2mpg14_enable(struct regulator_dev *rdev)
 {
-	return s2mpg14_update(rdev, rdev->desc->enable_reg,
-			      rdev->desc->enable_mask, rdev->desc->enable_mask);
+	struct zumapro_s2mpg14 *pmic = rdev_get_drvdata(rdev);
+	u8 before = 0, after = 0;
+	int ret;
+
+	s2mpg14_read(rdev, rdev->desc->enable_reg, &before);
+
+	ret = s2mpg14_update(rdev, rdev->desc->enable_reg,
+			     rdev->desc->enable_mask, rdev->desc->enable_mask);
+	if (ret) {
+		dev_err(pmic->dev, "%s: enable write failed: %d\n",
+			rdev->desc->name, ret);
+		return ret;
+	}
+
+	ret = s2mpg14_read(rdev, rdev->desc->enable_reg, &after);
+	if (ret) {
+		dev_err(pmic->dev, "%s: enable readback failed: %d\n",
+			rdev->desc->name, ret);
+		return ret;
+	}
+
+	dev_err(pmic->dev, "%s: update reg 0x%02x: 0x%02x -> 0x%02x (want bit 7 set)\n",
+		rdev->desc->name, rdev->desc->enable_reg, before, after);
+
+	if (after & rdev->desc->enable_mask)
+		return 0;
+
+	/*
+	 * The read-modify-write did not take. Try a plain write of the whole
+	 * byte -- the value just read back, with the enable bit added, so
+	 * nothing else changes. Doing it here rather than in the next boot
+	 * separates "ACPM will not write this register at all" from
+	 * "update_reg specifically is not working", and a boot of this phone
+	 * costs a rebuild, a reflash and a person pressing power.
+	 */
+	ret = s2mpg14_write(rdev, rdev->desc->enable_reg,
+			    after | rdev->desc->enable_mask);
+	if (ret) {
+		dev_err(pmic->dev, "%s: plain write failed: %d\n",
+			rdev->desc->name, ret);
+		return ret;
+	}
+
+	ret = s2mpg14_read(rdev, rdev->desc->enable_reg, &after);
+	if (ret)
+		return ret;
+
+	dev_err(pmic->dev, "%s: after plain write: 0x%02x\n",
+		rdev->desc->name, after);
+
+	if (!(after & rdev->desc->enable_mask)) {
+		dev_err(pmic->dev, "%s: enable bit will not stick either way\n",
+			rdev->desc->name);
+		return -EIO;
+	}
+
+	return 0;
 }
 
 static int s2mpg14_disable(struct regulator_dev *rdev)
@@ -181,6 +257,7 @@ static int zumapro_s2mpg14_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(pmic->acpm),
 				     "no acpm handle\n");
 
+	pmic->dev = dev;
 	config.dev = dev;
 	config.driver_data = pmic;
 
