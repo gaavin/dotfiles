@@ -52,8 +52,8 @@ sources, then tested by booting it.
 | Watchdog | **Yes.** BL2 arms a 60 s cluster watchdog; Linux now owns it |
 | Touch SPI bus | **Yes.** Loopback echoes at 9.98 MHz |
 | ACPM | **Yes.** Mailbox, SRAM and protocol confirmed; the route to the PMIC |
-| S2MPG14 rails | Registers read and decoded correctly over ACPM; the enable write is not yet verified to reach the part |
-| Touch input | No. The bus is proven and the part is still silent; the open question is whether its rails actually come up |
+| S2MPG14 rails | **Yes.** `LDO4M` and `LDO25M` enabled over ACPM, verified by reading the enable bit back from the PMIC |
+| Touch input | Not yet, but the part answers: marker `0xa5` and `REPORT_IDENTIFY`. The open question is why later bytes of the header are wrong |
 | USB, WLAN, modem, GPU, audio, camera | No |
 
 ## The panel console
@@ -364,7 +364,7 @@ which polls a register this SoC does not have.
   when `init_count` is non-zero, so the re-bound driver was skipping
   calibration silently. Silence was read as success.
 
-## Touch: the bus is proven, the part is still silent
+## Touch: the part answers; the header does not survive the wire
 
 The controller is finished. In internal loopback it echoes `a5 5a 0f f0` byte
 for byte at 9.98 MHz, so the clock, the datapath and the FIFOs are all good.
@@ -392,42 +392,58 @@ means), the USI's `CLKSTOP_ON` (already clear), the PERIC1 gates, `CS_REG`'s
 blocks that plainly work), and clock gating generally. Every finding that
 survived came from a dump; no hypothesis did.
 
-**The most likely reason it is silent is that it is unpowered.** Its rails
-are S2MPG14 `LDO4M` (AVDD 3.3 V, reg `0x2E`) and `LDO25M` (DVDD 1.8 V, reg
-`0x43`), enable at `BIT(7)` — a single bit for both, confirmed against
-Google's own descriptors, not the two-bit 7:6 field some other rails use.
-Nothing turns them on before Linux; Google's driver does it itself with a
-200 ms settle. A live read had both correctly programmed and switched off:
-`0x2E = 0x3c` decodes to 3,300,000 µV and `0x43 = 0x2c` to 1,800,000 µV,
-matching Google's board file exactly.
+**It was unpowered, and now it is not.** Its rails are S2MPG14 `LDO4M` (AVDD
+3.3 V, reg `0x2E`) and `LDO25M` (DVDD 1.8 V, reg `0x43`), enable at `BIT(7)` —
+a single bit for both, confirmed against Google's own descriptors, not the
+two-bit 7:6 field some other rails use. Nothing turns them on before Linux;
+Google's driver does it itself with a 200 ms settle.
+`kernel/zumapro-s2mpg14-regulator.c` does the same over ACPM, and the write
+lands:
 
-`kernel/zumapro-s2mpg14-regulator.c` enables them over ACPM. **Whether that
-write reaches the part has not been verified**, and this is the open
-question. `regulator_enable()` returning 0 means ACPM accepted the message
-and reported no PMIC error; it is not a read of the bit. The driver now reads
-the register back after writing it and logs both values, because this port
-has already lost days to a clock provider that accepted every write and
-reported every rate back while driving nothing.
+    LDO25M: update reg 0x43: 0x2c -> 0xac
+    LDO4M:  update reg 0x2e: 0x3c -> 0xbc
 
-Two framing bugs in `kernel/zumapro-touch.c` are fixed — `spi_read()`
-transmits zeroes and TouchComm reads a MOSI byte as a command byte, so reads
-now drive MOSI high as Google's does; and an idle bus reads all `0xff`, so a
-header of `ff ff ff ff` was being taken as a 65535-byte message rather than
-as nothing. The driver also now waits for a response the way the vendor core
-does, 10 ms polls up to 3 s, instead of reading once 20 ms after the command.
-With all of that, IDENTIFY still times out.
+Read back from the PMIC, not inferred from a return code — `regulator_enable()`
+returning 0 only means ACPM accepted the message. `0x3c` decodes to 3,300,000
+µV and `0x2c` to 1,800,000 µV, matching Google's board file exactly.
 
-The next log has to answer one question: **what does MISO actually carry?**
-All `0x00` is a part holding the line low, which is what an unpowered one
-does — and an early probe did read `00 00 00 00` from a completed transfer.
-All `0xff` is an idle bus and a part that is powered but not answering, which
-would move the search to framing, chip select and turn-around timing. The
-driver logs the raw header bytes on the first attempts and on the last, so
-one boot decides it.
+**And the part answers.** `0xa5` is `TCM_V1_MESSAGE_MARKER` and `0x10` is
+`REPORT_IDENTIFY`, the report a TouchComm device queues after reset. The bus
+is byte-aligned and the device responds to being clocked.
 
-The IRQ line cannot settle it. `gpn0-0` reads 0 in every measurement, pull-up
-or not, and 0 is both what an asserted active-low ATTN looks like and what a
-clamped input on an unpowered part looks like (see fact 15).
+What fails is the rest of the header. Google's header says a v1 identify
+packet is 24 = `0x18` bytes, so the true header is almost certainly
+`a5 10 18 00`:
+
+| read | byte 0 | byte 1 | bytes 2–3 |
+| --- | --- | --- | --- |
+| try 0 | `a5` ✓ | `10` ✓ | `ff ff` ✗ |
+| try 1 | `a5` ✓ | `18` — the length byte, one position early | `ff ff` ✗ |
+| poll | `a5` ✓ | `18` | `ff 00` |
+
+Byte 0 is right every time, byte 1 is right or one bit out, and it degrades
+from there. That is sampling, not protocol.
+
+Three duller explanations are already out. The driver cannot be under-reading:
+`s3c64xx_spi_wait_for_pio()` spins until `RX_FIFO_LVL` reaches the transfer
+length and returns `-EIO` otherwise, and `spi_sync()` returned 0, so all four
+bytes came off the wire. Mainline zeroes `SWAP_CFG` at init. And the pads are
+not ours to misconfigure — no `gpb` bank exists in any zumapro pinctrl block,
+which is why Google's own SPI node carries an empty `pinctrl-0`.
+
+**The open suspect is the feedback clock.** The controller samples MISO on a
+clock fed back through the pad; `FB_CLK_SEL` picks one of four taps; mainline
+writes it once from `samsung,spi-feedback-delay`, default 0. Internal loopback
+is blind to this by construction — it never leaves the controller, so it has
+no round trip to compensate for, which is exactly how a bus that echoes
+`a5 5a 0f f0` perfectly can still read a real device wrong. The driver now
+sweeps all four taps and dumps 32 raw bytes at each: header plus a whole
+identify packet in one chip-select assertion.
+
+If the taps do not settle it, the next instrument is a genuinely slow clock.
+Today the floor is about 6.24 MHz against 9.98 — the USI2 divider is four bits
+off a fixed 399.36 MHz parent and `spi-s3c64xx` divides by four again — so
+modelling the CMU_TOP divider is what buys a real speed sweep.
 
 Coordinate decoding is deliberately unwritten: TouchComm's touch report is a
 bitfield sequence described by a report-config the part supplies at runtime,

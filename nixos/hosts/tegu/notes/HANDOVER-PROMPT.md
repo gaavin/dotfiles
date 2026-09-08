@@ -82,12 +82,19 @@ vendor_boot must carry no base cmdline of its own.
 ## What to do first
 
 1. Read `notes/HANDOVER.md`, then `README.md`.
-2. The user has a freshly flashed phone with a touch driver carrying a retry
-   fix that **nobody has seen boot yet**. Ask for that log before changing
-   anything. The line that matters is
-   `zumapro-touch ...: IDENTIFY -> code 0x10, N bytes: ...`.
-3. If IDENTIFY answers, the next job is decoding TouchComm touch reports into
-   input events, from the raw reports the driver logs. Google's decoder is
+2. The user has a freshly flashed phone carrying a diagnostic **nobody has
+   seen boot yet**: a sweep of the SPI controller's four feedback-clock taps,
+   dumping 32 raw bytes at each. Ask for that log before changing anything.
+   The touchscreen's rails are on and the part answers with `a5` and
+   `REPORT_IDENTIFY`; what fails is the rest of the message header, and
+   `notes/HANDOVER.md` has the table of what each read returned and the four
+   explanations already ruled out. A dump reading `a5 10 18 00` followed by
+   real data names the tap, and the fix is a `controller-data` node with
+   `samsung,spi-feedback-delay` — after which delete the sweep, which writes
+   the controller's register behind its own driver's back.
+3. Once the header reads cleanly, the next job is decoding TouchComm touch
+   reports into input events, from the raw reports the driver logs. Google's
+   decoder is
    `/tmp/tegu-work/synaptics/syna_c10/tcm/synaptics_touchcom_func_touch.c`.
 4. After touch, the highest-value piece of work is a **zumapro pinctrl
    driver** — it removes the touch reset and IRQ shims and unblocks

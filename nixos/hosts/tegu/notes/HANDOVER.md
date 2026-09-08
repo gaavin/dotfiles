@@ -84,65 +84,81 @@ framebuffer, UART console, watchdog, ACPM.
 - The part was silent because it is unpowered. Its rails are S2MPG14 LDO4M
   (AVDD 3.3 V, reg 0x2E) and LDO25M (DVDD 1.8 V, reg 0x43), enable at BIT(7).
   A live read had both correctly programmed and switched **off**.
-- `kernel/zumapro-s2mpg14-regulator.c` writes the enable bit over ACPM and
-  `kernel/zumapro-touch.c` drives reset, but **the part has never answered**.
-  What is proven is the CMU_HSI0 clock, the SPI controller, ACPM, the
-  register map, and that reset is driven. What is *not* proven is that the
-  rails actually come up.
+- **The rails are on and the part answers.**
+  `kernel/zumapro-s2mpg14-regulator.c` sets the enable bit over ACPM and reads
+  it back from the PMIC: `LDO25M 0x2c -> 0xac`, `LDO4M 0x3c -> 0xbc`. The
+  device then replies on the bus with `0xa5` (`TCM_V1_MESSAGE_MARKER`) and
+  `0x10` (`REPORT_IDENTIFY`). Clock, SPI controller, ACPM, register map,
+  rails, reset — the whole chain works.
 
 ### Where it got to, and the open question
 
-Three logs in, IDENTIFY still times out. Fixed along the way, all real bugs:
+Four logs in. Fixed along the way, all real bugs:
 
 1. `spi_read()` transmits zeroes, and on TouchComm a MOSI byte is a command
-   byte — so every read was feeding the part 0x00. Google fills TX with 0xff
-   for reads (`syna_tcm2_platform_spi.c`); the driver now does the same.
+   byte. Reads now drive MOSI high, as `syna_tcm2_platform_spi.c` does.
 2. An idle bus reads all 0xff, so a header of `ff ff ff ff` was taken as a
-   65535-byte message and printed as filler. Implausible lengths now
-   resynchronise.
-3. A single read 20 ms after the command called the part silent. Google's
-   core polls every `CMD_RESPONSE_POLLING_DELAY_MS` (10 ms) up to
-   `CMD_RESPONSE_TIMEOUT_MS` (3000 ms) and retries a wrong-marker header with
-   a 5–10 ms sleep. The driver now retries 100 × 10 ms.
+   65535-byte message. Implausible lengths now resynchronise.
+3. A single read 20 ms after the command called the part silent. Google's core
+   polls every 10 ms up to 3 s; the driver now retries 100 x 10 ms.
+4. `regulator_enable()` returning 0 was being read as "the rail is on". It
+   means ACPM accepted the message. The enable path now reads the register
+   back, and that is what proved the rails.
 
-**A correction you need, because it is in the git history.** One log was read
-as showing `gpn0` idling high, and a commit and a README section were written
-saying the part had come alive. That was a misread: in a bank dump the words
-are CON, DAT, PUD, DRV, and the `0x00000001` was PUD. `gpn0` DAT reads 0 in
-every measurement, including through a pull-up that reads back as enabled.
+**A correction that is in the git history.** One log was read as showing
+`gpn0` idling high and a commit claimed the part had come alive. That was a
+misread — in a bank dump the words are CON, DAT, PUD, DRV, and the
+`0x00000001` was PUD. `gpn0` DAT reads 0 in every measurement, including
+through a pull-up that reads back as enabled, and 0 is what an asserted
+active-low ATTN and an unpowered part clamping through its ESD diodes both
+look like. Do not use that line as evidence until the part has answered once.
 
-That reading is *ambiguous* and cannot settle anything on its own — 0 is what
-an asserted active-low ATTN looks like and equally what an unpowered part
-clamping through its ESD diodes looks like. (`gpn3`, one bank along, reads 1,
-so the block and the reads are sound.) Do not use this line as evidence in
-either direction until the part has answered once.
+**The open question is the header.** Google's header says a v1 identify packet
+is 24 = `0x18` bytes, so the true header is almost certainly `a5 10 18 00`:
 
-**The open question is whether the rails actually come up.**
-`regulator_enable()` returning 0 means ACPM accepted the message and reported
-no PMIC error. It is not a read of the bit. The enable path now reads the
-register back and logs `0xNN -> 0xNN`, and fails with `-EIO` if bit 7 did not
-stick.
+	try 0: hdr a5 10 ff ff      byte 0 right, byte 1 right, rest wrong
+	try 1: hdr a5 18 ff ff      0x18 is the length byte, one position early
+	poll:  hdr a5 18 ff 00
 
-**Next log to read**, in priority order:
+Byte 0 is right on every read, byte 1 is right or one bit out, and it degrades
+from there. That is a sampling problem, not a protocol one.
 
-	zumapro-s2mpg14-regulator ...: LDO4M: reg 0x2e: 0x3c -> 0xbc (want bit 7 set)
-	zumapro-s2mpg14-regulator ...: LDO25M: reg 0x43: 0x2c -> 0xac (want bit 7 set)
-	zumapro-touch ...: gpn0 before power / rails on / after reset
-	zumapro-touch ...: try 0: hdr XX XX XX XX, gpn0 0xNNNNNNNN
+Ruled out, so do not spend a boot on them:
 
-1. If the enable bit does **not** stick, the touch part is a side issue and
-   the question becomes how this PMIC is really enabled — start with whether
-   ACPM will write this register at all (try `write_reg` with the whole byte
-   rather than `update_reg`), then with `S2MPG14_PM_PCTRLSEL1..11` /
-   `DCTRLSEL1..7` at 0x97–0xA8, which select what actually drives a rail.
-2. If it does stick, read the header bytes. All `0x00` means MISO is held
-   low — a part that is still not powered, despite the bit. All `0xff` means
-   an idle bus and a powered part that is not answering, which moves the
-   search to TouchComm framing: the bus turn-around delay (`TAT_DELAY_US`),
-   whether header and payload must share one chip-select assertion, and
-   `syna_tcm_v1_read()` in
-   `/tmp/tegu-work/synaptics/syna_c10/tcm/synaptics_touchcom_core_v1.c`.
-3. Anything else in the header is real data and the framing is close.
+- **Not a short read.** `s3c64xx_spi_wait_for_pio()` spins until `RX_FIFO_LVL`
+  reaches the transfer length and returns `-EIO` otherwise. `spi_sync()`
+  returned 0, so all four bytes came off the wire.
+- **Not byte swapping.** Mainline writes 0 to `SWAP_CFG` at init.
+- **Not pad muxing.** No `gpb` bank exists in any zumapro pinctrl block or in
+  the stock DTS, and Google's own SPI node carries an empty `pinctrl-0`.
+  Firmware owns those pads.
+
+**The suspect is `FB_CLK_SEL`**, the feedback tap the controller samples MISO
+on (`0x111d0000` + 0x2c, four settings). Mainline writes it once at setup from
+`samsung,spi-feedback-delay`, which defaults to 0. Internal loopback cannot
+see this: it never leaves the controller, so there is no round trip to
+compensate — which is how a bus that echoes `a5 5a 0f f0` byte for byte can
+still read a real device wrong.
+
+**Next log to read.** The driver now sweeps all four taps and dumps 32 raw
+bytes at each, which is header plus a whole 24-byte identify packet in one
+chip-select assertion:
+
+	zumapro-touch ...: spi: ch_cfg ... mode_cfg ... swap ... fb ...
+	zumapro-touch ...: dump fb0: <16 bytes> | <16 bytes>
+	zumapro-touch ...: dump fb1: ...
+	zumapro-touch ...: dump slow: ...
+	zumapro-touch ...: dump after IDENTIFY: ...
+
+A tap that yields `a5 10 18 00` followed by real data is the answer, and the
+fix is a `controller-data` child node on the touchscreen with
+`samsung,spi-feedback-delay = <n>` — after which the sweep, which pokes the
+controller's register behind its driver's back, must come out.
+
+If no tap works, the next instrument is a genuinely slow clock. The floor
+today is about 6.24 MHz against 9.98: the USI2 divider is four bits wide off a
+fixed 399.36 MHz parent and `spi-s3c64xx` divides by four again. Modelling the
+CMU_TOP HSI0_PERI divider (`0x26041890`, reads 0) is what buys a real sweep.
 
 ### Known-incomplete in the touch driver
 
