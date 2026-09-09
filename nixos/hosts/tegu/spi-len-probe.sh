@@ -88,6 +88,21 @@ C() {
 }
 
 L BEGIN
+
+# Is the AOC even running? The touch SPI bus is shared with it -- Google's
+# node has goog,tbn-enabled and tbn,mode = <2>, TBN_MODE_AOC_CHANNEL, and the
+# owner enum is AP or AOC -- so a second master on this bus would matter a
+# great deal. If it is held off, it cannot be interfering and the negotiator
+# is moot; only if it is running is any of that stack worth writing.
+#
+# Read only what the stock DTS names, and only in the always-on alive domain:
+# pd-aoc@15462280 is the power-domain status and aoc_req is at 0x154b0000.
+# The AOC block itself is at 0x17000000 and is NOT touched -- it sits behind
+# an S2MPU and this SoC raises a fatal SError on a read of an unbacked or
+# protected address, which has already cost this port a boot once.
+L "aoc pd=$(devmem 0x15462280 32) $(devmem 0x15462284 32) $(devmem 0x15462288 32)"
+L "aoc req=$(devmem 0x154b0000 32)"
+
 echo 'poll 0' > "$X" 2>/dev/null
 echo 'mosi 0' > "$X" 2>/dev/null
 
