@@ -221,6 +221,49 @@ one report-type byte -- would distinguish "the length is misread" from "the
 whole command is ignored", because the two predict different amounts of
 follow-on damage.
 
+### The AOC, scoped: it is not running, so it is not the touch problem
+
+The touch SPI bus is shared. Google's node carries `goog,tbn-enabled` and
+`tbn,mode = <2>`, which is `TBN_MODE_AOC_CHANNEL` in
+`google-modules/touch/common`, and the owner enum is AP or AOC. Worth knowing,
+and this port did not know it.
+
+But the AOC is started **by the AP**, and this port has no AOC driver, so on
+these boots it never starts. From `google-modules/aoc`, `aoc.c`:
+
+	start_firmware_load()  ->  request_firmware_nowait(...)
+	    gsa_enabled = of_property_read_bool(..., "gsa-enabled");
+	    if (gsa_enabled) { aoc_fw_authenticate(prvdata, fw); }
+	    ...
+	    /* start AOC */
+	    if (gsa_enabled)
+	            rc = gsa_send_aoc_cmd(prvdata->gsa_dev, GSA_AOC_START);
+	    else
+	            aoc_release_from_reset(prvdata);
+
+Nothing in our boot path does any of that. The consistency of the reads agrees:
+a second master actively driving this bus would corrupt them sometimes, and
+they have been perfect on every boot for the whole investigation.
+
+**What bringing it up would cost**, if it is ever wanted for its own sake
+(audio, sensors, hotword, LPTW): `aoc.c` is 2812 lines; the firmware is
+authenticated by the GSA, so a GSA driver is needed too (`linux/gsa/gsa_aoc.h`
+— note `google-modules/gsa` has no `android-gs-tegu-6.1-android16` head, so
+finding the right repo is itself a step); plus the firmware image from the
+vendor partition, an IOMMU, the `aoc_s2mpu`, and 48 mailbox channels. Mainline
+has nothing at all — the only `aoc` in 7.3-rc1 is Amlogic's AO clock
+controller. It is a bring-up on the scale of UFS or larger, and the TBN
+service sits at the very top of it.
+
+Sources are cloned at `/tmp/tegu-work/aoc` and `/tmp/tegu-work/aoc-ipc`
+(branch `android-gs-tegu-6.1-android16`), `aoc_tbn_service_dev.c` included.
+
+`spi-len-probe.sh` confirms the "not running" claim from the hardware rather
+than from this reasoning: it reads `pd-aoc@15462280` and `aoc_req` at
+0x154b0000, both named in the stock DTS and both in the always-on alive
+domain. The AOC block at 0x17000000 is deliberately untouched — it is behind
+an S2MPU and an unbacked read on this SoC is a fatal SError.
+
 ### Google's four controller differences, checked against mainline
 
 The stock node carries `dma-mode`, `dmas = <&pdma1 18 &pdma1 19>`,
