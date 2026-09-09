@@ -86,7 +86,7 @@ Working: boot to userspace, own device tree, UFS at gear 4 (boots from an
 11 GB ext4 root), Plasma Mobile, panel console via the bootloader's
 framebuffer, UART console, watchdog, ACPM.
 
-**Touchscreen — the current task.** Reads work perfectly. Writes do nothing.
+**Touchscreen — the current task.** Reads work. **A command has now been sent, understood and answered in full (2026-09-09)** — see "THE COMMAND PATH WORKS" below. Reliability is the open question, not capability.
 
 ### Established on hardware. Do not re-investigate.
 
@@ -287,11 +287,348 @@ than from this reasoning: it reads `pd-aoc@15462280` and `aoc_req` at
 domain. The AOC block at 0x17000000 is deliberately untouched — it is behind
 an S2MPU and an unbacked read on this SoC is a fatal SError.
 
+### What happens after commands work, read off the vendor driver
+
+Short, and worth knowing so the command path is not treated as the whole job.
+`syna_dev_set_up_app_fw()` in `syna_tcm2.c` is the entire bring-up:
+
+	CMD_GET_APPLICATION_INFO      0x20   sensor dimensions, max touches
+	CMD_GET_TOUCH_REPORT_CONFIG   0x25   the report format, so reports parse
+	CMD_ENABLE_REPORT             0x05   payload one byte, REPORT_TOUCH 0x11
+
+so the wire packet to start touch is `05 01 00 11`. There is no hidden step
+between identify and touch data -- no firmware download, no calibration, no
+handshake. `STARTUP_REFLASH` and the custom report-format and gesture hooks
+are all `#ifdef`s this port does not need. **Everything is gated on the
+command channel, and nothing else is missing.**
+
+Also settled, free, from the identify this port already captured. The v1
+`struct tcm_identification_info` is `version, mode, part_number[16],
+build_id[4], max_write_size[2]` = 24 bytes, exactly the payload length read:
+
+	01              version 1
+	01              mode 1, MODE_APPLICATION_FIRMWARE
+	"S3908GA1B0-15.0\0"
+	62 2f 44 00     build 4468578
+	00 04           max_write_size = 1024
+
+Every field decodes, which is a strong check that the read path is byte-exact
+and framed correctly. **`max_write_size` is 1024**, so `syna_tcm_v1_write()`
+chunking through `CMD_CONTINUE_WRITE` never engages for a command this small;
+a three-byte command is one transfer, and that is what this port sends.
+
+### THE COMMAND PATH WORKS (2026-09-09)
+
+`spi-mode2-probe.sh`. CMD_IDENTIFY, sent in **mode 0**, answered in full:
+
+	P0 r=a5 01 18 00 01 01 53 33 39 30 38 47 41 31 42 30 2d 31 35
+	      2e 30 00 62 2f 44 00 00 04 5a
+
+	a5              marker
+	01              STATUS_OK
+	18 00           24 payload bytes
+	01              version 1
+	01              mode 1, MODE_APPLICATION_FIRMWARE
+	53 33 ...  00   "S3908GA1B0-15.0\0"
+	62 2f 44 00     build 4468578
+	00 04           max_write_size 1024
+	5a              end of message
+
+`quiet=yes`, so the part had provably reached padding before the command, and
+`tries=0`, so it answered on the first poll. The ASCII part number cannot be
+an artifact of anything the probe did not ask for. **A command was sent,
+understood, and answered.**
+
+**Two corrections from the same boot.** Mode 0 is right, matching Google's
+`synaptics,spi-mode = <0>`. Mode 2 returns `a5 0e 00 00`,
+**STATUS_NOT_IMPLEMENTED**, so it does reach the part but mangles the command
+byte into something it declines -- which also means the CPOL gradient built
+from the previous boot was an artifact, and the `a5 01 18 00` seen there from
+modes 2 and 3 really were leftovers of the reset R0 caused. The bar that
+caught it was insisting on the ASCII payload rather than accepting a plausible
+header; keep that bar.
+
+**What is not understood: why the same operation failed one boot earlier.**
+`spi-setup-probe.sh` arms A and B were both mode 0 on a provably quiet part,
+one with `spi_setup()` and one without, and neither answered. Here it answers.
+The only visible difference is that the working command followed two commands
+the part had already replied to. That hints at a priming step, but it is one
+boot and a guess.
+
+`spi-repeat-probe.sh` measures it rather than guessing: six identical
+CMD_IDENTIFY in mode 0 from the first moment after boot, alternating whether
+`spi_setup()` runs first, nothing else touched. It answers whether the *first*
+command of a boot lands, whether they keep landing, and whether `spi_setup()`
+matters. Read the status byte in the digest -- `01` OK, `0e` NOT_IMPLEMENTED,
+`00` IDLE, `5a` never answered.
+
+**Once it is reliable**, the rest is short and already written down: the
+bring-up is `CMD_GET_APPLICATION_INFO` 0x20, `CMD_GET_TOUCH_REPORT_CONFIG`
+0x25, then `CMD_ENABLE_REPORT` 0x05 with payload `REPORT_TOUCH` 0x11 -- on the
+wire `05 01 00 11`.
+
+### REFUTED: spi_setup() is not what produced the responses
+
+`spi-setup-probe.sh`, 2026-09-09. Mode 0 fixed throughout; the only variable
+was whether `spi_setup()` -- and so `hwinit()` -- ran before the command.
+
+	h0 alive=0            a5 10 18 00   part alive, identify queued
+	A  d=1 quiet=yes t=12 5a 5a 5a 5a   quiet part, plain command, nothing
+	h1 alive=0            5a 5a 5a      still alive
+	B  d=0 quiet=yes t=12 ff ff ff ff   quiet part, spi_setup, nothing
+	h2 alive=8            ff ff ff ff   part no longer driving MISO
+	C  d=12 quiet=no      ff ff ff ff   dead for the rest of the boot
+
+Both arms reached padding before commanding -- `quiet=yes` -- so both are
+clean, and neither answered. **A controller re-init immediately before the
+command changes nothing**, and the responses in the mode sweep were not its
+doing.
+
+Two further things fall out. **Mode 0 fails on a provably quiet part**, now
+three times across two boots, which is the cleanest statement of the original
+problem this port has. And **two mode-0 commands ended the boot** -- the part
+went to `0xff`, not driving MISO at all -- where four commands spread across
+modes 0-3 in the previous boot left it healthy. That is weak but consistent
+with mode 0 delivering something the part acts on badly.
+
+**What is left is the mode**, and across the two boots it is a gradient:
+
+	mode 0   CPOL 0 CPHA 0   nothing               three clean attempts
+	mode 1   CPOL 0 CPHA 1   a5 00 00 00           STATUS_IDLE
+	mode 2   CPOL 1 CPHA 0   a5 01 18 00           STATUS_OK, 24 bytes
+	mode 3   CPOL 1 CPHA 1   a5 01 18 00           STATUS_OK, 24 bytes
+
+Both answering modes have **CPOL = 1**, and mode 2 is the one that also reads
+cleanly, mode 3 reads coming back shifted a bit. Note this contradicts
+Google's own `synaptics,spi-mode = <0>`, so if it holds, understanding *why*
+matters as much as the fix -- an inversion somewhere between the controller
+and the pad would explain both it and why reads survive either polarity.
+
+`spi-mode2-probe.sh` tests it directly and is built so a positive cannot be a
+leftover: the drain reports whether it truly reached padding, two identical
+mode-2 arms guard against an anecdote, a mode-0 control goes last, and the
+reply is read back far enough to carry the ASCII part number. The bar for
+success is a literal `a5 01 18 00 01 01 53 33 39 30 38` -- marker, STATUS_OK,
+24 bytes, version, mode, then "S3908".
+
+### FIRST COMMAND RESPONSES, and the mode control is real
+
+`spi-modeval-probe.sh`, 2026-09-09. Read the caveats -- this is the most
+important boot the touch work has had and also the least clean.
+
+	m0 ch=0x00000000 bits=0 r=a5 10 18 00
+	m1 ch=0x00000004 bits=1 r=a5 03 38 47
+	m2 ch=0x00000008 bits=2 r=a5 03 ff ff
+	m3 ch=0x0000000C bits=3 r=4a 1d ff ff
+
+	R0 tries=12 attn=0x00000001 r=00 00 00 00
+	R1 tries=0  attn=0x00000001 r=a5 00 00 00
+	R2 tries=0  attn=0x00000000 r=a5 01 18 00
+	R3 tries=0  attn=0x00000000 r=a5 01 18 00
+
+**Settled: the mode control works.** `CH_CFG` bits [3:2] are `CPOL_L` and
+`CPHA_B`, and they read back exactly the mode that was asked for -- 0x0, 0x4,
+0x8, 0xC. So `echo mode N` really does reach the hardware, and the earlier
+sweep it was doubted for did change something. Read this back after a
+transfer, not after the store: `s3c64xx_spi_config()` applies `spi->mode` per
+transfer.
+
+**Settled: mode 3 reads are bit-shifted.** `0x4a` is `0xa5` shifted left one
+bit, which is exactly what a wrong sampling edge produces. Modes 0, 1 and 2
+all return a valid `a5` marker; `a5 03` is `STATUS_CONTINUED_READ`, the
+correct header for reading on through a message already started, so m1 and m2
+are healthy continuations rather than corruption. This retires the handover's
+old "2 and 3 corrupt" as imprecise: only 3 is.
+
+**The headline: `a5 01 18 00` appeared, twice.** `STATUS_OK` is **0x01** and
+the identify payload is **24 bytes**, so that is a marker, a success status
+and the exact length of the identification info -- the precise shape of an
+answered command. `a5 00 00 00` at R1 is `STATUS_IDLE`. Before this boot no
+command had ever produced anything but `5a` padding, and ATTN had never risen
+after one; at R0 and R1 it reads 1.
+
+**Why this is not yet a result, and must not be written up as one.** R0 sent
+CMD_RESET in mode 0 and the part then read `00 00 00 00` with ATTN high for
+390 ms, which is either a part mid-reset -- meaning the command *landed* -- or
+the long-known wedged signature. Everything after R0 therefore ran on a part
+in a changed state, and `D()` gives up silently after twelve tries, so a
+"response" may be a message queued by an earlier arm rather than an answer to
+this one. Do not claim commands work until one is produced from a part that
+was provably quiet immediately before.
+
+**And there is a second candidate that has nothing to do with the mode.**
+`echo mode N` calls `spi_setup()` unconditionally -- even for the mode it is
+already in -- and mainline's `s3c64xx_spi_setup()` calls
+`pm_runtime_get_sync()`, which forces a resume and so runs
+`s3c64xx_spi_hwinit()`: `INT_EN`, `MODE_CFG`, `PACKET_CNT` and `SWAP_CFG`
+rewritten, pending interrupts cleared, `cur_speed = 0` so the next transfer
+reconfigures the clock, and `s3c64xx_flush_fifo()`, a SW_RST of both FIFOs.
+**So this boot ran a full controller re-init immediately before every command,
+which no previous boot had done.** That, and not the mode, may be the whole
+story -- and it would point at a driver fix rather than a device-tree one.
+
+`spi-setup-probe.sh` separates them: mode 0 throughout, never changed, and the
+only variable is whether `spi_setup()` runs first (A plain, B with, C plain
+again to catch a part that merely warmed up). It uses CMD_IDENTIFY, not
+CMD_RESET, so there is no reset window to confuse the next arm and the reply
+is self-verifying -- `STATUS_OK`, 24 bytes, then `01 01` and the ASCII part
+number. Its drain also reports whether it ever reached padding, which is the
+gap that makes this boot ambiguous.
+
+### The length test ran, and it was not the discriminator it claimed to be
+
+`spi-lenbit-probe.sh`, 2026-09-09:
+
+	h0 alive=0 attn=0 a5 10 18 00
+	t1 02 00 00  drain=1 w=5a 5a 5a      h1 alive=0
+	t2 02 ff ff  drain=0 w=5a 5a 5a      h2 alive=0
+	t3 02 00 00  drain=0 w=5a 5a 5a      h3 alive=0
+
+`t2` declared 65535 payload bytes and supplied none, and **the part stayed
+healthy through it and everything after**. The probe was written up in advance
+saying that outcome proves the part does not parse our length field.
+
+**It does not prove that, and the claim should not be repeated.**
+`max_write_size` from this part's own identify is **1024**, so 65535 is not
+merely a large length, it is an invalid one. A firmware that validates the
+field would reject the command and carry on unharmed -- which is exactly what
+was observed. "Parses it and rejects it" and "never parsed it" predict the
+same result, so the experiment does not separate them. This is the same
+mistake as writing a hardware claim into a comment before measuring it, caught
+one step earlier: the prediction was written down before the boot, which is
+what made it checkable afterwards. Keep doing that; just check the prediction
+against the part's own limits first.
+
+What the boot does establish: `t1` drained one real message (`drain=1`, after
+`h0` read `a5 10 18 00`), so the corrected drain works and the commands went
+to a genuinely quiet part; and a fourth distinct command shape leaves the part
+healthy and unanswering.
+
+### REFUTED: chip select is not why commands fail
+
+`spi-cs-probe.sh`, 2026-09-09. The hypothesis below was good, source-backed and
+wrong, and the boot that killed it is worth keeping because the transfer it
+measured is the cleanest this port has ever recorded.
+
+	h0 alive=0 a5 10 18 00
+	A drain=1 w=5a 5a 5a  tries=10 attn=0x00000000 r=5a 5a 5a
+	h1 alive=0 5a 5a 5a 5a
+	B drain=0 f=0x010000C0 s=0x03018002 done=1 rx=5a5a5a
+	B tries=10 attn=0x00000000
+
+`A` is the driver's CS_AUTO path: the part had its identify queued (`h0` reads
+`a5 10 18 00`), the corrected drain consumed exactly one message (`drain=1`),
+the write went to a quiet part (`w=5a 5a 5a`), and nothing came back.
+
+`B` is the same three bytes driven by hand with chip select held in software
+across the whole transfer, asserted a full devmem -- about a millisecond --
+before the first clock edge, where mainline's `NSC_CNT_2` allows about 200 ns.
+The status words say it was perfect:
+
+	f = 0x010000C0   TX level 3          the FIFO took all three bytes
+	s = 0x03018002   TX 0, RX 3, DONE 1  shifted out, three shifted in
+	                 errors [5:2] = 0    no overrun or underrun either way
+
+So the command left the controller, correctly framed, with chip select timed
+the way the vendor times it -- and the part answered `5a 5a 5a`, padding, the
+same nothing the driver path gets. **Chip select mode and CS-to-clock setup
+are dead as suspects.**
+
+**Read the caveat before trusting `B`'s poll, because half of it is void.**
+The restore after `B` was wrong (see the SIG_INACT rule below), so every read
+in `B`'s response poll failed with `-5` and `tcm_xfer` handed back the previous
+buffer. `B ... r=5a 5a 5a` and `h2` are stale bytes, not fresh reads.
+
+What survives is **ATTN**, which is a devmem read of gpn0 and owes nothing to
+the SPI controller: it read 0 after the poll. Nothing consumed a message during
+that poll -- the reads were all failing -- so a queued response would still have
+been waiting with the line high. It was low. The part did not answer `B`.
+
+The original reasoning is kept below because it is still the right way to have
+found it, and because the honest weakness flagged in it is exactly the part
+that turned out to be load-bearing: reads being byte-perfect really did mean
+the part was sampling fine.
+
+
+
+The section below enumerated "Google's four controller differences" off the
+`spitouch` node's own properties and concluded none could matter. It never
+looked at the **`controller-data` child node**, and that is where the
+difference is:
+
+	controller-data {
+		samsung,spi-feedback-delay = <0>;
+		samsung,spi-chip-select-mode = <0>;
+		cs-clock-delay = <2>;
+	};
+
+In `soc-gs` `drivers/spi/spi-s3c64xx.c`, `s3c64xx_get_slave_ctrldata()` reads
+those. `samsung,spi-chip-select-mode` of 1 is `AUTO_CS_MODE`, 2 is
+`AUTO_CS_MODE_FORCE_QUIESCE`, and **anything else -- including 0 -- is
+`MANUAL_CS_MODE`**. The default when the property is absent is `AUTO_CS_MODE`,
+so this is a deliberate per-slave override, and only two devices in the whole
+tegu tree take it: this touchscreen with `cs-clock-delay = <2>`, and the eSE
+with `<18>`.
+
+What MANUAL_CS_MODE with a non-zero delay does, in Google's driver:
+
+	enable_cs()        SLAVE_SEL = 0            asserted, in software
+	enable_datapath()  CH_CFG |= TXCH_ON
+	                   udelay(cs->cs_delay)     <-- 2 us before any clock
+	                   fill FIFO, write CH_CFG
+	disable_cs()       SLAVE_SEL = SIG_INACT    released, in software
+
+and note the ordering swap in `s3c64xx_spi_transfer_one()`: with a cs_delay
+and no `cs_gpiod`, chip select is asserted *before* `enable_datapath()`, where
+the auto path enables the datapath first.
+
+Mainline's `gs101_spi_port_config` hardcodes `S3C64XX_SPI_QUIRK_CS_AUTO`, so
+`s3c64xx_spi_set_cs()` writes `CS_AUTO | NSC_CNT_2` and lets the hardware
+drive nSS off the packet counter -- two SCLK cycles of setup, about **200 ns**
+at 10 MHz, against Google's **2 us**. `set_cs(false)` is a no-op entirely; the
+hardware releases it. There is no mainline property that expresses either the
+mode or the delay.
+
+Two things make this worth a boot. It is the only unrefuted difference left --
+`fifosize`, `dma-mode`, `dmas` and `swap-mode` are all dead (below), and
+`spi-feedback-delay` is 0 on both. And this port has *already measured* the
+auto path behaving in a way the vendor's would not: chip select dropping
+between the transfers of one message, which restarted the part's message
+mid-read. That is the same register, the same quirk, misbehaving in the one
+direction that happened to be observable.
+
+**What it does not explain, and this is the honest weakness.** Reads are
+byte-perfect, and a part that samples MOSI too early ought to drive MISO too
+early as well. If chip select setup were violated, the first read byte should
+degrade and it does not. So the story needs the part to be more tolerant
+outbound than inbound, which is plausible -- a queued message streams on any
+clock, whereas a command has to be framed from the transaction start -- but is
+not established.
+
+`spi-cs-probe.sh` settles it in one boot, A/B on the same part:
+
+	A  02 00 00 through the driver     CS_AUTO, ~200 ns setup
+	B  02 00 00 driven by hand         chip select ours, ~1 ms setup
+
+B reuses `spi-tx-probe.sh`'s proven hand-driven sequence -- the one that
+echoed `a5 5a 0f f0` in loopback and drew `5a 5a 5a 5a` out of the part -- with
+the test pattern replaced by a real command. **No command has ever been sent
+that way.** Every command this port has tried went through `spi_sync()`, so
+all of them share whatever the driver does and none of them isolate it.
+
+If B answers, the fix is a zumapro port config without the quirk (plus a way
+to get the pre-clock delay), and it is a clean mainline-shaped change. If B
+says nothing, chip select timing is dead as a suspect and the fault is above
+the wire.
+
 ### Google's four controller differences, checked against mainline
 
 The stock node carries `dma-mode`, `dmas = <&pdma1 18 &pdma1 19>`,
 `swap-mode = <1>` and `samsung,spi-fifosize = <0x40>`, and this port sets none
-of them. None can explain a transmit fault -- and the measurement above says
+of them. **This list was incomplete -- it read the `spitouch` node's own
+properties and not its `controller-data` child, where the chip-select mode
+lives; see the section above.** Of the four here, none can explain a transmit
+fault -- and the measurement above says
 there is no transmit fault to explain:
 
 - **fifosize.** Mainline does not parse `samsung,spi-fifosize`; the property it
@@ -385,6 +722,22 @@ SPI pads have no pinctrl behind them and the mux cannot be inspected that way.
 - **`tcm_xfer` only exists after `probe()` returns.** The driver core adds
   `dev_groups` after probe, so a `tegu-cmd` script must wait for the file
   rather than assume it.
+- **`CS_SIG_INACT` is sticky, and setting it ends the boot for this bus.**
+  Under `S3C64XX_SPI_QUIRK_CS_AUTO`, `s3c64xx_spi_set_cs(true)` only *ORs*
+  `CS_AUTO | NSC_CNT_2` into `CS_REG` -- it never clears bit 0 -- and
+  `set_cs(false)` is a no-op entirely. So a probe that releases chip select by
+  writing `CS_REG = 1` and does not put the register back holds chip select
+  inactive for every transfer that follows: nSS never asserts, RX never fills,
+  and `wait_for_pio` times out at ~147 ms each with
+  `I/O Error: rx-1 tx-0 rx-f tx-p` and `-5`. This voided the second half of
+  `spi-cs-probe.sh`'s first run. Save `CS_REG` alongside `CH_CFG` and `INT_EN`
+  and restore all three.
+- **hwinit does not rescue a botched restore.** The reasoning that dropped
+  those restores was that `s3c64xx_spi_hwinit()` rewrites `MODE_CFG`,
+  `INT_EN`, `PACKET_CNT` and `CS_REG` anyway. It does -- but only from
+  `s3c64xx_spi_runtime_resume()`, which needs a runtime *suspend* first, and
+  that is two seconds of idle. A probe's next read is milliseconds away, so
+  hwinit never runs. Restore every register you touched, explicitly.
 - **A controller register written from userspace does not survive the next
   transfer.** `s3c64xx_spi_runtime_resume()` calls `s3c64xx_spi_hwinit()`,
   which rewrites MODE_CFG, INT_EN, SWAP_CFG, PACKET_CNT and CS_REG from
