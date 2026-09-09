@@ -41,6 +41,16 @@ Then ask the user to reboot. Constraints that have already cost boots:
 - Use `devmem` for MMIO, never `dd`: arm64 restricts `/dev/mem` `read()` to
   real memory, so `dd` returns EFAULT on registers while `devmem` (mmap)
   works.
+- `-f` **strips whole-line comments, indentation and blank lines** before
+  encoding, so a probe can be documented in the repo and still fit. The real
+  ceiling is about **1.4 KB of encoded payload**, and the encoding costs a
+  factor of 1.8 over the stripped source: gzip, base64, then base64 again
+  because the phone side always decodes one layer. `spi-tx-probe.sh` is 7 KB
+  in the repo, 1.4 KB stripped and 1396 bytes encoded — the budget is real and
+  it is why that experiment is two scripts rather than one. Check before
+  flashing; the tool refuses rather than truncating.
+- A here-document whose body has lines starting with `#` will be mangled by
+  that stripping. Do not send one.
 
 ## Building and flashing
 
@@ -82,7 +92,7 @@ framebuffer, UART console, watchdog, ACPM.
 
 | Fact | Evidence |
 | --- | --- |
-| SPI bus, clock, controller | loopback echoes `a5 5a 0f f0` at 9.98 MHz |
+| SPI bus, clock, controller | loopback echoed `a5 5a 0f f0` at 9.98 MHz — but a later loopback echoed nothing; see the open question below before relying on either |
 | Both rails | `sec-acpm`; vdd 1.8 V, avdd 3.3 V, and ATTN goes high the moment they do |
 | pinctrl, reset, ATTN | `gpn0` PUD reads 0; forcing a pull-**up** still read low, so the part drives it; idles high after a clean reset |
 | The part | Synaptics **S3908**, fw `GA1B0-15.0`, build 4468578, TouchComm **v1**, mode 1 = `MODE_APPLICATION_FIRMWARE` |
@@ -106,9 +116,13 @@ part.
 **`FB_CLK_SEL` is not a suspect.** Google sets `samsung,spi-feedback-delay = <0>`,
 which is mainline's default.
 
-### The open question: the SPI controller does not transmit
+### The open question: does the controller transmit?
 
-Provable without the touchscreen:
+Two direct measurements disagree, and until one is retracted nothing built on
+either is safe:
+
+	loopback echoes a5 5a 0f f0 byte for byte at 9.98 MHz   (earlier)
+	L4/L5 loopback = ff ff ff ff, echoes nothing            (later)
 
 	L1 mode_cfg=0x1FF80000
 	L2 normal-tx=a5 10 ff ff        TX on: two good bytes, then ff
@@ -117,31 +131,88 @@ Provable without the touchscreen:
 	L5 loopback=ff ff ff ff
 	L6 mode_cfg=0x1FF80000
 
-In loopback the block feeds TX back to RX inside itself -- no pad, no part. It
-echoed nothing, which says the transmit datapath is not shifting data.
+The later one set MODE_CFG bit 3 with devmem, and mainline has a mechanism
+that removes it before the transfer it was meant to serve:
 
-**Caveat on L4/L5, not yet closed.** The bit was set with devmem, and
-s3c64xx_spi_config() clears SELF_LOOPBACK whenever spi->mode lacks SPI_LOOP.
-That function only runs when bits-per-word or speed change, and neither did
-here, so the bit very probably survived the transfer -- but that was not
-measured. Confirm by reading MODE_CFG back *immediately after* a loopback
-transfer, before restoring it, and only then treat L4 as proof.
+	s3c64xx_spi_runtime_resume()  ->  s3c64xx_spi_hwinit()
+	    writel(0, regs + S3C64XX_SPI_MODE_CFG);
+	    ...
+	    val |= (S3C64XX_SPI_MAX_TRAILCNT << S3C64XX_SPI_TRAILCNT_OFF);
+	    writel(val, regs + S3C64XX_SPI_MODE_CFG);
 
-L2 needs no such caveat and is the solid result: a read with TX enabled returns
-two good bytes and then 0xff.
+0x3ff << 19 is 0x1FF80000 -- what L1 and L6 both reported and what this port
+reads at rest. The controller sets `auto_runtime_pm` with AUTOSUSPEND_TIMEOUT
+2000, so it suspends two seconds after a transfer and re-runs hwinit on the
+next one, and every line of a shell script is far more than two seconds apart.
 
-It also explains the oldest open question in this file. With TX enabled a read
-returns two good bytes and then 0xff -- `a5 10 ff ff` -- which is exactly the
-"degrading header" this port chased for four logs and blamed on sampling and
-on the feedback tap. Reads work only because tx_buf = NULL leaves TX off.
+**That is read out of the source, not measured.** It is offered as a candidate
+because it predicts every number in L1..L6 without requiring the transmit path
+to be broken at all -- and because it generalises: any controller register set
+from userspace survives only until the next transfer.
 
-**Next:** dump CH_CFG, MODE_CFG and SPI_STATUS (TX FIFO level) around a
-transmitting transfer, and compare the controller setup against Google's,
-which this port does not follow: `dma-mode`, `dmas = <&pdma1 18 &pdma1 19>`,
-`swap-mode = <1>`, `samsung,spi-fifosize = <0x40>`. Note mainline never parses
-`swap-mode`. The SPI pads have no pinctrl anywhere in this SoC either -- even
-Google's node carries `pinctrl-0 = <>` with a TODO -- but loopback is internal,
-so the pads cannot explain L4.
+Two probes are written and both fit the command channel. One boot each:
+
+	./tools/tegu-cmd -f hosts/tegu/spi-tx-probe.sh        # run this first
+	./tools/tegu-cmd -f hosts/tegu/spi-modecfg-probe.sh
+
+`spi-tx-probe.sh` is the decisive one and does not depend on settling the
+argument above. It drives a four-byte transfer by hand against the registers
+in internal loopback, with the driver never asked to transfer -- so no
+runtime-PM resume happens, hwinit never runs, and nothing rewrites MODE_CFG
+behind it. It reads the FIFO levels at each step, and the three readings each
+falsify something different:
+
+	filled   tx=4          the FIFO took the bytes
+	enabled  tx=0          the shifter consumed them
+	rx       a5 5a 0f f0   the bits went round
+
+tx=0 at `filled` means the writes never landed and nothing downstream matters.
+tx staying at 4 at `enabled` means the transmit datapath really is dead and
+L4/L5 were right for the wrong reason. Bytes coming round means the controller
+transmits, which retires the whole "cannot transmit" framing.
+
+It then repeats the transfer with loopback off, aimed at the part, which
+splits the question this file has not been able to split: bytes back that are
+neither 0xff nor the part's own message mean the part *heard* something, so
+MOSI is muxed and driving and the fault is above the wire.
+
+`spi-modecfg-probe.sh` takes the reading L4/L5 never took -- MODE_CFG
+immediately after a transmitting transfer -- then repeats it back-to-back
+inside the autosuspend window, which separates "runtime-PM resume cleared it"
+from "something on the transfer path cleared it". It checks FB_CLK the same
+way, because `s3c64xx_spi_prepare_message()` rewrites that one per *message*
+rather than per resume: the driver's `fb` command has been setting a register
+that is overwritten before every transfer.
+
+L2 needs no caveat and is the solid result: a read with TX enabled returns two
+good bytes and then 0xff -- `a5 10 ff ff` -- which is exactly the "degrading
+header" this port chased for four logs and blamed on sampling and on the
+feedback tap.
+
+### Google's four controller differences, checked against mainline
+
+The stock node carries `dma-mode`, `dmas = <&pdma1 18 &pdma1 19>`,
+`swap-mode = <1>` and `samsung,spi-fifosize = <0x40>`, and this port sets none
+of them. Read against mainline 7.3-rc1, none can explain a dead transmit on
+the transfers in question:
+
+- **fifosize.** Mainline does not parse `samsung,spi-fifosize` at all -- the
+  property it reads is `fifo-depth` -- and it never gets that far, because
+  `gs101_spi_port_config` sets `.fifo_depth = 64` and the port config wins
+  before the device tree is consulted. The port already has the right number,
+  which is why the 64-byte splitting behaviour above is what it is.
+- **dma-mode / dmas.** `s3c64xx_spi_can_dma()` returns false unless both
+  channels exist *and* `xfer->len >= fifo_depth`. Every transfer in this
+  investigation is 4 to 35 bytes, so even fully wired DMA would run them as
+  PIO regardless.
+- **swap-mode.** Mainline never parses it and `s3c64xx_spi_hwinit()` writes
+  SWAP_CFG = 0. With MODE_CFG's CH_TSZ and BUS_TSZ both BYTE there is nothing
+  to swap. Both probes print SWAP_CFG, so it is visible rather than assumed.
+
+Also already handled upstream, before anyone spends a boot on it: the obvious
+"byte writes do not reach this FIFO" hypothesis. gs101's port config sets
+`.use_32bit_io = true`, so PIO byte writes go out through
+`s3c64xx_iowrite8_32_rep()` as one `__raw_writel` per byte.
 
 ### Superseded: the controller cannot transmit (first framing)
 
@@ -206,6 +277,15 @@ SPI pads have no pinctrl behind them and the mux cannot be inspected that way.
 - **`tcm_xfer` only exists after `probe()` returns.** The driver core adds
   `dev_groups` after probe, so a `tegu-cmd` script must wait for the file
   rather than assume it.
+- **A controller register written from userspace does not survive the next
+  transfer.** `s3c64xx_spi_runtime_resume()` calls `s3c64xx_spi_hwinit()`,
+  which rewrites MODE_CFG, INT_EN, SWAP_CFG, PACKET_CNT and CS_REG from
+  scratch, and the controller autosuspends two seconds after a transfer — so
+  a devmem poke and the transfer meant to use it are always separated by a
+  full re-init. `s3c64xx_spi_prepare_message()` rewrites FB_CLK even more
+  often, once per message. Either drive the whole transfer by hand, or set
+  the bit through the driver. This is what put an unmeasured caveat on the
+  loopback result below.
 
 
 ### Next after touch
