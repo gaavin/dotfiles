@@ -1,41 +1,44 @@
 #!/bin/sh
-# Is MOSI connected to the part at all?
+# Is MOSI connected to the part at all? Second attempt; the first was void.
 #
-# CMD_RESET did nothing. That is the command that cannot be ignored -- if it
-# lands, the part reboots and announces itself -- and it did nothing at 10 MHz
-# and at the slower clock, drained first, on a healthy part. Nothing put on
-# MOSI has ever had an effect: not IDENTIFY, not RESET, at four SPI modes, two
-# clock rates, padded or bare.
+# CMD_RESET did nothing -- the command that cannot be ignored, on a healthy
+# drained part, at two clock rates. Nor did IDENTIFY, at four SPI modes, bare
+# or padded. Nothing on MOSI has ever had an effect, while reads stay
+# byte-perfect, and reads need only CLK, CS and MISO. The pads cannot be
+# inspected: there is no gpb bank in Google's zumapro pinctrl tables or the
+# stock DTS, and no pinctrl controller covers HSI0 at all. So the part has to
+# be the instrument.
 #
-# Everything else works. Reads are byte-perfect, and reads need only CLK, CS
-# and MISO. So the question is no longer which command or which timing, it is
-# whether the fourth wire is there.
+# The first run of this probe read 00 00 00 00 00 00 00 00 for every variant
+# *including the undriven one*, which is the path that has always worked. That
+# is not a result, it is a broken measurement: the part was still booting. It
+# was waiting on ATTN, and ATTN is not meaningful right after a reset -- it
+# was already high at 0 ms every time while the part was not yet answering.
 #
-# The one piece of evidence that says it is: twice, writing while a message
-# was pending returned two header bytes and then 0xff -- a5 10 ff, a5 c2 ff --
-# where writing to a quiet part returns clean 5a padding. That was read as the
-# part detecting a write and abandoning its message. But it rests on two
-# samples taken by hand, and an older experiment in the handover disagrees
-# with it outright: Q2 and Q3 drove MOSI with zeros and with 0xff and got back
-# 00 00 00, not a truncated header.
+# The fix is the vendor's own, and it is written in this driver's comments
+# already: syna_tcm_v1_read() reads, checks byte 0 for the marker, and on
+# anything else sleeps and reads the whole packet again, up to ten times. The
+# device re-presents its message from the marker on the next read. A single
+# read is not a measurement; a read that never finds a marker is.
 #
-# So test it directly. A part with a message ready is the detector: read the
-# first eight bytes three ways, changing only what sits on MOSI.
+# So each variant retries until it sees 0xa5, and reports how many tries it
+# took. Changing only what sits on MOSI:
 #
-#	v0  MOSI undriven   tx_buf NULL, the path that has always worked
-#	v1  MOSI all zeros
-#	v2  MOSI all ones
+#	v0  undriven (tx_buf NULL)   the path that has always worked
+#	v1  all zeros
+#	v2  all ones
+#	v3  undriven again           proves the part still answers, so any
+#	                             difference above was the data and not wear
 #
-#	all three identical    -> MOSI does nothing to the part. The pad is
-#	                          not driving it, and the a5 XX ff readings
-#	                          were an artefact of having TXCH on.
-#	v1/v2 differ from v0   -> the part is reacting to MOSI, the wire is
-#	                          live, and the fault is in what it decodes.
+#	all four resynchronise    -> MOSI does nothing to the part. The pad is
+#	                             not driving it, and the a5 XX ff readings
+#	                             were an artefact of having TXCH on.
+#	v1/v2 never resynchronise -> the wire is live and destructive, so the
+#	                             part hears us and the fault is decoding.
 #
-# Each variant needs its own pending message, because reading one consumes it
-# and writing one destroys it. The reset pad supplies them on demand: a pulse
-# reboots the part and it queues a REPORT_IDENTIFY, which is also a second
-# check on whether the reset line still works.
+# Each variant gets its own pending message from a reset pulse, since reading
+# one consumes it and writing one destroys it, with a fixed settle afterwards
+# rather than a wait on ATTN.
 set -u
 
 L() { echo "tegu-mosi: $*" > /dev/kmsg; }
@@ -52,41 +55,35 @@ while [ $i -lt 100 ]; do
 done
 [ -n "$X" ] || { L "no tcm_xfer"; exit 1; }
 
-# Reset, then wait for the part to announce itself. Bounded at ~2 s; Google's
-# own timing is 2 ms of reset and 50 ms of settling, and the driver already
-# found 50 ms is not always enough.
-W8() {
+# Reset and settle. Google's timing is 2 ms of reset and 50 ms after, which
+# this driver already found is not always enough, so wait four times that and
+# let the retry loop cover the rest.
+RS() {
 	echo 'reset' > "$X"
-	w=0
-	while [ $w -lt 40 ]; do
-		sleep 0.05
-		a=$(AT)
-		[ $((a & 1)) -eq 1 ] && break
-		w=$((w + 1))
+	sleep 0.2
+}
+
+# $1 label, $2 the tcm_xfer command. Retry until the marker shows up.
+TRY() {
+	t=0
+	o=""
+	while [ $t -lt 12 ]; do
+		echo "$2" > "$X"
+		o=$(cut -c1-23 < "$X")
+		case "$o" in a5*) break ;; esac
+		sleep 0.02
+		t=$((t + 1))
 	done
-	L "$1 attn=$a after $((w * 50))ms"
+	L "$1 tries=$t attn=$(AT) $o"
 }
 
 L BEGIN
 echo 'poll 0' > "$X" 2>/dev/null
+echo 'mosi 0' > "$X" 2>/dev/null
 
-W8 v0
-echo 'mosi 0' > "$X"
-echo 'r 8' > "$X"
-L "v0 undriven $(cat "$X") attn=$(AT)"
-
-W8 v1
-echo 't 00 00 00 00 00 00 00 00' > "$X"
-L "v1 zeros    $(cat "$X") attn=$(AT)"
-
-W8 v2
-echo 't ff ff ff ff ff ff ff ff' > "$X"
-L "v2 ones     $(cat "$X") attn=$(AT)"
-
-# And once more undriven, to prove the part still answers after both writes
-# and that any difference above was the MOSI data rather than wear.
-W8 v3
-echo 'r 8' > "$X"
-L "v3 undriven $(cat "$X") attn=$(AT)"
+RS ; TRY v0 'r 8'
+RS ; TRY v1 't 00 00 00 00 00 00 00 00'
+RS ; TRY v2 't ff ff ff ff ff ff ff ff'
+RS ; TRY v3 'r 8'
 
 L END
