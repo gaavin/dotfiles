@@ -99,6 +99,7 @@ framebuffer, UART console, watchdog, ACPM.
 | The firmware is running | `a5 c2 02 00 20 00` = REPORT_FW_STATUS, `b5_fast_relaxation` — routine telemetry from a sensing part |
 | Commanding on a pending message wedges it | ATTN high, wrote anyway, part released MISO mid-message and went silent |
 | Draining stops the wedging | commanding on a pending message is what killed it; drained, it survives commands |
+| ATTN drops mid-message | it means "a message waits", not "a message is unfinished" — drain until the part returns `5a` padding |
 | A reset pulse does not revive a wedged part | only a full boot does |
 | The part | Synaptics **S3908**, fw `GA1B0-15.0`, build 4468578, TouchComm **v1**, mode 1 = `MODE_APPLICATION_FIRMWARE` |
 | A whole message in one read | `r 29` returns `a5 10 18 00 01 01 "S3908GA1B0-15.0\0" 62 2f 44 00 00 04 5a` — header, payload, end-of-message, exact |
@@ -188,48 +189,58 @@ signature. Only a full boot brings it back. That changes the recovery model:
 once a boot's part is gone, the boot is over, and it explains why whole
 sessions used to end early.
 
-### What is left
+### ATTN goes low mid-message, and that has poisoned every drain
 
-A valid command is received and produces nothing. CMD_RESET is the sharpest
-case -- unmistakable if acted on, and it is not acted on -- while malformed
-bytes visibly break the part. So the part sees the first byte, distinguishes
-0x02 from 0x00, and still never answers.
+`spi-len-probe.sh`, 2026-09-09, and the important line is the one that was not
+being looked for:
 
-Ruled out, each measured rather than assumed:
+	d1 drained=0 w=38 47 41 tries=8 attn=0x00000000 r=5a 5a 5a 5a 5a 5a
 
-- **SPI mode.** Writing CPOL/CPHA into CH_CFG directly does move the bus:
-  padding read back as 5a, b4, 69, one 0x5a stream sampled 0, 1 and 2 bits
-  late. No mode produced a reply. The driver's `mode N` had never worked --
-  mainline sets `cur_mode` only inside its bpw/speed check, where Google sets
-  it outside, so every earlier mode result in this file was measured against a
-  bus that never changed mode.
-- **Clock rate.** 10 MHz and the slowest this tree reaches, both silent.
-- **Poll time.** The vendor allows CMD_RESPONSE_TIMEOUT_MS = 3000 at 2 ms
-  intervals; ATTN never rose at all, so there was nothing to miss.
-- **Packet shape.** `syna_tcm_v1_write()` builds command, length low, length
-  high and nothing else; no CRC, because the vendor clears has_crc when the
-  bytes past a message read 0x5a5a, and this part's do.
-- **Trailing clocks.** A padded eight-byte command behaves like a bare one.
-- **swap-mode.** For 8-bit words Google writes SWAP_CFG = 0, as mainline does.
+`38 47 41` is ASCII **"8GA"** -- payload from the middle of the identify
+string `S3908GA1B0-15.0`. The health check before it had read the first eight
+bytes and stopped, leaving the part part-way through its message, and **ATTN
+read 0 the whole time**. The drain loop trusted ATTN, found it low, drained
+nothing, and wrote the command straight into the middle of a message -- which
+is the one thing already known to destroy the exchange.
 
-The next thing to try is the length field. A command whose length bytes are
-misread would be parsed as valid, leave the part waiting for payload that
-never comes, and produce exactly this: no response, no error, and a part that
-breaks when the next write arrives as unexpected payload. Sending a command
-with a real payload -- CMD_SET_DYNAMIC_CONFIG, or CMD_ENABLE_REPORT with its
-one report-type byte -- would distinguish "the length is misread" from "the
-whole command is ignored", because the two predict different amounts of
-follow-on damage.
+So the rule this port has been using is wrong. **ATTN means "a message is
+waiting", not "a message is unfinished".** Once a read has begun consuming
+one, ATTN drops while the rest of the message is still queued. Draining has to
+continue until the part actually returns 0x5a padding; every drain in every
+probe so far, and in the driver, has stopped too early.
 
-### The AOC, scoped: it is not running, so it is not the touch problem
+That does not rescue the other two, which is the disappointing half:
+
+	d2 drained=0 w=5a 5a 5a 5a tries=8 attn=0 r=5a 5a 5a 5a 5a 5a
+	d3 drained=0 w=5a 5a 5a   tries=8 attn=0 r=5a 5a 5a 5a 5a 5a
+
+Both wrote to a genuinely quiet part -- `w=5a` proves it was emitting padding,
+not a message -- and both got nothing back, with ATTN never rising. `d2` is
+`02 01 00 02`, a command declaring one payload byte and supplying it; `d3` is
+`20 00 00`, CMD_GET_APPLICATION_INFO, a different command entirely. Neither is
+answered.
+
+The part stayed healthy throughout: `h0` through `h3` all read padding on the
+first try. So neither a length-bearing command nor a different command code
+breaks it, and the earlier breakage from eight bytes of 0x00 or 0xff remains
+the only write that has ever killed it.
+
+**Where that leaves the command path.** A well-formed command, sent to a quiet
+healthy part, at the right speed and mode, with correct framing, produces no
+response and no error. The next thing to fix is the drain -- read until
+padding, not until ATTN drops -- and then re-run the command with a drain that
+actually works, because every command result recorded in this file was taken
+with a drain that could stop mid-message.
+
+### The AOC: its power domain is ON, so it is not excluded
 
 The touch SPI bus is shared. Google's node carries `goog,tbn-enabled` and
 `tbn,mode = <2>`, which is `TBN_MODE_AOC_CHANNEL` in
 `google-modules/touch/common`, and the owner enum is AP or AOC. Worth knowing,
 and this port did not know it.
 
-But the AOC is started **by the AP**, and this port has no AOC driver, so on
-these boots it never starts. From `google-modules/aoc`, `aoc.c`:
+The AP is what loads and starts AOC *firmware*, and this port has no AOC
+driver, so that never happens here. From `google-modules/aoc`, `aoc.c`:
 
 	start_firmware_load()  ->  request_firmware_nowait(...)
 	    gsa_enabled = of_property_read_bool(..., "gsa-enabled");
@@ -241,9 +252,21 @@ these boots it never starts. From `google-modules/aoc`, `aoc.c`:
 	    else
 	            aoc_release_from_reset(prvdata);
 
-Nothing in our boot path does any of that. The consistency of the reads agrees:
-a second master actively driving this bus would corrupt them sometimes, and
-they have been perfect on every boot for the whole investigation.
+Nothing in our boot path does any of that. **But the power domain is on**,
+measured 2026-09-09:
+
+	aoc pd=0x00000001 0x00000001 0x00000010 req=0x00000001
+
+`pd-aoc@15462280` +0x00 and +0x04 are the Exynos PD configuration and status
+words and both read 1, and `aoc_req` reads 1. This was predicted to read zero
+and it does not. A powered domain is not proof that firmware is running --
+the bootloader may simply leave it up -- but "the AOC is held off, so it
+cannot be involved" is refuted, and the negotiator is back on the suspect
+list rather than closed.
+
+Pulling the other way: the reads have been perfect on every boot of this
+investigation, and a second master actively driving the bus would corrupt them
+intermittently.
 
 **What bringing it up would cost**, if it is ever wanted for its own sake
 (audio, sensors, hotword, LPTW): `aoc.c` is 2812 lines; the firmware is
