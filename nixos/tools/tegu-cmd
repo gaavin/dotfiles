@@ -20,7 +20,21 @@ fbargs=()
 mkbootimg=$(command -v mkbootimg || echo /nix/store/mcbpd0lzv6gl5pan8njd72wzczi3v3r2-android-tools-37.0.0/bin/mkbootimg)
 
 if [ "${1:-}" = "-f" ]; then
-	cmd=$(cat "$2")
+	# Strip comments, indentation and blank lines out of a script file.
+	#
+	# The payload rides on the kernel command line and has about 1.4 KB to
+	# fit in, while a probe worth keeping in the repo is mostly commentary
+	# -- spi-tx-probe.sh is 6.7 KB of which 1.4 KB is code. Stripping here
+	# rather than keeping a terse copy means the file that gets sent and
+	# the file that gets read are the same file, which is the mistake this
+	# port already made once with a hand-maintained kernel patch.
+	#
+	# Only whole-line comments go: a line whose first non-blank character
+	# is "#", plus leading whitespace and empty lines. Trailing comments
+	# are left alone, since telling those from a "#" inside a string needs
+	# a shell parser. A here-document containing lines that begin with "#"
+	# would be mangled, so do not send one.
+	cmd=$(sed -e 's/^[[:space:]]*//' -e '/^#/d' -e '/^$/d' "$2")
 else
 	cmd="${1:?usage: tegu-cmd '<shell command>' | tegu-cmd -f script.sh}"
 fi
