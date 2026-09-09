@@ -86,7 +86,7 @@ Working: boot to userspace, own device tree, UFS at gear 4 (boots from an
 11 GB ext4 root), Plasma Mobile, panel console via the bootloader's
 framebuffer, UART console, watchdog, ACPM.
 
-**Touchscreen — the current task.** Reads work. **A command has now been sent, understood and answered in full (2026-09-09)** — see "THE COMMAND PATH WORKS" below. Reliability is the open question, not capability.
+**Touchscreen — WORKING (2026-09-09).** The part answers commands, the full vendor bring-up runs, and it streams **REPORT_TOUCH frames with live coordinates that move under a finger**. See "TOUCH DATA" below. What remains is decoding the report layout properly and moving the fix out of userspace into the SPI driver.
 
 ### Established on hardware. Do not re-investigate.
 
@@ -316,6 +316,125 @@ Every field decodes, which is a strong check that the read path is byte-exact
 and framed correctly. **`max_write_size` is 1024**, so `syna_tcm_v1_write()`
 chunking through `CMD_CONTINUE_WRITE` never engages for a command this small;
 a three-byte command is one transfer, and that is what this port sends.
+
+### TOUCH DATA (2026-09-09)
+
+`spi-coords2-probe.sh`. Live coordinates, moving under a finger:
+
+	IDLE a5 11 17 00 00 00 00 00 00 00 00 00 00 01 01 10 36 1f b8 2f 1d 00 07 07 07 07 00 5a
+	XY1  a5 11 17 00 00 00 00 00 00 00 00 00 00 01 01 10 d6 1e c8 2f 35 00 09 07 09 07 35 5a
+	XY2  a5 11 17 00 00 00 00 00 00 00 00 00 00 01 01 10 de 14 93 0a 0a 00 5a
+	XY3  a5 11 17 00 00 00 00 00 00 00 00 00 00 01 01 10 5e 1c e8 34 3a 00 08 0a 0a 08 5a 5a
+	XY4  a5 11 17 00 00 00 00 00 00 00 00 00 00 01 01 10 6b 22 9a 2a 40 00 0a 0a 0a 0a d2 5a
+
+	Z: touch=914 diff=913
+
+`a5` marker, `0x11` REPORT_TOUCH, `0x0017` = 23 payload bytes. The per-object
+bytes move as the finger moves: `36 1f b8` -> `d6 1e c8` -> `de 14 93` ->
+`5e 1c e8` -> `6b 22 9a`. An earlier boot counted **1086 reports in 16.5 s**.
+
+**The exact field layout is not yet known and must not be guessed.** Several
+12-bit packings were tried against the 1080x2424 panel and each gave plausible
+values for some frames and out-of-range ones for others. The answer is not a
+curve fit -- `CMD_GET_TOUCH_REPORT_CONFIG` returns **128 bytes** describing it,
+of which only the first 11 have been captured:
+
+	10 08   GESTURE_ID              1 byte
+	1b 38   GESTURE_DATA            7 bytes
+	1e 08   SENSING_MODE            1 byte
+	17 08   NSM_STATE               1 byte
+	18 08   NUM_OF_ACTIVE_OBJECTS   1 byte
+	04      PAD_TO_NEXT_BYTE
+
+The remaining 12 report bytes are the `foreach` object records. Parse the
+config rather than hardcoding: it is a stream of `code` bytes where control
+codes 0x00-0x04 (END, FOREACH_ACTIVE_OBJECT, FOREACH_OBJECT, FOREACH_END,
+PAD_TO_NEXT_BYTE) carry no operand and every other code is followed by a
+`bits` byte. Extraction is LSB-first within each byte --
+`syna_tcm_get_touch_data()` in `synaptics_touchcom_func_touch.c` is the
+reference, and `zumapro_touch_bits()` already implements it.
+
+Note `diff=913` of 914: something changes in nearly every frame regardless of
+touch, so "differs from the previous frame" is a poor touch detector. Likely a
+timestamp or frame counter.
+
+**A read is capped at 63 bytes** -- `fifo_depth` is 64 and a transfer of that
+or more is split, which puts a chip-select boundary inside the message. The
+128-byte config therefore needs continued reads (`a5 03`,
+STATUS_CONTINUED_READ), or 59 bytes at a time, which is enough to reach the
+object fields.
+
+### THE FIX: chip select is never deasserted
+
+The whole seven-boot puzzle is one register. `spi-release-probe.sh` isolated
+it: an arm that pulses `CS_REG` and touches **nothing else** got a reply on the
+first read where the control got nothing in twelve.
+
+	A  after=spi_setup  t=0   a5 00 00 00
+	B  after=spi_setup  t=0   a5 c2 02 00 20 00
+	R  after=CS pulse   t=0   a5 00 00 00
+	C  after=nothing    t=12  5a 5a 5a ...      <- control
+
+And `cs=0x00000000`. This build already strips `S3C64XX_SPI_QUIRK_CS_AUTO`
+(`kernel/spi-manual-cs.py`), so `set_cs()` writes 0 to assert and 1 to release
+-- and reading **0 after a transfer means chip select is left asserted**. The
+part never sees the transaction close. Reads never cared, because a queued
+message streams out on any clock; a command needs the boundary to be acted on.
+
+`spi_setup()` fixes it as a side effect: it calls `pm_runtime_get_sync()`,
+forcing a resume and so `hwinit()`, which writes `CS_SIG_INACT`.
+
+**The working sequence, reproducible:** `spi_setup()`, command, `spi_setup()`,
+read. `spi-replicate-probe.sh` confirmed both halves are load-bearing -- drop
+the one before and no STATUS_OK arrives; drop the one after and the part stops
+driving MISO entirely. The BEFORE half has its own mechanism:
+`s3c64xx_spi_transfer_one()` skips `s3c64xx_spi_config()` unless speed or bpw
+changed, and `hwinit()` zeroes `cur_speed` to force it, so the command's own
+transfer reconfigures CH_CFG and the clock instead of running on leftovers.
+
+**This is a workaround, not the fix.** The real change belongs in
+`spi-s3c64xx`: deassert chip select at the end of a message. Note
+`spi_set_cs()` in the SPI core passes the driver a *pin level*, not an
+activate flag (`ctlr->set_cs(spi, !enable)`), so instrument the polarity
+before writing that patch rather than reasoning about it.
+
+**The first command after boot is not answered**, three times over, warm-up or
+not, while later identical ones are. Unexplained; a driver should not trust
+its first command.
+
+### The bring-up runs
+
+`spi-bringup-probe.sh` and `spi-report-probe.sh`:
+
+	25 00 00      -> a5 01 80 00 10 08 1b 38 1e 08 ...   STATUS_OK, 128 bytes
+	05 01 00 11   -> a5 01 00 00                         STATUS_OK, reports on
+
+`CMD_GET_APPLICATION_INFO` (0x20) has never answered. It is not needed for
+reports -- it carries sensor dimensions, which matter for scaling coordinates.
+
+### Three ways to lose a result you already have
+
+All three happened in one session, all to the *observation* rather than the
+experiment, and each cost a boot:
+
+- **Truncation.** The report loop logged 44 characters. The header and the
+  first 11 payload bytes fit; the coordinates started at byte 11. 1086 reports
+  were captured and every one was cut off immediately before the answer.
+- **Flooding.** Putting `mode 0` before each read makes the driver print two
+  lines per iteration. At 1500 iterations that is 3000+ lines, and at 115200
+  baud a 60-character line takes ~5 ms -- so the loop was *rate-limited by the
+  console* and the wanted lines were lost in the noise. `diff=8` proved the
+  touches were captured; not one line carrying them arrived.
+- **Silencing.** The fix attempted for the flood was
+  `echo 1 > /proc/sys/kernel/printk`, which silenced the UART completely --
+  including this port's own `<0>`-prefixed lines -- and produced a boot with no
+  output at all. It was also unnecessary: the previous boot's end-of-loop
+  `mark` line had come through the same flood intact, which already showed
+  that logging *after* the loop works.
+
+**How to apply:** log after the loop, not inside it; capture more bytes than
+the field you are looking for; and change one thing at a time, especially when
+the change is to the instrument rather than the experiment.
 
 ### THE COMMAND PATH WORKS (2026-09-09)
 
