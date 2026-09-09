@@ -118,9 +118,17 @@ Provable without the touchscreen:
 	L6 mode_cfg=0x1FF80000
 
 In loopback the block feeds TX back to RX inside itself -- no pad, no part. It
-echoed nothing, so the transmit datapath is not shifting data. That is why no
-command has ever reached the touchscreen, and it is a spi-s3c64xx problem on
-this SoC, not a TouchComm one.
+echoed nothing, which says the transmit datapath is not shifting data.
+
+**Caveat on L4/L5, not yet closed.** The bit was set with devmem, and
+s3c64xx_spi_config() clears SELF_LOOPBACK whenever spi->mode lacks SPI_LOOP.
+That function only runs when bits-per-word or speed change, and neither did
+here, so the bit very probably survived the transfer -- but that was not
+measured. Confirm by reading MODE_CFG back *immediately after* a loopback
+transfer, before restoring it, and only then treat L4 as proof.
+
+L2 needs no such caveat and is the solid result: a read with TX enabled returns
+two good bytes and then 0xff.
 
 It also explains the oldest open question in this file. With TX enabled a read
 returns two good bytes and then 0xff -- `a5 10 ff ff` -- which is exactly the
