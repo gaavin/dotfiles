@@ -1172,6 +1172,26 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	 */
 	ts->max_objects = TCM_MAX_OBJECTS;
 
+	/*
+	 * Probe stops here, again, and this time with a measured reason.
+	 *
+	 * With the command sequence restored the part was dead by the time
+	 * userspace reached it -- a fresh reset then "r 29" returned 00 00 00
+	 * ... where the identify-only build had returned a whole identify at
+	 * the same point in the same boot. Three commands that never answer
+	 * are enough to take it from talking to driving MISO low, so anything
+	 * that wants to study the command path has to be the first thing to
+	 * touch the part, not the fourth.
+	 *
+	 * Panel geometry is Google's own (goog,display-resolution = <1080
+	 * 2424>), so the defaults below are not a guess.
+	 */
+	ts->max_x = 1079;
+	ts->max_y = 2423;
+	dev_err(dev, "identified only; commands are not sent (they wedge it)\n");
+	INIT_DELAYED_WORK(&ts->poll, zumapro_touch_poll);
+	return 0;
+
 	ret = zumapro_touch_request(ts, CMD_GET_APPLICATION_INFO, NULL, 0);
 	if (ret >= APP_INFO_MAX_OBJECTS + 2) {
 		ts->max_x = get_unaligned_le16(&ts->rxbuf[APP_INFO_MAX_X]);
