@@ -95,7 +95,9 @@ framebuffer, UART console, watchdog, ACPM.
 | SPI bus, clock, controller | hand-driven loopback echoes `a5 5a 0f f0`, TX FIFO 4→0, TX_DONE set, no error bits |
 | Both rails | `sec-acpm`; vdd 1.8 V, avdd 3.3 V, and ATTN goes high the moment they do |
 | pinctrl, reset, ATTN | `gpn0` PUD reads 0; forcing a pull-**up** still read low, so the part drives it; idles high after a clean reset |
-| The part hears us | a hand-driven 4-byte write with loopback off returns `5a 5a 5a 5a`, TouchComm padding — so MOSI is muxed and driving |
+| The part hears us | a hand-driven 4-byte write returns `5a 5a 5a 5a` padding — MOSI is muxed and driving |
+| The firmware is running | `a5 c2 02 00 20 00` = REPORT_FW_STATUS, `b5_fast_relaxation` — routine telemetry from a sensing part |
+| Commanding on a pending message wedges it | ATTN high, wrote anyway, part released MISO mid-message and went silent |
 | The part | Synaptics **S3908**, fw `GA1B0-15.0`, build 4468578, TouchComm **v1**, mode 1 = `MODE_APPLICATION_FIRMWARE` |
 | A whole message in one read | `r 29` returns `a5 10 18 00 01 01 "S3908GA1B0-15.0\0" 62 2f 44 00 00 04 5a` — header, payload, end-of-message, exact |
 | Command codes, hex parser | checked byte-for-byte against the vendor enum |
@@ -151,26 +153,56 @@ pops one byte.** Four successive 32-bit reads with four bytes queued returned
 little-endian, each time. That is consistent with `ioread8_rep()` on the read
 path, which takes the low byte; it would matter for a 32-bit `cur_bpw`.
 
-### Where the fault actually is
+### The part is alive, reporting, and it is the pending message that kills
 
-Reads work, the bus works, the part answers padding to arbitrary bytes -- but
-no command has ever been answered. That points at the TouchComm layer or at
-how the driver forms a command transfer, which is where this was before it
-detoured into the controller.
+`spi-cmd-probe.sh`, 2026-09-09, hand-driven with the driver out of the way:
 
-The next measurement is the matching one: send a **real command** by hand, the
-same way P3 sent four arbitrary bytes, and read the reply. `CMD_IDENTIFY` is
-`02 00 00` (command, then a 16-bit payload length of zero). A hand-driven
-command answers the question the driver cannot, because it removes chip-select
-timing, FIFO flushing and transfer splitting from the equation all at once:
+	P0  id=a5 10 18 00 01 01 53 33 ... 5a      identify, as always
+	C1  attn=0
+	C1w rx_lvl=3  rx=5a5a5a                    padding while the command goes out
+	C1r rx_lvl=16 rx=a5c2020020005a5a...       a whole message
+	C1  attn=1
+	C2  attn=1                                 <- a message is pending
+	C2w rx_lvl=3  rx=a5c2ff                    part mid-message, then MISO released
+	C2r rx_lvl=16 rx=ffffffffffff...           nothing driving
 
-	answers with a5 ...  -> the protocol is right and the driver's transfer
-	                        shape is what breaks it
-	answers 5a 5a ...    -> the part heard it and had nothing to say, so the
-	                        command was not understood as a command
+**C1r is a well-formed TouchComm v1 message**, and the first thing other than
+an identify or padding this port has ever got out of the part:
 
-Note P3 held chip select low across both hand-driven transfers, so a
-CS-per-command variant is worth running as the pair to it.
+	a5     marker
+	c2     REPORT_FW_STATUS -- a Google code, in syna_tcm2.h, not the core header
+	02 00  length 2
+	20 00  payload
+	5a...  EOM, then padding
+
+`struct custom_fw_status` decodes 0x0020 as `b5_fast_relaxation = 1` with
+moisture, noise, freq-hopping, grip and palm all clear. That is a healthy
+sensing touchscreen emitting routine operational telemetry.
+
+**And a hand-driven command does not wedge it.** C1 wrote `02 00 00` and the
+part carried on driving MISO and produced a valid message afterwards, which
+contradicts the standing rule that any command takes it to 0x00 within three
+tries.
+
+**What kills it is commanding while a message is pending.** ATTN was 1 going
+into C2 -- the part had something queued -- and C2 wrote anyway. C2w caught it
+mid-message (`a5 c2` and then the line released) and C2r read all 0xff. One
+command, issued at the wrong moment, took it from talking to silent. That is
+almost certainly the mechanism behind "three failing commands wedge this
+part", and it is what the driver has been doing all along.
+
+**Be careful what this does not say.** 0xc2 is a *report* code; TouchComm
+splits codes below REPORT_IDENTIFY (0x10) as command status and 0x10 and above
+as asynchronous reports. So C1r is not proof that CMD_IDENTIFY was answered --
+a firmware status report is asynchronous by nature and may simply have been
+queued. What is established is that the part receives, stays healthy, and
+reports; what is not is a command/response pairing.
+
+**Next:** the vendor's actual order of operations, which this port has never
+followed. Drain every pending message first (read while ATTN is high), *then*
+write the command, then poll for a reply with a status code below 0x10.
+`syna_tcm_v1_write_message()` takes cmd_mutex and rw_mutex and lets the IRQ
+thread drain reports precisely so a command never lands on a busy part.
 
 ### Google's four controller differences, checked against mainline
 
