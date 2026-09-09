@@ -98,6 +98,7 @@ framebuffer, UART console, watchdog, ACPM.
 | The part hears us | a hand-driven 4-byte write returns `5a 5a 5a 5a` padding — MOSI is muxed and driving |
 | The firmware is running | `a5 c2 02 00 20 00` = REPORT_FW_STATUS, `b5_fast_relaxation` — routine telemetry from a sensing part |
 | Commanding on a pending message wedges it | ATTN high, wrote anyway, part released MISO mid-message and went silent |
+| Drain-then-command-then-poll works | identify, two fw-status reports, then `STATUS_IDLE`; part stayed healthy throughout |
 | The part | Synaptics **S3908**, fw `GA1B0-15.0`, build 4468578, TouchComm **v1**, mode 1 = `MODE_APPLICATION_FIRMWARE` |
 | A whole message in one read | `r 29` returns `a5 10 18 00 01 01 "S3908GA1B0-15.0\0" 62 2f 44 00 00 04 5a` — header, payload, end-of-message, exact |
 | Command codes, hex parser | checked byte-for-byte against the vendor enum |
@@ -153,56 +154,64 @@ pops one byte.** Four successive 32-bit reads with four bytes queued returned
 little-endian, each time. That is consistent with `ioread8_rep()` on the read
 path, which takes the low byte; it would matter for a 32-bit `cur_bpw`.
 
-### The part is alive, reporting, and it is the pending message that kills
+### Solved: drain, then command, then poll — and the part talks
 
-`spi-cmd-probe.sh`, 2026-09-09, hand-driven with the driver out of the way:
+`spi-drain-cmd-probe.sh`, 2026-09-09. Every byte parses:
 
-	P0  id=a5 10 18 00 01 01 53 33 ... 5a      identify, as always
-	C1  attn=0
-	C1w rx_lvl=3  rx=5a5a5a                    padding while the command goes out
-	C1r rx_lvl=16 rx=a5c2020020005a5a...       a whole message
-	C1  attn=1
-	C2  attn=1                                 <- a message is pending
-	C2w rx_lvl=3  rx=a5c2ff                    part mid-message, then MISO released
-	C2r rx_lvl=16 rx=ffffffffffff...           nothing driving
+	S0  attn=1  n=40  00 00 00 ... (all zero)
+	CW  attn=0  n=3   a5 10 ff
+	CR0 a5 10 18 00  REPORT_IDENTIFY  v1 mode=1 S3908GA1B0-15.0 build 4468578
+	CR1 a5 c2 02 00  REPORT_FW_STATUS  fast_relax=1
+	CR2 a5 c2 02 00  REPORT_FW_STATUS  fast_relax=0
+	CR3 a5 00 00 00  STATUS_IDLE
+	CR4 a5 00 00 00  STATUS_IDLE
 
-**C1r is a well-formed TouchComm v1 message**, and the first thing other than
-an identify or padding this port has ever got out of the part:
+**`a5 00 00 00` is STATUS_IDLE, code 0x00.** TouchComm splits codes below
+REPORT_IDENTIFY (0x10) as command status and 0x10 and above as asynchronous
+reports, and this is the first status-class message this port has ever read.
+The part drained cleanly through an identify and two reports and settled at
+idle -- and `fast_relax` went 1 to 0 between CR1 and CR2, so that is live
+firmware state changing under observation, not a canned reply.
 
-	a5     marker
-	c2     REPORT_FW_STATUS -- a Google code, in syna_tcm2.h, not the core header
-	02 00  length 2
-	20 00  payload
-	5a...  EOM, then padding
+**The part never degraded.** A command and five reads, and it ended healthy
+and idle. Every earlier session had it at 0x00 and then not driving within
+three commands. The recipe is the difference: read while ATTN is high until it
+goes low, command only then, and poll for the reply.
 
-`struct custom_fw_status` decodes 0x0020 as `b5_fast_relaxation = 1` with
-moisture, noise, freq-hopping, grip and palm all clear. That is a healthy
-sensing touchscreen emitting routine operational telemetry.
+**Writing aborts whatever the part was presenting, confirmed twice.** CW
+captured `a5 10 ff` -- two bytes of a header and then the line released --
+exactly as `a5 c2 ff` did the boot before. So a write always costs the message
+in flight, which is why commanding on a pending message is destructive and why
+draining first is not optional.
 
-**And a hand-driven command does not wedge it.** C1 wrote `02 00 00` and the
-part carried on driving MISO and produced a valid message afterwards, which
-contradicts the standing rule that any command takes it to 0x00 within three
-tries.
+**Not established: whether CR0 is the answer to CMD_IDENTIFY.** The `a5 10` in
+CW says an identify was already being presented when the command's chip select
+went active, so the identify may have been queued rather than caused. This
+data cannot separate the two, and it does not matter for the fix.
 
-**What kills it is commanding while a message is pending.** ATTN was 1 going
-into C2 -- the part had something queued -- and C2 wrote anyway. C2w caught it
-mid-message (`a5 c2` and then the line released) and C2r read all 0xff. One
-command, issued at the wrong moment, took it from talking to silent. That is
-almost certainly the mechanism behind "three failing commands wedge this
-part", and it is what the driver has been doing all along.
+**Unexplained, and worth one look: S0 read 40 bytes of 0x00 with ATTN high.**
+0x00 is this port's historical signature for a wedged part, and the part was
+demonstrably fine immediately afterwards. The likeliest reading is that the
+driver's boot-time probe left the framing desynchronised and the first
+hand-driven read resynchronised it -- but that is inference, not measurement.
 
-**Be careful what this does not say.** 0xc2 is a *report* code; TouchComm
-splits codes below REPORT_IDENTIFY (0x10) as command status and 0x10 and above
-as asynchronous reports. So C1r is not proof that CMD_IDENTIFY was answered --
-a firmware status report is asynchronous by nature and may simply have been
-queued. What is established is that the part receives, stays healthy, and
-reports; what is not is a command/response pairing.
+### What the driver has to change
 
-**Next:** the vendor's actual order of operations, which this port has never
-followed. Drain every pending message first (read while ATTN is high), *then*
-write the command, then poll for a reply with a status code below 0x10.
-`syna_tcm_v1_write_message()` takes cmd_mutex and rw_mutex and lets the IRQ
-thread drain reports precisely so a command never lands on a busy part.
+The bus, the pads, the part and the protocol are all good. What is wrong is
+the order of operations, and `zumapro-touch.c` has never done any of this:
+
+1. **Never write while ATTN is high.** Drain first; a write destroys the
+   message in flight.
+2. **Poll for the reply** rather than assuming one transfer produces it. The
+   answer arrived several reads later here.
+3. **Read whole messages in one transfer**, which this port already knows.
+
+Open question worth one cheap boot before touching the driver: does this work
+through the *driver's* transfers, or does it need the hand-driven timing?
+Every step above is milliseconds apart because each devmem is a process, where
+the driver would be microseconds apart. `spi-order-probe.sh` runs the same
+sequence through `tcm_xfer`, so it separates "the ordering was wrong" from
+"the part needs more time than the driver gives it".
 
 ### Google's four controller differences, checked against mainline
 
