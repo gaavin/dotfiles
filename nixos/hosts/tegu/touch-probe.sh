@@ -229,6 +229,15 @@ while [ "$i" -lt 10 ]; do
 	i=$((i + 1))
 done
 
+# Put the line back. This pull-up used to be left on for the rest of the boot,
+# which pinned ATTN high from here onwards -- and since the line is read as
+# active high, that is indistinguishable from a message the part never stops
+# offering. Every ATTN measurement after this point was a measurement of a
+# resistor.
+devmem $GPN0_PUD 32 $(( pud & ~0x3 ))
+log "tegu-probe: gpn0 pull restored, PUD now $(devmem $GPN0_PUD 32)"
+
+
 # Now ask the part directly. The interrupt has been held low since the reset
 # pulse, which is what a TouchComm device does when it has a message waiting
 # and is what the pull-up test says is happening -- but a line held low by an

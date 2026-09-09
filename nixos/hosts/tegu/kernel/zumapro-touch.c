@@ -506,22 +506,30 @@ static int zumapro_touch_wait_boot(struct zumapro_touch *ts, u8 *code)
 	dev_info(dev, "boot: attn %s after %u ms, %u transitions\n",
 		 last ? "asserted" : "idle", TOUCH_BOOT_TRACE_MS, edges);
 
+	/*
+	 * Ungated, unlike every other read in this driver.
+	 *
+	 * ATTN is a reliable message-pending signal once the part is running --
+	 * measured, high means a message and reading it drives the line low --
+	 * but not in the window straight after reset. Every boot that has ever
+	 * read this part's identify read it with the line still low, and the
+	 * one boot that gated on the line skipped all eight reads and found
+	 * nothing. The part has the report ready before it drives the line for
+	 * it, so here the bus is the evidence rather than the pin.
+	 */
 	for (i = 0; i < TOUCH_BOOT_READS; i++) {
-		if (!zumapro_touch_attn(ts)) {
-			dev_info(dev, "boot: read %u skipped, attn idle\n", i);
-		} else {
-			ret = zumapro_touch_read(ts, code);
-			if (ret != -ENOMSG)
-				return ret;
+		ret = zumapro_touch_read(ts, code);
+		if (ret != -ENOMSG)
+			return ret;
 
-			/*
-			 * No header to print: ts->hdr is only written by a
-			 * read that found a marker, so printing it here would
-			 * show the previous message's header as if it were
-			 * this one. read_sync has already said what came back.
-			 */
-			dev_info(dev, "boot: read %u found no message\n", i);
-		}
+		/*
+		 * No header to print: ts->hdr is only written by a read that
+		 * found a marker, so printing it here would show the previous
+		 * message's header as if it were this one. read_sync has
+		 * already said what came back.
+		 */
+		dev_info(dev, "boot: read %u found no message (attn %s)\n",
+			 i, zumapro_touch_attn(ts) ? "asserted" : "idle");
 
 		msleep(TOUCH_BOOT_READ_MS);
 	}
