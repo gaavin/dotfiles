@@ -95,10 +95,11 @@ framebuffer, UART console, watchdog, ACPM.
 | SPI bus, clock, controller | hand-driven loopback echoes `a5 5a 0f f0`, TX FIFO 4→0, TX_DONE set, no error bits |
 | Both rails | `sec-acpm`; vdd 1.8 V, avdd 3.3 V, and ATTN goes high the moment they do |
 | pinctrl, reset, ATTN | `gpn0` PUD reads 0; forcing a pull-**up** still read low, so the part drives it; idles high after a clean reset |
-| The part hears us | a hand-driven 4-byte write returns `5a 5a 5a 5a` padding — MOSI is muxed and driving |
+| MOSI is connected | driving it stops the part answering, where an undriven read on the same part reads a perfect identify |
 | The firmware is running | `a5 c2 02 00 20 00` = REPORT_FW_STATUS, `b5_fast_relaxation` — routine telemetry from a sensing part |
 | Commanding on a pending message wedges it | ATTN high, wrote anyway, part released MISO mid-message and went silent |
-| Drain-then-command-then-poll works | identify, two fw-status reports, then `STATUS_IDLE`; part stayed healthy throughout |
+| Draining stops the wedging | commanding on a pending message is what killed it; drained, it survives commands |
+| A reset pulse does not revive a wedged part | only a full boot does |
 | The part | Synaptics **S3908**, fw `GA1B0-15.0`, build 4468578, TouchComm **v1**, mode 1 = `MODE_APPLICATION_FIRMWARE` |
 | A whole message in one read | `r 29` returns `a5 10 18 00 01 01 "S3908GA1B0-15.0\0" 62 2f 44 00 00 04 5a` — header, payload, end-of-message, exact |
 | Command codes, hex parser | checked byte-for-byte against the vendor enum |
@@ -154,64 +155,71 @@ pops one byte.** Four successive 32-bit reads with four bytes queued returned
 little-endian, each time. That is consistent with `ioread8_rep()` on the read
 path, which takes the low byte; it would matter for a 32-bit `cur_bpw`.
 
-### Solved: drain, then command, then poll — and the part talks
+### MOSI is connected and the part decodes it
 
-`spi-drain-cmd-probe.sh`, 2026-09-09. Every byte parses:
+`spi-mosi-probe.sh`, 2026-09-09. Four reads of a freshly reset part, changing
+only what sits on MOSI, each retrying until it sees the 0xa5 marker:
 
-	S0  attn=1  n=40  00 00 00 ... (all zero)
-	CW  attn=0  n=3   a5 10 ff
-	CR0 a5 10 18 00  REPORT_IDENTIFY  v1 mode=1 S3908GA1B0-15.0 build 4468578
-	CR1 a5 c2 02 00  REPORT_FW_STATUS  fast_relax=1
-	CR2 a5 c2 02 00  REPORT_FW_STATUS  fast_relax=0
-	CR3 a5 00 00 00  STATUS_IDLE
-	CR4 a5 00 00 00  STATUS_IDLE
+	v0  undriven   tries=0   a5 10 18 00 01 01 53 33   perfect identify
+	v1  8x 0x00    tries=12  no marker
+	v2  8x 0xff    tries=12  00 00 00 00 00 00 00 00
+	v3  undriven   tries=12  00 00 00 00 00 00 00 00   after a reset pulse
 
-**`a5 00 00 00` is STATUS_IDLE, code 0x00.** TouchComm splits codes below
-REPORT_IDENTIFY (0x10) as command status and 0x10 and above as asynchronous
-reports, and this is the first status-class message this port has ever read.
-The part drained cleanly through an identify and two reports and settled at
-idle -- and `fast_relax` went 1 to 0 between CR1 and CR2, so that is live
-firmware state changing under observation, not a canned reply.
+If MOSI were not reaching the part, v1 and v2 would have read the identify
+exactly as v0 did -- a driven read clocks the same, the part would simply see
+nothing different. Instead driving it stopped the part answering, and v0
+brackets that as a healthy part on the same boot. **The wire is live and the
+part acts on what arrives.**
 
-**The part never degraded.** A command and five reads, and it ended healthy
-and idle. Every earlier session had it at 0x00 and then not driving within
-three commands. The recipe is the difference: read while ATTN is high until it
-goes low, command only then, and poll for the reply.
+Content matters, not just activity, which is what makes this decoding rather
+than interference. From the variant boot before it:
 
-**Writing aborts whatever the part was presenting, confirmed twice.** CW
-captured `a5 10 ff` -- two bytes of a header and then the line released --
-exactly as `a5 c2 ff` did the boot before. So a write always costs the message
-in flight, which is why commanding on a pending message is destructive and why
-draining first is not optional.
+	02 00 00                  part stays healthy, no response
+	02 00 00 + five 00        part stays healthy, no response
+	04 00 00  (CMD_RESET)     part stays healthy, no response, ATTN stays low
+	00 x8 / ff x8             part stops answering entirely
 
-**Not established: whether CR0 is the answer to CMD_IDENTIFY.** The `a5 10` in
-CW says an identify was already being presented when the command's chip select
-went active, so the identify may have been queued rather than caused. This
-data cannot separate the two, and it does not matter for the fix.
+An eight-byte write beginning 0x02 is harmless; eight bytes of 0x00 or 0xff
+are not. The part is parsing the first byte.
 
-**Unexplained, and worth one look: S0 read 40 bytes of 0x00 with ATTN high.**
-0x00 is this port's historical signature for a wedged part, and the part was
-demonstrably fine immediately afterwards. The likeliest reading is that the
-driver's boot-time probe left the framing desynchronised and the first
-hand-driven read resynchronised it -- but that is inference, not measurement.
+**A reset pulse does not recover a broken part.** v3 reset and still read
+0x00 with ATTN stuck high, which is this port's long-standing wedged
+signature. Only a full boot brings it back. That changes the recovery model:
+once a boot's part is gone, the boot is over, and it explains why whole
+sessions used to end early.
 
-### What the driver has to change
+### What is left
 
-The bus, the pads, the part and the protocol are all good. What is wrong is
-the order of operations, and `zumapro-touch.c` has never done any of this:
+A valid command is received and produces nothing. CMD_RESET is the sharpest
+case -- unmistakable if acted on, and it is not acted on -- while malformed
+bytes visibly break the part. So the part sees the first byte, distinguishes
+0x02 from 0x00, and still never answers.
 
-1. **Never write while ATTN is high.** Drain first; a write destroys the
-   message in flight.
-2. **Poll for the reply** rather than assuming one transfer produces it. The
-   answer arrived several reads later here.
-3. **Read whole messages in one transfer**, which this port already knows.
+Ruled out, each measured rather than assumed:
 
-Open question worth one cheap boot before touching the driver: does this work
-through the *driver's* transfers, or does it need the hand-driven timing?
-Every step above is milliseconds apart because each devmem is a process, where
-the driver would be microseconds apart. `spi-order-probe.sh` runs the same
-sequence through `tcm_xfer`, so it separates "the ordering was wrong" from
-"the part needs more time than the driver gives it".
+- **SPI mode.** Writing CPOL/CPHA into CH_CFG directly does move the bus:
+  padding read back as 5a, b4, 69, one 0x5a stream sampled 0, 1 and 2 bits
+  late. No mode produced a reply. The driver's `mode N` had never worked --
+  mainline sets `cur_mode` only inside its bpw/speed check, where Google sets
+  it outside, so every earlier mode result in this file was measured against a
+  bus that never changed mode.
+- **Clock rate.** 10 MHz and the slowest this tree reaches, both silent.
+- **Poll time.** The vendor allows CMD_RESPONSE_TIMEOUT_MS = 3000 at 2 ms
+  intervals; ATTN never rose at all, so there was nothing to miss.
+- **Packet shape.** `syna_tcm_v1_write()` builds command, length low, length
+  high and nothing else; no CRC, because the vendor clears has_crc when the
+  bytes past a message read 0x5a5a, and this part's do.
+- **Trailing clocks.** A padded eight-byte command behaves like a bare one.
+- **swap-mode.** For 8-bit words Google writes SWAP_CFG = 0, as mainline does.
+
+The next thing to try is the length field. A command whose length bytes are
+misread would be parsed as valid, leave the part waiting for payload that
+never comes, and produce exactly this: no response, no error, and a part that
+breaks when the next write arrives as unexpected payload. Sending a command
+with a real payload -- CMD_SET_DYNAMIC_CONFIG, or CMD_ENABLE_REPORT with its
+one report-type byte -- would distinguish "the length is misread" from "the
+whole command is ignored", because the two predict different amounts of
+follow-on damage.
 
 ### Google's four controller differences, checked against mainline
 
