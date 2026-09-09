@@ -76,11 +76,11 @@ A=0x15060004
 # never took the data" are different faults with the same symptom.
 S() {
 	s=$(R 0x14)
-	printf '%s tx=%d rx=%d done=%d' "$s" \
+	printf '%s tx=%d rx=%d d=%d' "$s" \
 		$(((s >> 6) & 0x1ff)) $(((s >> 15) & 0x1ff)) $(((s >> 25) & 1))
 }
 
-D() { L "$1 ch=$(R 0) mode=$(R 8) cs=$(R 0xc) pkt=$(R 0x20) swap=$(R 0x28) fb=$(R 0x2c) $(S)"; }
+D() { L "$1 ch=$(R 0) mode=$(R 8) cs=$(R 0xc) pkt=$(R 0x20) $(S)"; }
 
 L BEGIN
 
@@ -116,6 +116,7 @@ D "P1 at rest"
 # prints raw.
 C=$(R 0)
 I=$(R 0x10)
+Z=""
 # If devmem is not answering, stop before writing anything: an empty $C would
 # drop an argument from the restore at the end and leave the channel enabled.
 [ -n "$C" ] || { L "no devmem"; exit 1; }
@@ -133,14 +134,14 @@ M() {
 	W 8 $2
 	W 0xc 0
 	W 0x20 $((0x10000 | 4))
-	D "$1 armed"
+	L "$1 armed mode=$(R 8) pkt=$(R 0x20) cs=$(R 0xc)"
 	# Fill with the channel still off, the order the driver uses:
 	# s3c64xx_enable_datapath() writes the FIFO before it writes CH_CFG.
 	W 0x18 0xa5 ; W 0x18 0x5a ; W 0x18 0x0f ; W 0x18 0xf0
-	L "$1 filled  $(S)"
+	f=$(S)
 	W 0 $(((C & ~0x60) | 0x3))
-	L "$1 enabled $(S)"
-	L "$1 settled $(S)"
+	e=$(S)
+	L "$1 fill[$f] en[$e]"
 	# Pop only what the FIFO says it holds. Reading an empty RX FIFO is
 	# not worth finding out about on this SoC.
 	s=$(R 0x14)
@@ -148,10 +149,14 @@ M() {
 	o=""
 	i=0
 	while [ $i -lt $n ] && [ $i -lt 8 ]; do
-		o="$o $(R 0x1c)"
+		o="$o$(printf %02x $(R 0x1c)),"
 		i=$((i + 1))
 	done
-	L "$1 rx_lvl=$n rx =$o"
+	L "$1 rx_lvl=$n rx=$o"
+	# Stash a one-line digest. The last capture was truncated exactly here,
+	# so the answer gets repeated at the end where a short line has the
+	# best chance of surviving a UART that is visibly dropping characters.
+	Z="$Z $1 f[${f#* }] e[${e#* }] rx=$o"
 }
 
 L "P2 loopback: nothing leaves the block"
@@ -168,9 +173,9 @@ M P2 0x1FF80008
 #
 # Last, because it talks at the part, and three unanswered requests take it
 # from talking to silent.
-L "P3 at the part, attn before=$(devmem $A 32)"
+L "P3 attn=$(devmem $A 32)"
 M P3 0x1FF80000
-L "P3 attn after=$(devmem $A 32)"
+L "P3 attn=$(devmem $A 32)"
 
 # Put it back. A probe that leaves the block configured poisons every later
 # reading -- this port has paid for that once already, with a pull-up left on
@@ -184,4 +189,6 @@ W 0 $C
 W 0x10 $I
 D "P4 restored"
 
+L "R:$Z"
+L "R:$Z"
 L END
