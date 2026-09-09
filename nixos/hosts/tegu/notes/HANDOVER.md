@@ -106,7 +106,37 @@ part.
 **`FB_CLK_SEL` is not a suspect.** Google sets `samsung,spi-feedback-delay = <0>`,
 which is mainline's default.
 
-### The open question: writes have no effect
+### The open question: the controller cannot transmit
+
+	Q1 undriven   a5 10 18 00 01 01 53 33 ...   <- full identify
+	Q2 tx-zeros   00 00 00 ...                  <- broken
+	Q3 tx-ffs     00 00 00 ...                  <- broken
+
+Three full-duplex reads of the same message, differing only in what sits on
+MOSI. Any transfer with a non-NULL tx_buf -- which is what sets CH_TXCH_ON --
+returns zeros, whatever the data. Zeros and 0xff fail identically, so this is
+not the part objecting to what it is told; the transfer dies when the transmit
+channel is enabled.
+
+That is why every command has failed. Not a protocol fault, not framing, not
+the part refusing: the controller does not transmit in this configuration, so
+no command has ever reached the part. Reads work because they are the one path
+that leaves TX off (tx_buf = NULL).
+
+**Do not repeat these.** All were tried against the command path and all failed
+for this reason: bare and zero-padded commands, command and reply in one chip
+select ("x") and in two ("wr"), the vendor's exact 4+31 split read beforehand,
+a full 35-byte drain beforehand, and SPI modes 0-3 (0 and 1 read correctly, 2
+and 3 corrupt reads; none accept a command).
+
+Where to look next: Google runs this bus with `dma-mode`, `dmas = <&pdma1 18
+&pdma1 19>`, `swap-mode = <1>` and `samsung,spi-fifosize = <0x40>`; this port
+sets none of them and mainline never parses `swap-mode`. And the SPI pads have
+no pinctrl anywhere -- Google's own node carries `pinctrl-0 = <>` with a TODO,
+there is no `gpb` bank in this SoC, so the pads are however the bootloader left
+them and MOSI may simply not be muxed.
+
+### Superseded: writes have no effect
 
 	W: id     a5 10 18 00 01 01 53 33 ... 5a   <- perfect
 	W: ident  5a 5a 5a ...                     <- CMD_IDENTIFY, nothing

@@ -976,8 +976,17 @@ static ssize_t tcm_xfer_store(struct device *dev, struct device_attribute *attr,
 		if (kstrtouint(p, 0, &val) || !val || val > TCM_XFER_MAX)
 			return -EINVAL;
 
+		/*
+		 * Undriven, like every read that has ever worked here. This
+		 * used to hand the read half a buffer of 0xff, which is
+		 * measurably fatal: the same read with MOSI driven high
+		 * returns 00 00 00 ... where undriven returns a whole
+		 * identify. Testing the command path with it would have
+		 * silenced the part in the same breath as asking it a
+		 * question.
+		 */
 		memset(ts->txfill, 0xff, val);
-		xfer[1].tx_buf = ts->txfill;
+		xfer[1].tx_buf = ts->drive_mosi ? ts->txfill : NULL;
 		xfer[1].rx_buf = ts->rxbuf;
 		xfer[1].len = val;
 		xfer[1].speed_hz = ts->speed_hz;
