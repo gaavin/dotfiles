@@ -92,9 +92,10 @@ framebuffer, UART console, watchdog, ACPM.
 
 | Fact | Evidence |
 | --- | --- |
-| SPI bus, clock, controller | loopback echoed `a5 5a 0f f0` at 9.98 MHz — but a later loopback echoed nothing; see the open question below before relying on either |
+| SPI bus, clock, controller | hand-driven loopback echoes `a5 5a 0f f0`, TX FIFO 4→0, TX_DONE set, no error bits |
 | Both rails | `sec-acpm`; vdd 1.8 V, avdd 3.3 V, and ATTN goes high the moment they do |
 | pinctrl, reset, ATTN | `gpn0` PUD reads 0; forcing a pull-**up** still read low, so the part drives it; idles high after a clean reset |
+| The part hears us | a hand-driven 4-byte write with loopback off returns `5a 5a 5a 5a`, TouchComm padding — so MOSI is muxed and driving |
 | The part | Synaptics **S3908**, fw `GA1B0-15.0`, build 4468578, TouchComm **v1**, mode 1 = `MODE_APPLICATION_FIRMWARE` |
 | A whole message in one read | `r 29` returns `a5 10 18 00 01 01 "S3908GA1B0-15.0\0" 62 2f 44 00 00 04 5a` — header, payload, end-of-message, exact |
 | Command codes, hex parser | checked byte-for-byte against the vendor enum |
@@ -116,122 +117,93 @@ part.
 **`FB_CLK_SEL` is not a suspect.** Google sets `samsung,spi-feedback-delay = <0>`,
 which is mainline's default.
 
-### The open question: does the controller transmit?
+### Settled: the controller transmits, and the part hears it
 
-Two direct measurements disagree, and until one is retracted nothing built on
-either is safe:
+Measured 2026-09-09 by `spi-tx-probe.sh`, which drives the transfer by hand
+against the registers with the SPI core never asked to transfer:
 
-	loopback echoes a5 5a 0f f0 byte for byte at 9.98 MHz   (earlier)
-	L4/L5 loopback = ff ff ff ff, echoes nothing            (later)
+	P2 armed mode=0x1FF80008 pkt=0x00010004 cs=0x00000000
+	P2 fill[0x00000100 tx=4 rx=0 d=0] en[0x02020002 tx=0 rx=4 d=1]
+	P2 rx_lvl=4 rx=a5 5a 0f f0
+	P3 fill[0x00000100 tx=4 rx=0 d=0] en[0x02020002 tx=0 rx=4 d=1]
+	P3 rx_lvl=4 rx=5a 5a 5a 5a
 
-	L1 mode_cfg=0x1FF80000
-	L2 normal-tx=a5 10 ff ff        TX on: two good bytes, then ff
-	L3 mode_cfg=0x1FF80008          SELF_LOOPBACK set (MODE_CFG bit 3)
-	L4 loopback=ff ff ff ff         echoes nothing
-	L5 loopback=ff ff ff ff
-	L6 mode_cfg=0x1FF80000
+**P2, internal loopback.** The TX FIFO took four bytes (`tx=4`), the shifter
+drained them (`tx=0`), TX_DONE set, four bytes arrived, and they are exactly
+the four that went in. No error bits: STATUS[5:2] is zero in both readings.
+The transmit datapath works. `L4/L5` are dead twice over -- by this, and by
+the measured hwinit wipe that explains why they read what they read.
 
-The later one set MODE_CFG bit 3 with devmem, and mainline has a mechanism
-that removes it before the transfer it was meant to serve:
+**P3, loopback off, aimed at the part.** Identical transmit behaviour, and the
+part answered `5a 5a 5a 5a`. **0x5A is TouchComm padding** -- what this device
+sends when it has nothing to say. Not 0xff, which is the line floating to its
+pull-up with nothing driving; not 0x00, which is what a wedged part returns.
+The part is powered, clocked, selected, listening, and driving MISO.
 
-	s3c64xx_spi_runtime_resume()  ->  s3c64xx_spi_hwinit()
-	    writel(0, regs + S3C64XX_SPI_MODE_CFG);
-	    ...
-	    val |= (S3C64XX_SPI_MAX_TRAILCNT << S3C64XX_SPI_TRAILCNT_OFF);
-	    writel(val, regs + S3C64XX_SPI_MODE_CFG);
+So the whole chain is proven end to end: **CLK, CS, MOSI, MISO, the FIFOs and
+the shifter all work, and the pads are muxed.** "MOSI never reaches the pad"
+is retired, and so is every framing built on the controller being at fault.
+The remaining fault is above the wire.
 
-0x3ff << 19 is 0x1FF80000 -- what L1 and L6 both reported and what this port
-reads at rest. The controller sets `auto_runtime_pm` with AUTOSUSPEND_TIMEOUT
-2000, so it suspends two seconds after a transfer and re-runs hwinit on the
-next one, and every line of a shell script is far more than two seconds apart.
+Also learned, and not obvious: **RX_DATA presents the queue packed, and a read
+pops one byte.** Four successive 32-bit reads with four bytes queued returned
+0xf00f5aa5, 0x00f00f5a, 0x0000f00f, 0x000000f0 -- the whole remaining queue,
+little-endian, each time. That is consistent with `ioread8_rep()` on the read
+path, which takes the low byte; it would matter for a 32-bit `cur_bpw`.
 
-**Measured on hardware 2026-09-08, and not by the probe written for it.** Two
-independent readings in one boot log bracket the wipe:
+### Where the fault actually is
 
-	t=15.087  touch-probe.sh   MODE_CFG = 0x1FF9E000    RX_RDY_LVL = 60
-	t=17.939  a driver read    zumapro-touch spi0.0: r: 120 us, ret 0
-	t=17.960  read back        MODE_CFG = 0x1FF80000    RX_RDY_LVL = 0
+Reads work, the bus works, the part answers padding to arbitrary bytes -- but
+no command has ever been answered. That points at the TouchComm layer or at
+how the driver forms a command transfer, which is where this was before it
+detoured into the controller.
 
-RX_RDY_LVL (bits 16:11) held 60, left from a long read during probe. Every
-other writer of MODE_CFG preserves that field -- `s3c64xx_spi_config()`,
-`s3c64xx_enable_datapath()` and `s3c64xx_flush_fifo()` mask only BUS_TSZ,
-CH_TSZ, SELF_LOOPBACK, TXDMA and RXDMA, and `transfer_one`'s use_irq path only
-ever *sets* it, and only for len > 32, which a 29-byte read is not. The one
-piece of code that zeroes it is `s3c64xx_spi_hwinit()`, reachable only from
-probe or runtime resume. The gap is 2.85 s against a 2000 ms autosuspend.
+The next measurement is the matching one: send a **real command** by hand, the
+same way P3 sent four arbitrary bytes, and read the reply. `CMD_IDENTIFY` is
+`02 00 00` (command, then a 16-bit payload length of zero). A hand-driven
+command answers the question the driver cannot, because it removes chip-select
+timing, FIFO flushing and transfer splitting from the equation all at once:
 
-So **L4/L5 are void**: the bit was gone before the transfer that was meant to
-use it, and what those lines measured was an ordinary external transfer
-against a part that answers 0xff. It generalises too -- any controller
-register set from userspace survives only until the next transfer.
+	answers with a5 ...  -> the protocol is right and the driver's transfer
+	                        shape is what breaks it
+	answers 5a 5a ...    -> the part heard it and had nothing to say, so the
+	                        command was not understood as a command
 
-Two probes are written and both fit the command channel. One boot each:
-
-	./tools/tegu-cmd -f hosts/tegu/spi-tx-probe.sh        # run this first
-	./tools/tegu-cmd -f hosts/tegu/spi-modecfg-probe.sh
-
-`spi-tx-probe.sh` is the decisive one and does not depend on settling the
-argument above. It drives a four-byte transfer by hand against the registers
-in internal loopback, with the driver never asked to transfer -- so no
-runtime-PM resume happens, hwinit never runs, and nothing rewrites MODE_CFG
-behind it. It reads the FIFO levels at each step, and the three readings each
-falsify something different:
-
-	filled   tx=4          the FIFO took the bytes
-	enabled  tx=0          the shifter consumed them
-	rx       a5 5a 0f f0   the bits went round
-
-tx=0 at `filled` means the writes never landed and nothing downstream matters.
-tx staying at 4 at `enabled` means the transmit datapath really is dead and
-L4/L5 were right for the wrong reason. Bytes coming round means the controller
-transmits, which retires the whole "cannot transmit" framing.
-
-It then repeats the transfer with loopback off, aimed at the part, which
-splits the question this file has not been able to split: bytes back that are
-neither 0xff nor the part's own message mean the part *heard* something, so
-MOSI is muxed and driving and the fault is above the wire.
-
-`spi-modecfg-probe.sh` is now largely redundant -- the boot above answered its
-main question by accident -- but it remains the direct version, and its FB_CLK
-half is still unanswered. It takes the reading L4/L5 never took -- MODE_CFG
-immediately after a transmitting transfer -- then repeats it back-to-back
-inside the autosuspend window, which separates "runtime-PM resume cleared it"
-from "something on the transfer path cleared it". It checks FB_CLK the same
-way, because `s3c64xx_spi_prepare_message()` rewrites that one per *message*
-rather than per resume: the driver's `fb` command has been setting a register
-that is overwritten before every transfer.
-
-L2 needs no caveat and is the solid result: a read with TX enabled returns two
-good bytes and then 0xff -- `a5 10 ff ff` -- which is exactly the "degrading
-header" this port chased for four logs and blamed on sampling and on the
-feedback tap.
+Note P3 held chip select low across both hand-driven transfers, so a
+CS-per-command variant is worth running as the pair to it.
 
 ### Google's four controller differences, checked against mainline
 
 The stock node carries `dma-mode`, `dmas = <&pdma1 18 &pdma1 19>`,
 `swap-mode = <1>` and `samsung,spi-fifosize = <0x40>`, and this port sets none
-of them. Read against mainline 7.3-rc1, none can explain a dead transmit on
-the transfers in question:
+of them. None can explain a transmit fault -- and the measurement above says
+there is no transmit fault to explain:
 
-- **fifosize.** Mainline does not parse `samsung,spi-fifosize` at all -- the
-  property it reads is `fifo-depth` -- and it never gets that far, because
-  `gs101_spi_port_config` sets `.fifo_depth = 64` and the port config wins
-  before the device tree is consulted. The port already has the right number,
-  which is why the 64-byte splitting behaviour above is what it is.
+- **fifosize.** Mainline does not parse `samsung,spi-fifosize`; the property it
+  reads is `fifo-depth`, and it never gets that far because
+  `gs101_spi_port_config` sets `.fifo_depth = 64` before the device tree is
+  consulted. In *Google's* driver the property is mandatory and derives
+  `fifo_lvl_mask = (fifosize << 1) - 1` = 0x7f, which is what it is for.
 - **dma-mode / dmas.** `s3c64xx_spi_can_dma()` returns false unless both
-  channels exist *and* `xfer->len >= fifo_depth`. Every transfer in this
-  investigation is 4 to 35 bytes, so even fully wired DMA would run them as
-  PIO regardless.
+  channels exist *and* `xfer->len >= fifo_depth`. Every transfer here is 4 to
+  35 bytes, so even fully wired DMA would run them as PIO.
 - **swap-mode.** Mainline never parses it and `s3c64xx_spi_hwinit()` writes
-  SWAP_CFG = 0. With MODE_CFG's CH_TSZ and BUS_TSZ both BYTE there is nothing
-  to swap. Both probes print SWAP_CFG, so it is visible rather than assumed.
+  SWAP_CFG = 0. With CH_TSZ and BUS_TSZ both BYTE there is nothing to swap.
 
-Also already handled upstream, before anyone spends a boot on it: the obvious
-"byte writes do not reach this FIFO" hypothesis. gs101's port config sets
-`.use_32bit_io = true`, so PIO byte writes go out through
-`s3c64xx_iowrite8_32_rep()` as one `__raw_writel` per byte.
+Bit positions agree between the two drivers where it counts: Google's
+`exynos_spi_port_config` has `rx_lvl_offset = 15` and `tx_st_done = 25`, the
+same as mainline's gs101. Only the FIFO level mask differs -- 0x7f against
+mainline's 9-bit GENMASKs -- which is immaterial at depth 64. Note the at-rest
+STATUS reads 0x01000000 and neither driver names bit 24, so keep the raw word
+in any dump rather than only a decode.
 
 ### Superseded: the controller cannot transmit (first framing)
+
+**The readings below stand; the conclusion drawn from them does not.** The
+controller transmits — measured above. Q2/Q3 returning zeros is the *part*
+objecting to what it was told and pulling MISO down, not the controller
+failing to send.
+
 
 	Q1 undriven   a5 10 18 00 01 01 53 33 ...   <- full identify
 	Q2 tx-zeros   00 00 00 ...                  <- broken
@@ -262,6 +234,10 @@ there is no `gpb` bank in this SoC, so the pads are however the bootloader left
 them and MOSI may simply not be muxed.
 
 ### Superseded: writes have no effect
+
+**Wrong as stated.** Writes reach the part: it answers padding to them. What
+fails is getting a *command* understood.
+
 
 	W: id     a5 10 18 00 01 01 53 33 ... 5a   <- perfect
 	W: ident  5a 5a 5a ...                     <- CMD_IDENTIFY, nothing

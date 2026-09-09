@@ -149,7 +149,7 @@ M() {
 	o=""
 	i=0
 	while [ $i -lt $n ] && [ $i -lt 8 ]; do
-		o="$o$(printf %02x $(R 0x1c)),"
+		o="$o$(printf %02x $(( $(R 0x1c) & 0xff ))),"
 		i=$((i + 1))
 	done
 	L "$1 rx_lvl=$n rx=$o"
