@@ -146,6 +146,11 @@ in
   # Debug network over the USB-C port (10.42.0.1 on the phone) once the
   # DWC3 controller is described; fails harmlessly until then.
   systemd.services.usb-gadget-net = {
+    # Reports success without doing anything, and has always done so: with
+    # no UDC (dwc3 does not probe on this SoC yet) the first line exits 0, so
+    # "[  OK  ] Finished USB NCM gadget" in a boot log means nothing has
+    # happened. It also needs USB_CONFIGFS, which ./kernel.nix does not set,
+    # so /sys/kernel/config/usb_gadget would not exist even with a UDC.
     description = "USB NCM gadget for host<->phone networking";
     wantedBy = [ "multi-user.target" ];
     after = [ "sys-kernel-config.mount" ];
@@ -237,9 +242,22 @@ in
   # log. There is no ssh on this phone and the only way off it is the UART, so
   # a boot-time dump is how hardware gets measured here. See touch-probe.sh for
   # why the regions are ordered the way they are.
+  #
+  # Retired from the boot path now that zumapro-touch owns the part. The probe
+  # was written for a dead bus and it does not share: it drives a reset pulse
+  # on gpp1-1 and puts a pull-up on the ATTN line, both of which belong to the
+  # driver now. On the last boot that pulse landed while the driver was up and
+  # cost it two reads --
+  #
+  #	zumapro-touch spi0.0: no marker in 2 reads of 60 bytes: 00 00 ...
+  #
+  # -- which is the probe resetting the part out from under it, not a bus
+  # fault. Kept, not deleted: the register map and the reasoning in the script
+  # are the notes for this SoC. Run it deliberately when the driver is unbound:
+  #
+  #	systemctl start tegu-touch-probe
   systemd.services.tegu-touch-probe = {
     description = "Dump touchscreen-related registers to the kernel log";
-    wantedBy = [ "multi-user.target" ];
     after = [ "systemd-udev-settle.service" ];
     serviceConfig = {
       Type = "oneshot";

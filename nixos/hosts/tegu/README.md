@@ -13,7 +13,7 @@ Welcome to NixOS 26.11 (Zokor)!
 tegu login:
 ```
 
-Not yet a usable phone: no touch input, no USB, no WLAN, no modem, no GPU.
+Not yet a usable phone: no USB, no WLAN, no modem, no GPU.
 
 The "powers off after a few minutes" that this file used to describe was the
 cluster watchdog. BL2 arms it for 60 s (`WD: enabled(60s, 1/3)`) and nothing
@@ -53,8 +53,9 @@ sources, then tested by booting it.
 | Touch SPI bus | **Yes.** Loopback echoes at 9.98 MHz |
 | ACPM | **Yes.** Mailbox, SRAM and protocol confirmed; the route to the PMIC |
 | S2MPG14 rails | **Yes.** `LDO4M` and `LDO25M` enabled over ACPM, verified by reading the enable bit back from the PMIC |
-| Touch input | Not yet. The part identifies itself in full (Synaptics S3908, fw `GA1B0-15.0`); reads work, writes have no effect |
-| USB, WLAN, modem, GPU, audio, camera | No |
+| Touch input | **Yes.** Synaptics S3908 (fw `GA1B0-15.0`) answers commands and streams reports; coordinates reach `/dev/input` |
+| USB | Not yet, and the reason is now precise. Controller described and reachable, clocks on; blocked on an eUSB2 + combo USB-DP PHY driver |
+| WLAN, modem, GPU, audio, camera | No |
 
 ## The panel console
 
@@ -149,10 +150,16 @@ Things that are not documented anywhere and cost real time to discover:
    the stock kernel (`02 21 4c 18`). This was verified against the stock image
    rather than guessed.
 
-5. **Adding a USB controller node bootloops the device.** The block is almost
-   certainly powered down at hand-off, with no clock or power-domain driver to
-   bring it back, so probing it reads dead registers. Check the power state
-   from userspace via `/dev/mem` before letting the kernel touch it again.
+5. **Adding a USB controller node does not bootloop the device.** This entry
+   used to say it did, and that the block was powered down at hand-off with no
+   driver to bring it back, so dwc3 read dead registers. Every part of that is
+   false, and it went unchecked for months because it was written from one
+   observation and a plausible story. Measured 2026-09-09: a bare `snps,dwc3`
+   node at `0x11210000` boots to a graphical target, `pd-hsi0` STATUS
+   (`0x15462a84` bit 0) reads 1, and dwc3 writes `DCTL.CSFTRST` and polls it —
+   so the registers answer. What actually fails is the soft reset, because
+   `dwc3_core_soft_reset()` needs `phy_init()` first and there is no PHY yet.
+   The original bootloop was real; its cause was never established.
 
 6. **The bootloader watchdog resets a hung kernel after roughly two minutes,**
    which is easily mistaken for a successful reset. Time your observations.
@@ -248,11 +255,14 @@ Things that are not documented anywhere and cost real time to discover:
 | `kernel/zumapro-ufs-host.py` | Tensor G4 host-controller corrections: PCS `0x202` (the 38.4 MHz reference), PCS RX `0x2f`, and the four quirks the stock tree drops |
 | `kernel/zumapro-pmic-dump.c` | Read-only dump of the S2MPG14 register map over ACPM. Never writes; see the file for why that matters |
 | `kernel/zumapro-s2mpg14-regulator.c` | The two touch rails as regulators, over ACPM directly. Not `sec-acpm.c`: that knows S2MPG10's map, where `0x43` is a different LDO |
-| `kernel/zumapro-touch.c` | Synaptics TouchComm v1 over SPI. Owns the rails, drives reset, logs raw reports |
+| `kernel/check.sh` | Cross-compile one of these drivers against the kernel's store build tree, in seconds, without building an image |
+| `kernel/zumapro-touch.c` | Synaptics TouchComm v1 over SPI. Owns the rails, drives reset, decodes reports into input events |
 | `notes/s2mpg14-dump.txt` | The live PMIC dump, and how the vendor map was matched against it |
 | `notes/HANDOVER.md`, `notes/HANDOVER-PROMPT.md` | Briefing for picking this up cold, and the prompt to hand a new session |
 | `kernel/add-zumapro-wdt.py` | `google,zumapro-wdt`, with no PMU quirks — zumapro's PMU offsets are unverified and gs101's differ |
-| `touch-probe.sh` | Boot-time register dump for the touch stack, via `devmem` (never `dd`: arm64 restricts `/dev/mem` `read()` to real memory) |
+| `notes/HARDWARE.md` | Every address, offset and measured value this port has established, in one place — including the gs101 values that turned out wrong and what they should be |
+| `notes/UPSTREAM.md` | What to take from github.com/zumapro-mainline and what not to — their CMU_HSI0 USI clocks agree with our measurements; their USB clocks and PHY are gs101's and name registers this SoC does not have |
+| `touch-probe.sh` | Register dump for the touch stack, via `devmem` (never `dd`: arm64 restricts `/dev/mem` `read()` to real memory). No longer runs at boot — it drives reset and pulls ATTN, which belong to the driver now; `systemctl start tegu-touch-probe` when the driver is unbound |
 | `tegu-cmd.sh`, `../../tools/tegu-cmd` | Run a shell command passed on the kernel command line. The write half of the debug loop on a phone with a receive-only UART |
 | `kernel/add-zumapro-ufs-phy.py` | Adds the `google,zumapro-ufs-phy` variant: isolation offset, calibration-done register, Tensor G4 PMA table, failure diagnostics |
 | `kernel/dump-ufs-clkstop.py` | Diagnostic: prints `HCI_CLKSTOP_CTRL` at calibration time |
@@ -364,7 +374,7 @@ which polls a register this SoC does not have.
   when `init_count` is non-zero, so the re-bound driver was skipping
   calibration silently. Silence was read as success.
 
-## Touch: reads work, writes do nothing
+## Touch: the part answers
 
 The part is a Synaptics **S3908**, firmware `GA1B0-15.0`, TouchComm **v1**,
 mode 1 (`MODE_APPLICATION_FIRMWARE`). It says so itself, in one read:
@@ -372,17 +382,71 @@ mode 1 (`MODE_APPLICATION_FIRMWARE`). It says so itself, in one read:
 	a5 10 18 00 01 01 "S3908GA1B0-15.0\0" 62 2f 44 00 00 04 5a
 
 Header, version, mode, part number, build id, max write size, end-of-message.
-Bus, clock, controller, both rails, reset and ATTN are all proven. What does
-not work is the command path: `CMD_IDENTIFY` and `CMD_RESET` produce no effect
-at all, and `CMD_RESET` is unmistakable if it lands. Reads need MISO, CLK and
-CS; writes additionally need MOSI. That is the open question.
+It now also answers commands, reports its own touch-report layout, and streams
+`REPORT_TOUCH` frames that decode to coordinates on `/dev/input`.
+
+**Chip select was why commands did nothing.** Not MOSI, not the clock, not the
+rails -- all of those were already proven. A command's frame never closed, so
+the part never saw a complete write. The fix is `spi_setup()` either side of
+every command, which is heavier than it looks and is load-bearing on both
+sides:
+
+	s3c64xx_spi_setup()
+	  -> pm_runtime_get_sync()      forces a resume
+	    -> s3c64xx_spi_hwinit()     releases CS, and zeroes cur_speed
+	      -> next transfer runs s3c64xx_spi_config() instead of skipping it
+
+`s3c64xx_spi_transfer_one()` skips `s3c64xx_spi_config()` whenever speed and
+bits-per-word are unchanged, so without the zeroed `cur_speed` the controller
+is never reprogrammed. A bare CS pulse instead of `spi_setup()` gets framing
+but answers `STATUS_IDLE`; dropping the call *after* the write leaves the part
+not driving MISO at all. Both halves were measured, in `spi-replicate-probe.sh`.
+
+**ATTN does not mean "a message is waiting".** It was believed to, and that
+belief cost the report config: `CMD_IDENTIFY` was answered and
+`CMD_GET_TOUCH_REPORT_CONFIG` was not, purely by luck of timing. The line drops
+as soon as a read starts consuming a message while the rest is still queued, it
+sits high on a wedged part with nothing to say, and it is meaningless in the
+window after reset. The boot that captured 1086 `REPORT_TOUCH` frames sampled
+it low throughout. So the driver reads on a timer and looks for the marker,
+which is what every measured success has done. A read costs clock cycles and
+nothing else.
+
+**Drain before a command, on the part's padding rather than on ATTN.** Writing
+into the middle of a message is the one thing known to destroy the exchange;
+`0x5a` padding is the part saying it has nothing more.
+
+**The first command after a boot is never answered.** Three times over, with a
+warm-up, with a delay, with and without a controller re-init -- while identical
+later ones are answered. It is not understood. The driver spends a throwaway
+`CMD_IDENTIFY` on it rather than letting it eat a real request.
+
+**`CMD_GET_APPLICATION_INFO` is not sent.** It has never answered on this part,
+and an unanswered command is not free -- three take it from talking to driving
+MISO low. It carries sensor dimensions and object count, and Google's own
+`goog,display-resolution = <1080 2424>` already covers both.
 
 **A message is one transfer, and it must fit under the FIFO.** Reading the
 4-byte header and coming back for the rest loses exactly 4 bytes, because
 `s3c64xx_spi_transfer_one()` calls `s3c64xx_flush_fifo()` after every transfer
 and that drains the RX FIFO. A transfer of `fifo_depth` (64) or more is split
-into `fifo_depth - 1` chunks, each its own datapath enable — the same boundary,
-now inside the message.
+into `fifo_depth - 1` chunks, each its own datapath enable -- the same boundary,
+now inside the message. So a single read is 60 bytes and a longer message is
+finished with **continued reads**: further reads whose first two bytes are the
+marker and `STATUS_CONTINUED_READ`, as `syna_tcm_v1_continued_read()` does. The
+128-byte touch report config takes the first read plus two chunks, 60 bytes and
+17, and arrives whole — measured on the phone.
+
+**A chunk needs the same `spi_setup()` a command does.** Without it every chunk
+answers `0x5a` padding instead of `a5 03`, exactly as a command answers nothing
+without it: this controller does not close the frame between two `spi_sync()`
+calls on its own. That one call is the difference between 56 bytes and 128.
+
+The first build to attempt continued reads had it wrong in a way worth
+recording: it returned the continuation's error instead of the 56 bytes it
+already held, which turned a working truncation into `no touch report config
+(-110); reports stay raw`. The prefix is now the fallback, and the driver gives
+up on continuations after one failure rather than retrying every long message.
 
 **Reads must not transmit.** tegu sets `synaptics,spi-byte-delay-us = <0>`, so
 Google's read is `syna_spi_read()`'s `tx_buf = NULL` branch; `spi-s3c64xx` sets
@@ -390,16 +454,10 @@ Google's read is `syna_spi_read()`'s `tx_buf = NULL` branch; `spi-s3c64xx` sets
 MOSI is undriven for a whole read. Every MOSI byte is a command byte here, and
 driving 0xff through reads is what left the part mute in earlier logs.
 
-**The probe stops at identify, deliberately.** A failing command is a hundred
-polls; three of them take the part from `0x5a` padding to `0x00` to not driving
-MISO, inside thirty seconds of boot — so every userspace experiment run before
-that rule was measuring wreckage rather than the device. `poll 1` through
-`tcm_xfer` starts the report loop by hand.
-
 Two suspects are retired. `FB_CLK_SEL` is not one: Google's `controller-data`
 sets `samsung,spi-feedback-delay = <0>`, mainline's default. And the ATTN line
-is sound — `gpn0` PUD reads 0, forcing a pull-*up* still read low (so the part
-drives it), and it idles high after a clean reset.
+is electrically sound -- `gpn0` PUD reads 0, forcing a pull-*up* still read low
+(so the part drives it) -- it simply does not carry the meaning it was given.
 
 ### The bug before this one: the wrong CMU
 
@@ -476,9 +534,21 @@ cannot write an S2MPG10 offset by accident.
 
 ## Next steps, in order
 
-1. **Finish touch.** Get a clean `IDENTIFY -> code 0x10`, then decode
-   TouchComm reports into input events from the raw reports the driver logs.
-   Google's decoder is `synaptics_touchcom_func_touch.c` in the vendor tree.
+1. **The eUSB2 + combo USB-DP PHY.** Everything under it is done and
+   measured: the domain is powered, the registers answer, every CMU gate was
+   already open, the Q-channels are enabled and the user muxes moved off the
+   oscillator. What remains is `DWC3 controller soft reset failed,
+   -ETIMEDOUT`, and `dwc3_core_soft_reset()` calls `phy_init()` before
+   asserting `DCTL.CSFTRST` — so the PHY is a prerequisite, not a later step.
+   `notes/HANDOVER.md` opens with the method to use, which is the one that
+   worked for the UFS PHY. Mainline's `google,gs101-usb31drd-phy` is a
+   starting point and not a fit: this is eUSB2 behind a combo block with six
+   register ranges against gs101's three.
+
+   Two loose ends to tidy when it works: `USB_G_SERIAL=y` (precomposed)
+   contends with the configfs gadget in `default.nix` for the single UDC, and
+   `USB_CONFIGFS` is not set at all, so that unit has never worked — it exits
+   0 on an empty `/sys/class/udc` and reports success.
 2. **A zumapro pinctrl driver.** It removes three problems at once: touch
    reset is currently written straight into peric0's GPIO block from the
    driver, the touch IRQ is polled at 16 ms instead of taken from `gpn0-0`,

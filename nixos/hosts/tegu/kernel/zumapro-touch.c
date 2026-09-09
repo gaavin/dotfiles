@@ -64,6 +64,7 @@
 #include <linux/unaligned.h>
 
 #define TCM_MARKER		0xa5
+#define TCM_PADDING		0x5a	/* what the part sends with nothing to say */
 #define TCM_HEADER_SIZE		4
 
 #define STATUS_IDLE		0x00
@@ -157,7 +158,8 @@
 
 /* Command responses: the vendor polls every 10 ms up to 3 s. */
 #define TOUCH_RESP_POLL_MS	10
-#define TOUCH_RESP_TRIES	100
+#define TOUCH_RESP_TRIES	12
+#define TOUCH_DRAIN_TRIES	12
 
 /*
  * The largest single read: a continued read is two header bytes, the payload
@@ -188,6 +190,23 @@
  */
 #define TCM_ONE_READ		60
 
+/*
+ * A message longer than one read is finished with continued reads.
+ *
+ * A continued-read packet is not shaped like the first one: marker, status
+ * 0x03, then payload straight away -- two header bytes, not four, and no
+ * length, because the length came with the first packet. So a chunk of
+ * TCM_ONE_READ bytes moves TCM_ONE_READ - 2 payload bytes, and every chunk
+ * stays under the FIFO for the same reason the first read does.
+ *
+ * The vendor waits for bus turnaround between chunks (TAT_DELAY_US_MIN/MAX in
+ * synaptics_touchcom_core_dev.h) and this follows it.
+ */
+#define TCM_CONT_HEADER_SIZE	2
+#define TCM_CHUNK_PAYLOAD	(TCM_ONE_READ - TCM_CONT_HEADER_SIZE)
+#define TOUCH_TAT_US_MIN	50
+#define TOUCH_TAT_US_MAX	100
+
 #define TCM_PAYLOAD_MAX		256
 #define TCM_READ_MAX		(TCM_PAYLOAD_MAX + 4)
 #define TCM_CONFIG_MAX		128
@@ -210,6 +229,8 @@
 #define SPI_CH_CFG		0x00
 #define SPI_MODE_CFG		0x08
 #define SPI_CS_REG		0x0c
+/* S3C64XX_SPI_CS_SIG_INACT: chip select released. Clear means asserted. */
+#define S3C64XX_CS_SIG_INACT	0x1
 #define SPI_SWAP_CFG		0x28
 #define SPI_FB_CLK		0x2c
 
@@ -226,6 +247,7 @@ struct zumapro_touch {
 	u8 hdr[TCM_HEADER_SIZE];	/* last header read, for diagnostics */
 	unsigned int rxlen;		/* bytes the last sysfs read returned */
 	unsigned int badreads;		/* consecutive markerless polled reads */
+	bool cont_broken;		/* continued reads answered padding once */
 	u32 speed_hz;			/* 0 = the device's own maximum */
 	bool drive_mosi;		/* transmit 0xff through reads */
 	bool polling;
@@ -253,10 +275,34 @@ static void zumapro_touch_reset(struct zumapro_touch *ts)
 	msleep(TOUCH_RESET_DELAY_MS);
 }
 
+/*
+ * The heavier lever, for commands only.
+ *
+ * A bare chip-select pulse either side of a command got the part framing
+ * messages but answering STATUS_IDLE; spi_setup() got STATUS_OK with the full
+ * identify. The difference is that s3c64xx_spi_setup() calls
+ * pm_runtime_get_sync(), which forces a resume and so s3c64xx_spi_hwinit():
+ * that releases chip select *and* zeroes cur_speed, so the next transfer runs
+ * s3c64xx_spi_config() -- rewriting CH_CFG and the clock -- instead of
+ * skipping it, which s3c64xx_spi_transfer_one() does whenever speed and bpw
+ * are unchanged.
+ *
+ * spi-replicate-probe.sh showed both sides are load-bearing: without the call
+ * before, no STATUS_OK arrives; without the call after, the part stops driving
+ * MISO altogether. It is not used on the read path because it logs a dev_info
+ * per call, and at poll rates that floods a 115200 baud console badly enough
+ * to rate-limit the poll loop itself.
+ */
+static void zumapro_touch_cs_reinit(struct zumapro_touch *ts)
+{
+	spi_setup(ts->spi);
+}
+
 static int zumapro_touch_cmd(struct zumapro_touch *ts, u8 cmd,
 			     const u8 *payload, u16 len)
 {
 	u8 buf[8];
+	int ret;
 
 	if (len + 3 > sizeof(buf))
 		return -EINVAL;
@@ -267,7 +313,15 @@ static int zumapro_touch_cmd(struct zumapro_touch *ts, u8 cmd,
 	if (len)
 		memcpy(&buf[3], payload, len);
 
-	return spi_write(ts->spi, buf, len + 3);
+	/*
+	 * Both sides, in this order, because that is the sequence measured to
+	 * work and each half was measured to be necessary.
+	 */
+	zumapro_touch_cs_reinit(ts);
+	ret = spi_write(ts->spi, buf, len + 3);
+	zumapro_touch_cs_reinit(ts);
+
+	return ret;
 }
 
 /*
@@ -347,6 +401,90 @@ static int zumapro_touch_read_sync(struct zumapro_touch *ts, u8 *buf,
 }
 
 /*
+ * Finish a message that did not fit in one read.
+ *
+ * @got is how many payload bytes the first read already left in ts->rxbuf and
+ * @len is what the header said the payload is. Follows
+ * syna_tcm_v1_continued_read(): ask for the rest in chunks, each one a read
+ * whose first two bytes are the marker and STATUS_CONTINUED_READ.
+ *
+ * The trailing padding byte is counted as something still to be clocked --
+ * the part does send it -- but a chunk that would consist of nothing else is
+ * not read at all. The vendor skips that read and writes the padding into its
+ * buffer from memory, and reading one byte to throw it away is worse than
+ * useless here: every read is a chance to fall out of frame.
+ *
+ * ts->msgbuf is free to reuse as the chunk buffer. The first read's payload is
+ * already copied out to ts->rxbuf and its header to ts->hdr.
+ *
+ * Measured working 2026-09-09: the 128-byte touch report config arrives whole,
+ * as the first read plus two chunks of 60 and 17 bytes.
+ *
+ * It did not at the first attempt, and the difference is the re-init below.
+ * Without it every chunk came back as 0x5a padding rather than a5 03 -- the
+ * part behaving as though the message were already finished -- which is the
+ * same symptom a command gets from a plain write on this controller. Chunks
+ * are separate spi_sync() calls and this controller does not close the frame
+ * between them on its own.
+ */
+static int zumapro_touch_continued_read(struct zumapro_touch *ts,
+					unsigned int got, unsigned int len)
+{
+	struct device *dev = &ts->spi->dev;
+	unsigned int offset = got;
+	unsigned int remaining = len - got + 1;	/* the payload, and its padding */
+	unsigned int chunk = 0;
+	int ret;
+
+	while (remaining > 1) {
+		unsigned int xfer = min_t(unsigned int, remaining,
+					  TCM_CHUNK_PAYLOAD);
+		unsigned int copy = min(xfer, len - offset);
+
+		usleep_range(TOUCH_TAT_US_MIN, TOUCH_TAT_US_MAX);
+
+		/*
+		 * Load-bearing, and the whole reason continued reads work.
+		 * Left out, every chunk answers 0x5a padding; with it the
+		 * message comes back whole. Same lever the poll path pulls
+		 * before every read, for the same reason.
+		 */
+		zumapro_touch_cs_reinit(ts);
+
+		ret = zumapro_touch_read_sync(ts, ts->msgbuf,
+					      xfer + TCM_CONT_HEADER_SIZE);
+		if (ret) {
+			dev_err_ratelimited(dev,
+				"continued read %u of %u bytes at %u: %d\n",
+				chunk, xfer, offset, ret);
+			return ret;
+		}
+
+		/*
+		 * Anything but 0x03 here means the part restarted a message
+		 * rather than continuing this one, so what is in ts->rxbuf is
+		 * half of one message and half of another. Say so and drop it.
+		 */
+		if (ts->msgbuf[1] != STATUS_CONTINUED_READ) {
+			dev_err_ratelimited(dev,
+				"continued read %u: status 0x%02x, not 0x03 (%*ph)\n",
+				chunk, ts->msgbuf[1],
+				(int)min(xfer + TCM_CONT_HEADER_SIZE, 16U),
+				ts->msgbuf);
+			return -ENOMSG;
+		}
+
+		memcpy(ts->rxbuf + offset, ts->msgbuf + TCM_CONT_HEADER_SIZE,
+		       copy);
+		offset += copy;
+		remaining -= xfer;
+		chunk++;
+	}
+
+	return len;
+}
+
+/*
  * Read one whole message: header, payload and the end-of-message byte, in one
  * transfer. Returns the payload length with the payload at ts->rxbuf.
  *
@@ -376,15 +514,57 @@ static int zumapro_touch_read(struct zumapro_touch *ts, u8 *code)
 		return -ENOMSG;
 
 	/*
-	 * Longer than one read can hold. Say the length rather than truncating
-	 * to it: nothing this part has been seen to send comes near, and if
-	 * something does, the number is what tells us how to read it.
+	 * Longer than one read can hold, which the 128-byte touch report
+	 * config always is. The read cannot simply be made bigger: a transfer
+	 * of fifo_depth or more is split into chunks, and a split puts a
+	 * chip-select boundary inside the message. Ask the part for the rest
+	 * instead, on its own terms.
 	 */
 	if (len + TCM_HEADER_SIZE + 1 > TCM_ONE_READ) {
-		dev_err(&ts->spi->dev,
-			"message 0x%02x of %d bytes exceeds a single read\n",
-			*code, len);
-		return -EMSGSIZE;
+		unsigned int got = TCM_ONE_READ - TCM_HEADER_SIZE;
+
+		memcpy(ts->rxbuf, buf + TCM_HEADER_SIZE, got);
+
+		/*
+		 * Once, not once per message. A failed continuation is two
+		 * more transfers and a log line, and at the 16 ms poll rate
+		 * every long report would pay them again -- on a part where
+		 * "every read is a chance to fall out of frame" is the whole
+		 * reason reads are rationed. The prefix is what gets used
+		 * after the first failure, so stop asking.
+		 */
+		if (ts->cont_broken)
+			return got;
+
+		ret = zumapro_touch_continued_read(ts, got, len);
+		if (ret > 0)
+			return ret;
+
+		ts->cont_broken = true;
+
+		/*
+		 * The prefix, which is what this driver returned before
+		 * continued reads existed and is enough to work with: the
+		 * object fields sit early in the report config, so the decoder
+		 * runs on it and reports reach userspace.
+		 *
+		 * Failing the whole read instead cost exactly that. The first
+		 * build to attempt a continuation turned a working truncation
+		 * into "no touch report config (-110); reports stay raw" --
+		 * the message arrives fine (a5 01, 128 bytes, 56 of them read)
+		 * and only the continuation fails, so throwing the prefix away
+		 * loses information the part had already handed over.
+		 *
+		 * Continued reads work now, so this is a safety net rather
+		 * than the expected path. It stays because the failure it
+		 * catches is silent otherwise: a driver that reports nothing
+		 * looks the same as a part that says nothing.
+		 */
+		dev_warn_once(&ts->spi->dev,
+			      "continued read failed (%d); using the first %u of %d bytes\n",
+			      ret, got, len);
+
+		return got;
 	}
 
 	memcpy(ts->rxbuf, buf + TCM_HEADER_SIZE, len);
@@ -407,60 +587,6 @@ static bool zumapro_touch_attn(struct zumapro_touch *ts)
 	return gpiod_get_value_cansleep(ts->attn) == 1;
 }
 
-/*
- * Wait for the part to raise ATTN, then read one message.
- *
- * Never read speculatively. A read holds MOSI high and this part treats every
- * MOSI byte as a command byte, so polling a silent device feeds it a stream of
- * 0xff commands -- and enough of those wedge it into answering nothing at all.
- * That is what a hundred blind four-byte retries did here: the boot where the
- * identify arrived on the first read worked, and every boot that had to retry
- * ended with the part mute and MISO low.
- *
- * ATTN is the interrupt Google's driver reads on. It idles high and asserts
- * while a message is waiting, so it says exactly when a read is free.
- */
-static int zumapro_touch_read_attn(struct zumapro_touch *ts, u8 *code,
-				   unsigned int tries)
-{
-	unsigned int i;
-	int ret = -ETIMEDOUT;
-
-	for (i = 0; i < tries; i++) {
-		if (zumapro_touch_attn(ts)) {
-			ret = zumapro_touch_read(ts, code);
-
-			/*
-			 * A read that produced no marker is not an answer and
-			 * not a failure of the wait: ATTN reads asserted
-			 * whenever nothing drives it, so this is the ordinary
-			 * shape of a part that is not talking yet. Keep
-			 * waiting. Anything else -- a message, a bus error --
-			 * ends the wait.
-			 */
-			if (ret != -ENOMSG)
-				return ret;
-		}
-
-		msleep(TOUCH_RESP_POLL_MS);
-	}
-
-	return ret;
-}
-
-/*
- * Watch ATTN across the part's boot, then read what it queued.
- *
- * The line is active high -- measured; see the device tree -- so it rises when
- * the part has a message and falls when that message is read. Until the part
- * has booted it drives nothing and the level means nothing, which is why this
- * watches the line rather than trusting the first level it sees.
- *
- * So sample the line first and say what it does, without putting a single
- * byte on the bus, and only then read. Every header that is not a marker is
- * logged: what comes back off an idle bus here is the one measurement that
- * says whether the part is mute, still booting, or talking out of frame.
- */
 static int zumapro_touch_wait_boot(struct zumapro_touch *ts, u8 *code)
 {
 	struct device *dev = &ts->spi->dev;
@@ -549,12 +675,43 @@ static int zumapro_touch_request(struct zumapro_touch *ts, u8 cmd,
 	u8 code = 0;
 	int ret, i;
 
+	/*
+	 * Drain first, and on what the part says rather than on ATTN, which
+	 * drops as soon as a read starts consuming a message while the rest is
+	 * still queued. Writing into the middle of a message is the one thing
+	 * known to destroy the exchange. syna_tcm_v1_write_message() holds
+	 * cmd_mutex and lets the IRQ thread drain for exactly this reason.
+	 */
+	for (i = 0; i < TOUCH_DRAIN_TRIES; i++) {
+		if (zumapro_touch_spi_read(ts, ts->msgbuf, 8))
+			break;
+		if (ts->msgbuf[0] == TCM_PADDING)
+			break;
+	}
+
 	ret = zumapro_touch_cmd(ts, cmd, payload, plen);
 	if (ret)
 		return ret;
 
+	/*
+	 * Read unconditionally. This used to wait on ATTN, and that is why
+	 * CMD_GET_TOUCH_REPORT_CONFIG went unanswered while CMD_IDENTIFY -- by
+	 * luck of timing -- did not.
+	 *
+	 * ATTN is not a reliable "message waiting" signal on this part. It
+	 * drops as soon as a read starts consuming a message, it sits high on
+	 * a wedged part with nothing to say, it is meaningless in the window
+	 * after reset, and the boot that captured 1086 REPORT_TOUCH frames
+	 * sampled it low throughout. This driver's own boot log says
+	 * "attn idle after 500 ms, 0 transitions" immediately before the part
+	 * answers an identify.
+	 *
+	 * Every measured success -- in userspace, over many boots -- came from
+	 * reading on a timer and looking for the marker. A read costs clock
+	 * cycles and nothing else.
+	 */
 	for (i = 0; i < TOUCH_RESP_TRIES; i++) {
-		ret = zumapro_touch_read_attn(ts, &code, 1);
+		ret = zumapro_touch_read(ts, &code);
 		if (ret >= 0) {
 			if (code == STATUS_OK)
 				return ret;
@@ -1046,11 +1203,25 @@ static void zumapro_touch_poll(struct work_struct *work)
 		return;
 
 	/*
-	 * Only touch the bus when the part says it has something. ATTN is
-	 * trustworthy now: it idles high and asserts while a message waits.
+	 * Read unconditionally rather than gating on ATTN.
+	 *
+	 * The boot that captured 1086 REPORT_TOUCH frames read on every pass
+	 * and sampled ATTN low throughout, so gating here would have dropped
+	 * all of them. The line has been measured three ways and still is not
+	 * a reliable "message waiting" signal on this part: it drops as soon
+	 * as a read starts consuming a message, it sits high on a wedged part
+	 * that has nothing to say, and it is meaningless in the window after
+	 * reset. A read costs clock cycles and nothing else.
 	 */
-	if (!zumapro_touch_attn(ts))
-		goto again;
+
+	/*
+	 * While reports stream, a controller re-init before each read is what
+	 * was measured to work -- the boot that captured 1086 REPORT_TOUCH
+	 * frames did exactly this. It is deliberately not done on the
+	 * command-response path, where plain reads are what returns STATUS_OK
+	 * and a chip-select pulse instead returns STATUS_IDLE.
+	 */
+	zumapro_touch_cs_reinit(ts);
 
 	len = zumapro_touch_read(ts, &code);
 	if (len == -ENOMSG) {
@@ -1182,40 +1353,38 @@ static int zumapro_touch_probe(struct spi_device *spi)
 	ts->max_objects = TCM_MAX_OBJECTS;
 
 	/*
-	 * Probe stops here, again, and this time with a measured reason.
-	 *
-	 * With the command sequence restored the part was dead by the time
-	 * userspace reached it -- a fresh reset then "r 29" returned 00 00 00
-	 * ... where the identify-only build had returned a whole identify at
-	 * the same point in the same boot. Three commands that never answer
-	 * are enough to take it from talking to driving MISO low, so anything
-	 * that wants to study the command path has to be the first thing to
-	 * touch the part, not the fourth.
+	 * Probe no longer stops here. It used to, because commands wedged the
+	 * part -- and the reason turned out to be that chip select was never
+	 * deasserted, so a command's frame never closed. See
+	 * zumapro_touch_cs_reinit().
 	 *
 	 * Panel geometry is Google's own (goog,display-resolution = <1080
-	 * 2424>), so the defaults below are not a guess.
+	 * 2424>), so these defaults are not a guess. They stand until the part
+	 * states its own.
 	 */
 	ts->max_x = 1079;
 	ts->max_y = 2423;
-	dev_err(dev, "identified only; commands are not sent (they wedge it)\n");
-	INIT_DELAYED_WORK(&ts->poll, zumapro_touch_poll);
-	return 0;
 
-	ret = zumapro_touch_request(ts, CMD_GET_APPLICATION_INFO, NULL, 0);
-	if (ret >= APP_INFO_MAX_OBJECTS + 2) {
-		ts->max_x = get_unaligned_le16(&ts->rxbuf[APP_INFO_MAX_X]);
-		ts->max_y = get_unaligned_le16(&ts->rxbuf[APP_INFO_MAX_Y]);
-		ts->max_objects = min_t(unsigned int, TCM_MAX_OBJECTS,
-					get_unaligned_le16(&ts->rxbuf[APP_INFO_MAX_OBJECTS]));
+	/*
+	 * A throwaway first command. The first command after boot has gone
+	 * unanswered on every boot it was tried, three times over, while
+	 * identical later ones are answered -- with a warm-up, with a delay,
+	 * with and without a controller re-init. It is not understood, so
+	 * rather than let it eat a real request, spend it here and ignore the
+	 * result.
+	 */
+	zumapro_touch_request(ts, CMD_IDENTIFY, NULL, 0);
 
-		dev_info(dev, "app info: %ux%u, %u objects\n",
-			 ts->max_x, ts->max_y, ts->max_objects);
-	} else {
-		dev_err(dev, "no application info (%d); using panel defaults\n",
-			ret);
-		ts->max_x = 1079;
-		ts->max_y = 2423;
-	}
+	/*
+	 * CMD_GET_APPLICATION_INFO is deliberately not sent. It has never
+	 * answered on this part in any boot, and an unanswered command is not
+	 * free -- three of them take it from talking to driving MISO low. It
+	 * carries sensor dimensions and maximum object count, both of which
+	 * the panel defaults above already cover, so sending it spends a
+	 * command to learn nothing and risks the ones that matter.
+	 */
+	dev_info(dev, "app info not requested; using panel geometry %ux%u\n",
+		 ts->max_x + 1, ts->max_y + 1);
 
 	/*
 	 * The touch report layout. Without it there is nothing to decode

@@ -4,6 +4,98 @@ Mainline Linux 7.3-rc1 + NixOS on a Google Pixel 9a (Tensor G4, `zumapro`).
 Repo `~/dotfiles`, work in `nixos/hosts/tegu`. Read `README.md` first — it is
 current as of this handover.
 
+## Next focus: the eUSB2 + combo USB-DP PHY
+
+**Do it the way the UFS PHY was done.** That is the requirement, and it is a
+method rather than a preference -- it is what turned UFS from months of
+plausible guesses into four real faults.
+
+Everything under the PHY is finished and measured (2026-09-09). USB now needs
+exactly one thing:
+
+	dwc3 11210000.usb: DWC3 controller soft reset failed. -ETIMEDOUT
+
+and it needs it because `dwc3_core_soft_reset()` calls `phy_init()` on its
+generic PHYs *before* asserting `DCTL.CSFTRST`. With no `phys` those are
+no-ops and the core never gets a PHY reference clock to reset with. The PHY is
+not a later step; the controller cannot initialise without it. See the comment
+above `usb@11210000` in `../dts/zumapro.dtsi` for the full chain of what was
+ruled out: power domain on, registers alive, every CMU gate already open,
+Q-channels enabled 0x2->0x3, user muxes moved off the oscillator to CMU_TOP.
+
+### The method, as it actually worked for UFS
+
+1. **Google's tables are the authority; mainline's gs101 data is a hypothesis.**
+   All three UFS faults were gs101 values that compiled and were wrong: PHY
+   isolation at 0x3ec0 not 0x3ec8, cal-done at TRSV 0x31d bit 0 not 0x338 bit
+   3, and a PMA table that had to be Tensor G4's rather than Tensor G1's.
+   Check every borrowed offset against `cal-if/zuma/` before believing it.
+   `../notes/UPSTREAM.md` shows the same trap caught in a third-party tree.
+
+2. **Build the instrument before the driver.** `pma-dump.py` and
+   `region-dump.py` exist because "the register changed" and "the driver
+   thinks it wrote the register" are different claims. For USB the equivalent
+   is a dump of all six PHY regions the stock node declares:
+
+	0x11100000 0x200   0x11110000 0x200   0x11120000 0x200
+	0x11130000 0x800   0x11140000 0x800   0x11210000 0x10000
+
+3. **Diff against the bootloader's state -- but note the difference here.**
+   For UFS the bootloader's state was *known-good*: it read the kernel off UFS,
+   so whatever it left behind worked, and `keep-boot-phy.py` tested leaving it
+   alone. **The USB bootloader state is not known-good.** ABL logs
+   `[E] failed to get eUSB revision -62`, so it gave up partway. Expect a
+   half-configured PHY, and do not treat its register values as a target.
+
+4. **Be non-fatal where the vendor is non-fatal.** `ufs30_cal_done_wait()`
+   polls 100 times and returns success regardless, because its error return is
+   compiled out behind `__UFS_CAL_FW__`. Treating that as fatal was this
+   port's own bug and cost days. Read the vendor's error handling, not just
+   its register writes.
+
+5. **One change per boot**, and say what you expect to see before you flash.
+
+6. **Expect the breakthrough to be one register.** For UFS it was PCS 0x202 =
+   0x22, the 38.4 MHz reference select that mainline's gs101 pre-link never
+   writes. Everything before it looked like a calibration-table, trigger,
+   clock, regulator or isolation problem.
+
+### What is known about this PHY
+
+From the stock node (`zumapro-stock.dts`, `phy@11100000`):
+
+	compatible = "samsung,exynos-usbdrd-phy"
+	phy_version      = <0x600>      phy_eusb_version = <0x701>
+	has_combo_phy    = <0x01>       sub_phy_version  = <0x801>
+	usbdp_mode       = <0x01>       ip_type          = <0x00>
+	pmu_offset       = <0x3eb0>     pmu_offset_dp    = <0x3eb4>
+	interrupts       = 399, 397, 404
+	clocks           = "phy_ref", "aclk"    phy_ref_clock = <0x124f800>
+
+Mainline 7.3-rc1 has `google,gs101-usb31drd-phy` in
+`drivers/phy/samsung/phy-exynos5-usbdrd.c` with a full `/* Exynos9 - GS101 */`
+PMA/PCS register set. **It is a starting point, not a fit.** gs101's PHY is
+plain USB2+USB3 with three reg ranges named phy/pcs/pma; this one is eUSB2
+behind a combo USB-DP block with six. zumapro's QCH list has
+`USB32DRD_QCH_EUSBCTL` and `USB32DRD_QCH_EUSBPHY`; gs101 has neither. CMU_HSI0
+here carries four eUSB clocks gs101 does not have
+(`I_EUSB_CTRL_PCLK` 0x20b8, `I_EUSB_APB_CLK` 0x20d8,
+`I_EUSB_PHY_REFCLK_26` 0x20dc, and the TCA/DPPHY pair), all already registered
+in `../kernel/clk-zumapro-hsi0.c`.
+
+eUSB2 normally needs a **repeater** between the PHY and the connector. Find out
+whether this board has one and how it is reached before writing PHY init --
+that is the first question, not an afterthought.
+
+### Where to look
+
+	nixos/hosts/tegu/notes/HARDWARE.md  every address and measured value
+	/tmp/tegu-work/soc-gs/          Google's driver sources (may need refetching)
+	  drivers/phy/samsung/          the vendor usbdrd phy driver + cal tables
+	  drivers/soc/google/cal-if/zuma/   authoritative register offsets
+	/tmp/tegu-work/zumapro-stock.dts    the stock device tree
+	nixos/hosts/tegu/notes/UPSTREAM.md  what the third-party tree gets wrong
+
 ## The one thing to understand about this device
 
 **There is no interactive access.** The UART debug board is receive-only, so
@@ -86,7 +178,12 @@ Working: boot to userspace, own device tree, UFS at gear 4 (boots from an
 11 GB ext4 root), Plasma Mobile, panel console via the bootloader's
 framebuffer, UART console, watchdog, ACPM.
 
-**Touchscreen — WORKING (2026-09-09).** The part answers commands, the full vendor bring-up runs, and it streams **REPORT_TOUCH frames with live coordinates that move under a finger**. See "TOUCH DATA" below. What remains is decoding the report layout properly and moving the fix out of userspace into the SPI driver.
+**Touchscreen — DONE (2026-09-09).** `zumapro-touch.c` owns the rails, drives
+reset, runs the bring-up, reads the part's own 128-byte report config (one
+60-byte read plus continued reads of 60 and 17), decodes REPORT_TOUCH against
+it and registers an input device. Coordinates reach `/dev/input`. Nothing is
+left in userspace. The decoding and the driver work this file used to list as
+remaining are both finished.
 
 ### Established on hardware. Do not re-investigate.
 
@@ -99,7 +196,7 @@ framebuffer, UART console, watchdog, ACPM.
 | The firmware is running | `a5 c2 02 00 20 00` = REPORT_FW_STATUS, `b5_fast_relaxation` — routine telemetry from a sensing part |
 | Commanding on a pending message wedges it | ATTN high, wrote anyway, part released MISO mid-message and went silent |
 | Draining stops the wedging | commanding on a pending message is what killed it; drained, it survives commands |
-| ATTN drops mid-message | it means "a message waits", not "a message is unfinished" — drain until the part returns `5a` padding |
+| ATTN is not a "message waiting" signal | superseded, and it cost a whole build: it drops as soon as a read starts consuming a message, sits high on a wedged part with nothing to say, and is meaningless after reset. The boot that captured 1086 REPORT_TOUCH frames sampled it low throughout. Read on a timer and look for the marker; drain on the part's `5a` padding, never on the line |
 | A reset pulse does not revive a wedged part | only a full boot does |
 | The part | Synaptics **S3908**, fw `GA1B0-15.0`, build 4468578, TouchComm **v1**, mode 1 = `MODE_APPLICATION_FIRMWARE` |
 | A whole message in one read | `r 29` returns `a5 10 18 00 01 01 "S3908GA1B0-15.0\0" 62 2f 44 00 00 04 5a` — header, payload, end-of-message, exact |

@@ -50,4 +50,23 @@ if quirk not in block:
     sys.exit("spi-manual-cs: gs101 port config no longer sets CS_AUTO")
 
 s = s[:start] + block.replace(quirk, "") + s[end:]
+
+# Quieten the per-setup dev_info.
+#
+# s3c64xx_get_target_ctrldata() prints "feedback delay set to default (0)"
+# whenever samsung,spi-feedback-delay is absent, and that is once per
+# spi_setup(). The touch driver calls spi_setup() around every command and
+# before every poll read -- the workaround for chip select never being
+# deasserted -- so this fires at poll rate. One boot logged 586 of them.
+#
+# It is not merely noise. At 115200 baud a line of that length takes about
+# 5 ms, so the console throttles the poll loop it is describing, and it buries
+# the touch reports that are the reason any of this exists. The information is
+# a static property of the device tree, which dev_dbg still carries when it is
+# wanted.
+info = ('\t\tdev_info(&spi->dev, "feedback delay set to default (0)\\n");')
+if info not in s:
+    sys.exit("spi-manual-cs: feedback-delay dev_info moved")
+s = s.replace(info, info.replace("dev_info", "dev_dbg"), 1)
+
 open(p, "w").write(s)

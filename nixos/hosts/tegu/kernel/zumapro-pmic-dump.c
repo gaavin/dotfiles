@@ -31,8 +31,35 @@
 #include <linux/device.h>
 #include <linux/firmware/samsung/exynos-acpm-protocol.h>
 #include <linux/mod_devicetable.h>
+#include <linux/moduleparam.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+
+/*
+ * Off by default, because this dump is loud enough to destroy other
+ * measurements.
+ *
+ * It prints ~90 lines of about 130 characters. At 115200 baud that is very
+ * close to a solid second of UART, and it lands while the touch driver is
+ * probing -- which cost a boot: the touch driver's probe output was simply
+ * overwritten, mid-line,
+ *
+ *	speedy1 pmic +0x60: 00 b0 0[    4.722343] zumapro-touch spi0.0: rails on
+ *
+ * and two of its unconditional dev_err() lines never appeared at all. The
+ * absence of a message was then read as the driver not getting that far.
+ *
+ * The register file it prints is already recorded in the logs and the README,
+ * so nothing is lost by leaving it off. Being a parameter rather than a
+ * deletion means turning it back on costs a mkbootimg and a flash rather than
+ * a kernel rebuild:
+ *
+ *	zumapro_pmic_dump.enable=1
+ */
+static bool dump_enable;
+module_param_named(enable, dump_enable, bool, 0444);
+MODULE_PARM_DESC(enable,
+		 "Dump the PMIC register file at probe (floods a 115200 console)");
 
 #define PMIC_ACPM_CHAN		2
 #define PMIC_SPEEDY_MAIN	0
@@ -99,6 +126,15 @@ static int zumapro_pmic_dump_probe(struct platform_device *pdev)
 	acpm = devm_acpm_get_by_node(dev, dev->parent->of_node);
 	if (IS_ERR(acpm))
 		return dev_err_probe(dev, PTR_ERR(acpm), "no acpm handle\n");
+
+	/*
+	 * The handle is taken either way: acquiring it is silent, and that it
+	 * succeeds is the standing evidence that ACPM works on this SoC.
+	 */
+	if (!dump_enable) {
+		dev_info(dev, "dump off (zumapro_pmic_dump.enable=1 to run it)\n");
+		return 0;
+	}
 
 	/*
 	 * KERN_ERR throughout. On this phone the only way a message is read is

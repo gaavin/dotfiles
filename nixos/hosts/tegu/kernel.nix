@@ -189,10 +189,19 @@ let
             USB_GADGET = yes;
             USB_ROLE_SWITCH = yes;
 
-            # Gadget serial, built in and bound at boot, so the USB-C port
-            # comes up as a terminal on the host. This is the log channel for
-            # a device with no debug cable; the configfs gadget is left out
-            # because two built-in gadget drivers would race for the one UDC.
+            # Gadget serial, precomposed and built in.
+            #
+            # None of this runs yet: dwc3 does not probe (see the USB node in
+            # ./dts/zumapro.dtsi), so there is no UDC for a gadget to bind to
+            # and /sys/class/udc is empty.
+            #
+            # Two things to fix when it does. USB_CONFIGFS is not set, so the
+            # configfs gadget systemd unit in ./default.nix cannot work -- it
+            # has never worked, and reports success because it exits 0 on an
+            # empty /sys/class/udc. And a precomposed driver like USB_G_SERIAL
+            # contends with a configfs gadget for the single UDC; upstream
+            # forks disable the precomposed ones for exactly this reason. Pick
+            # one path, do not ship both.
             USB_LIBCOMPOSITE = yes;
             USB_U_SERIAL = yes;
             USB_F_ACM = yes;

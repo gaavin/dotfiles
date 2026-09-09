@@ -1,8 +1,9 @@
 #!/bin/sh
 # Run a command handed to this phone on the kernel command line.
 #
-# The UART here is receive-only, there is no USB gadget yet (the DWC3 and its
-# eUSB/combo PHY are undescribed), and no network. That left flashing an 11 GB
+# The UART here is receive-only, there is no USB gadget yet (the DWC3 is
+# described now but does not initialise without its eUSB/combo PHY), and no
+# network. That left flashing an 11 GB
 # rootfs as the only way to change what the phone does, which is four minutes
 # a round trip.
 #

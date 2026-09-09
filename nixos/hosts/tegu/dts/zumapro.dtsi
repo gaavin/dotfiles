@@ -431,24 +431,134 @@
 		};
 
 		/*
-		 * USB 3.2 DRD controller — DELIBERATELY NOT DESCRIBED.
+		 * USB 3.2 DRD controller — under test.
 		 *
-		 * Adding a "snps,dwc3" node here bootloops the device. Unlike
-		 * UFS, this block sits in the hsi0 power domain
-		 * (PMU pd-hsi0 @0x15462a80) and the bootloader appears to shut
-		 * it down before handing over, so dwc3 probes onto dead
-		 * registers. There is no clock or power-domain driver for
-		 * zumapro to bring it back.
+		 * The hsi0 power domain is ON when Linux takes over. Measured
+		 * 2026-09-09, both registers together:
 		 *
-		 * Before re-enabling: read the pd-hsi0 status register from
-		 * userspace (/dev/mem is available) and only describe the
-		 * controller if the domain reports powered. A gadget serial
-		 * console is the prize here — it ends photographing the panel —
-		 * so this is worth doing properly rather than by trial.
+		 *	CONFIGURATION (0x15462a80) = 0x00000001
+		 *	STATUS        (0x15462a84) = 0x00000001
 		 *
-		 * Addresses for whoever picks this up:
+		 * STATUS is the one that decides, and bit 0 set means powered.
+		 * Google's table gives both the base and the offset:
+		 *
+		 *   PMUCAL_SEQ_DESC(PMUCAL_READ, "HSI0_STATUS",
+		 *                   0x15460000, 0x2a84, (0x1 << 0), ...)
+		 *
+		 * in cal-if/zuma/flexpmu_cal_local_zuma.h.
+		 *
+		 * This comment used to say the opposite -- that describing the
+		 * controller bootloops the device, because the block sits
+		 * unpowered in hsi0 and dwc3 probes onto dead registers. None
+		 * of that survived being tested. It also named 0x15462a80,
+		 * which is CONFIGURATION and not STATUS, so the check it asked
+		 * for would have read a request rather than a state. The
+		 * bootloop was real and observed; its cause was never
+		 * established and is still unknown.
+		 *
+		 * What this actually needs, read off Google's own description
+		 * rather than guessed (2026-09-09). Mainline 7.3-rc1 does
+		 * carry Tensor USB -- google,gs101-dwusb3 in dwc3-exynos.c and
+		 * google,gs101-usb31drd-phy in phy-exynos5-usbdrd.c -- but
+		 * neither transfers to this SoC unchanged:
+		 *
+		 *   1. The PHY is a different animal. The stock node carries
+		 *	phy_eusb_version = <0x701> and has_combo_phy = <0x01>:
+		 *	an eUSB2 PHY behind a combo USB-DP block, with six
+		 *	register ranges (0x11100000, 0x11110000, 0x11120000,
+		 *	0x11130000, 0x11140000, 0x11210000) and three IRQs
+		 *	(399, 397, 404). gs101's is a plain USB2+USB3 phy with
+		 *	three ranges named phy/pcs/pma. zumapro's QCH list has
+		 *	USB32DRD_QCH_EUSBCTL; gs101 has no such thing. The
+		 *	bootloader's own "[E] failed to get eUSB revision -62"
+		 *	is about this block.
+		 *
+		 *   2. CMU_HSI0 is not gs101's. Both sit at 0x11000000, but
+		 *	gs101's CMU_HSI0 has no USI clocks at all while this
+		 *	one carries USI0..USI4 -- which is why the touchscreen
+		 *	SPI is clocked from HSI0 here. Offsets differ with it:
+		 *	0x181c is HSI0's USI2 divider on zumapro and CMU_TOP's
+		 *	CIS_CLK3 on gs101. mainline's clk-gs101.c cannot be
+		 *	pointed at this block.
+		 *
+		 *   3. Ten clocks are needed, against the three
+		 *	./kernel/clk-zumapro-hsi0.c provides (all for USI2).
+		 *	The vendor node names three of them, and zuma.h
+		 *	resolves them: aclk = GATE_USB32DRD_LINK (559),
+		 *	sclk = MUX_HSI0_USB20_REF (551), bus =
+		 *	VDOUT_CLK_TOP_HSI0_NOC (67, from CMU_TOP not HSI0).
+		 *	Register offsets live in cal-if/zuma/cmucal-*.c.
+		 *
+		 * So this is a bring-up of the same shape as UFS, not a node
+		 * that can simply be switched on. The power domain being live
+		 * removes one obstacle; it does not make the rest small.
+		 */
+
+		/*
+		 * A bare snps,dwc3 -- the controller's registers and its
+		 * interrupt, with no phy and no glue. It cannot work, and
+		 * working was never what it was for: it was the experiment
+		 * that retested the bootloop claim above, and it has answered
+		 * (2026-09-09):
+		 *
+		 *   1. There is no bootloop. The phone boots straight to a
+		 *	graphical target with this node present. dwc3 maps the
+		 *	block, writes DCTL.CSFTRST and polls it, so the
+		 *	registers are alive -- "dwc3 probes onto dead
+		 *	registers" was wrong, as was the power-domain reason
+		 *	given for it.
+		 *
+		 *   2. It is not the clocks either, and that took proving.
+		 *	Every gate the CMU has for USB was already open before
+		 *	Linux touched it; the Q-channel enables were clear and
+		 *	now are not; the user muxes were on the oscillator and
+		 *	now take the CMU_TOP feed. All three read back changed
+		 *	from userspace, and the core still will not reset:
+		 *
+		 *	  qch_link=0x3 qch_subctl=0x3 qch_eusbctl=0x3
+		 *	  usermux32=0x10 usermux20=0x10010
+		 *	  DWC3 controller soft reset failed, -ETIMEDOUT
+		 *
+		 * What is left is the PHY, and the reason is in dwc3 itself:
+		 * dwc3_core_soft_reset() calls phy_init() on its generic PHYs
+		 * before asserting CSFTRST. This node has no phys, so those
+		 * are no-ops and the core never gets a PHY reference clock to
+		 * run the reset with. The eUSB PHY is not a later step that
+		 * can wait until the controller works -- the controller
+		 * cannot initialise without it.
+		 *
+		 * Delete this node once the PHY exists to attach to it; it is
+		 * an experiment, not a description of the hardware.
+		 */
+		usb@11210000 {
+			compatible = "snps,dwc3";
+			reg = <0x11210000 0x10000>;
+			interrupts = <GIC_SPI 402 IRQ_TYPE_LEVEL_HIGH 0>;
+
+			/*
+			 * The link's own clocks. dwc3 takes whatever is listed
+			 * here (devm_clk_bulk_get_all), and the gates are
+			 * registered CLK_IS_CRITICAL besides, so they are on
+			 * before this node is looked at either way.
+			 *
+			 * Indices 0 and 1 of this provider are the USI2 pair
+			 * the touchscreen uses; the USB gates start at 2.
+			 */
+			clocks = <&cmu_hsi0 2>,	/* usb_link_aclk    */
+				 <&cmu_hsi0 3>,	/* usb_subctl_pclk  */
+				 <&cmu_hsi0 4>;	/* usb_ref_clk_40   */
+			clock-names = "link_aclk", "subctl_pclk", "ref";
+		};
+
+		/*
+		 * A gadget serial console is the prize here — it ends the
+		 * cable-swapping between fastboot and the UART, which is the
+		 * slowest part of every measurement on this phone.
+		 *
+		 * Addresses, for whoever picks this up:
 		 *   usb@11210000  len 0x10000, GIC SPI 402
-		 *   phy@11100000  samsung,exynos-usbdrd-phy
+		 *   phy@11100000  samsung,exynos-usbdrd-phy, 6 ranges,
+		 *                 IRQs 399/397/404, eUSB + combo USB-DP
 		 */
 
 		/*
@@ -884,12 +994,20 @@
 			/*
 			 * CMU_HSI0, then the single CMU_TOP register that
 			 * divides HSI0_PERI on the way in
-			 * (CLK_CON_DIV_CLKCMU_HSI0_PERI, 0x1890 in CMU_TOP).
-			 * Four bytes, not a range: this port has already taken
-			 * a fatal SError from sweeping an address window that
-			 * a reg property said was there.
+			 * (CLK_CON_DIV_CLKCMU_HSI0_PERI, 0x1890 in CMU_TOP),
+			 * then the two CMU_TOP gates.
+			 *
+			 * Eight bytes each, not a range: this port has already
+			 * taken a fatal SError from sweeping an address window
+			 * that a reg property said was there. Both pairs are
+			 * adjacent registers -- 0x1890/0x1894 are HSI0_PERI's
+			 * divider and USB32DRD's, 0x20c0/0x20c4 their gates --
+			 * and the boot probe has read 0x26041890 and
+			 * 0x260420c0 on hardware without incident.
 			 */
-			reg = <0x11000000 0x8000>, <0x26041890 0x4>;
+			reg = <0x11000000 0x8000>,
+			      <0x26041890 0x8>,
+			      <0x260420c0 0x8>;
 			clocks = <&hsi0_peri>;
 			#clock-cells = <1>;
 		};
