@@ -106,7 +106,36 @@ part.
 **`FB_CLK_SEL` is not a suspect.** Google sets `samsung,spi-feedback-delay = <0>`,
 which is mainline's default.
 
-### The open question: the controller cannot transmit
+### The open question: the SPI controller does not transmit
+
+Provable without the touchscreen:
+
+	L1 mode_cfg=0x1FF80000
+	L2 normal-tx=a5 10 ff ff        TX on: two good bytes, then ff
+	L3 mode_cfg=0x1FF80008          SELF_LOOPBACK set (MODE_CFG bit 3)
+	L4 loopback=ff ff ff ff         echoes nothing
+	L5 loopback=ff ff ff ff
+	L6 mode_cfg=0x1FF80000
+
+In loopback the block feeds TX back to RX inside itself -- no pad, no part. It
+echoed nothing, so the transmit datapath is not shifting data. That is why no
+command has ever reached the touchscreen, and it is a spi-s3c64xx problem on
+this SoC, not a TouchComm one.
+
+It also explains the oldest open question in this file. With TX enabled a read
+returns two good bytes and then 0xff -- `a5 10 ff ff` -- which is exactly the
+"degrading header" this port chased for four logs and blamed on sampling and
+on the feedback tap. Reads work only because tx_buf = NULL leaves TX off.
+
+**Next:** dump CH_CFG, MODE_CFG and SPI_STATUS (TX FIFO level) around a
+transmitting transfer, and compare the controller setup against Google's,
+which this port does not follow: `dma-mode`, `dmas = <&pdma1 18 &pdma1 19>`,
+`swap-mode = <1>`, `samsung,spi-fifosize = <0x40>`. Note mainline never parses
+`swap-mode`. The SPI pads have no pinctrl anywhere in this SoC either -- even
+Google's node carries `pinctrl-0 = <>` with a TODO -- but loopback is internal,
+so the pads cannot explain L4.
+
+### Superseded: the controller cannot transmit (first framing)
 
 	Q1 undriven   a5 10 18 00 01 01 53 33 ...   <- full identify
 	Q2 tx-zeros   00 00 00 ...                  <- broken
