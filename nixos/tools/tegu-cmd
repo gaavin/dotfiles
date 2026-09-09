@@ -79,7 +79,23 @@ enc=$(printf '%s' "$cmd" | base64 -w0)
 # "cmdline bytes:" so the real total is checkable against this arithmetic.
 abl=277
 room=$(( 2048 - ${#base} - abl - 24 ))
-if [ "${#enc}" -gt "$room" ]; then
+# Compress whenever the payload is a script, not only when it will not fit.
+#
+# The phone echoes "tegu-cmd: BEGIN <<$cmd>>" to /dev/kmsg, and a multi-line
+# $cmd becomes one kmsg line per source line -- forty lines of UART flood
+# immediately before the probe's own output, on a link that is already
+# dropping characters. Two boots' results were lost to it.
+#
+# Compressing collapses that to a single line, and for anything script-sized
+# it is also *smaller*: spi-len-probe.sh is 1404 bytes as plain base64 and
+# 1028 gzipped, because gzip beats the 4/3 expansion long before the double
+# encoding costs more than it saves. So the old "only if it does not fit" rule
+# had it backwards -- shrinking a probe below the limit made the log worse.
+#
+# One-liners stay uncompressed on purpose: they are short, they do not flood
+# anything, and seeing the actual command echoed on the UART is worth keeping.
+if [ "${#enc}" -gt "$room" ] || [ "$cmd" != "${cmd%%
+*}" ]; then
 	gz=$(printf '%s' "$cmd" | gzip -9 | base64 -w0)
 	# gunzip by absolute path: the unit's systemd path= replaces PATH, and
 	# adding gzip to it costs a rootfs reflash. NixOS always puts gzip in

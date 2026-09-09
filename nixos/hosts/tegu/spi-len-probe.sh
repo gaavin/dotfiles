@@ -61,6 +61,7 @@ H() {
 		t=$((t + 1))
 	done
 	L "$1 alive=$t attn=$(AT) $o"
+	Z="$Z $1=$t"
 }
 
 # Drain, command, then poll for a reply. A write destroys whatever the part is
@@ -85,6 +86,7 @@ C() {
 		t=$((t + 1))
 	done
 	L "$1 drained=$d w=$w tries=$t attn=$(AT) r=$r"
+	Z="$Z $1:t=$t,$(printf %s "$r" | cut -c1-8)"
 }
 
 L BEGIN
@@ -100,8 +102,11 @@ L BEGIN
 # The AOC block itself is at 0x17000000 and is NOT touched -- it sits behind
 # an S2MPU and this SoC raises a fatal SError on a read of an unbacked or
 # protected address, which has already cost this port a boot once.
-L "aoc pd=$(devmem 0x15462280 32) $(devmem 0x15462284 32) $(devmem 0x15462288 32)"
-L "aoc req=$(devmem 0x154b0000 32)"
+P0=$(devmem 0x15462280 32)
+P1=$(devmem 0x15462284 32)
+Q0=$(devmem 0x154b0000 32)
+L "aoc pd=$P0 $P1 $(devmem 0x15462288 32) req=$Q0"
+Z="aoc=$P0/$P1/$Q0"
 
 echo 'poll 0' > "$X" 2>/dev/null
 echo 'mosi 0' > "$X" 2>/dev/null
@@ -113,5 +118,10 @@ C d2 "02 01 00 02"
 H h2
 C d3 "20 00 00"
 H h3
+
+# Repeat the lot as one short line. Three boots have now lost their results to
+# a UART that drops characters, and a single line at the end is what survives.
+L "R:$Z"
+L "R:$Z"
 
 L END
