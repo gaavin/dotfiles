@@ -145,10 +145,25 @@ reads at rest. The controller sets `auto_runtime_pm` with AUTOSUSPEND_TIMEOUT
 2000, so it suspends two seconds after a transfer and re-runs hwinit on the
 next one, and every line of a shell script is far more than two seconds apart.
 
-**That is read out of the source, not measured.** It is offered as a candidate
-because it predicts every number in L1..L6 without requiring the transmit path
-to be broken at all -- and because it generalises: any controller register set
-from userspace survives only until the next transfer.
+**Measured on hardware 2026-09-08, and not by the probe written for it.** Two
+independent readings in one boot log bracket the wipe:
+
+	t=15.087  touch-probe.sh   MODE_CFG = 0x1FF9E000    RX_RDY_LVL = 60
+	t=17.939  a driver read    zumapro-touch spi0.0: r: 120 us, ret 0
+	t=17.960  read back        MODE_CFG = 0x1FF80000    RX_RDY_LVL = 0
+
+RX_RDY_LVL (bits 16:11) held 60, left from a long read during probe. Every
+other writer of MODE_CFG preserves that field -- `s3c64xx_spi_config()`,
+`s3c64xx_enable_datapath()` and `s3c64xx_flush_fifo()` mask only BUS_TSZ,
+CH_TSZ, SELF_LOOPBACK, TXDMA and RXDMA, and `transfer_one`'s use_irq path only
+ever *sets* it, and only for len > 32, which a 29-byte read is not. The one
+piece of code that zeroes it is `s3c64xx_spi_hwinit()`, reachable only from
+probe or runtime resume. The gap is 2.85 s against a 2000 ms autosuspend.
+
+So **L4/L5 are void**: the bit was gone before the transfer that was meant to
+use it, and what those lines measured was an ordinary external transfer
+against a part that answers 0xff. It generalises too -- any controller
+register set from userspace survives only until the next transfer.
 
 Two probes are written and both fit the command channel. One boot each:
 
@@ -176,7 +191,9 @@ splits the question this file has not been able to split: bytes back that are
 neither 0xff nor the part's own message mean the part *heard* something, so
 MOSI is muxed and driving and the fault is above the wire.
 
-`spi-modecfg-probe.sh` takes the reading L4/L5 never took -- MODE_CFG
+`spi-modecfg-probe.sh` is now largely redundant -- the boot above answered its
+main question by accident -- but it remains the direct version, and its FB_CLK
+half is still unanswered. It takes the reading L4/L5 never took -- MODE_CFG
 immediately after a transmitting transfer -- then repeats it back-to-back
 inside the autosuspend window, which separates "runtime-PM resume cleared it"
 from "something on the transfer path cleared it". It checks FB_CLK the same
