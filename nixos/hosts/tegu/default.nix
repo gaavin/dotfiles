@@ -185,13 +185,37 @@ in
       echo NixOS > $g/strings/0x409/manufacturer
       echo "Pixel 9a" > $g/strings/0x409/product
       mkdir -p $g/configs/c.1/strings/0x409
-      echo ncm > $g/configs/c.1/strings/0x409/configuration
+      echo "ncm + acm" > $g/configs/c.1/strings/0x409/configuration
+
       mkdir -p $g/functions/ncm.usb0
+      # Fixed MAC addresses on both ends. Without these the gadget invents a
+      # random locally-administered address every boot, which leaves the build
+      # host nothing stable to key a NetworkManager profile to -- see
+      # hosts/mina/default.nix, which matches host_addr below.
+      echo 02:1a:11:00:00:01 > $g/functions/ncm.usb0/dev_addr
+      echo 02:1a:11:00:00:02 > $g/functions/ncm.usb0/host_addr
       ln -sf $g/functions/ncm.usb0 $g/configs/c.1/
+
+      # A serial function beside it, because the UART on this phone is
+      # receive-only: this is the first channel that can carry a keystroke
+      # in. /dev/ttyGS0 here, /dev/ttyACM0 on the host, and the
+      # serial-getty@ttyGS0 drop-in below puts a login on it.
+      mkdir -p $g/functions/acm.GS0
+      ln -sf $g/functions/acm.GS0 $g/configs/c.1/
+
       echo "$udc" > $g/UDC
       ${pkgs.iproute2}/bin/ip addr add 10.42.0.1/24 dev usb0
       ${pkgs.iproute2}/bin/ip link set usb0 up
     '';
+  };
+
+  # A login on the gadget serial port. Written as a drop-in, not as a service:
+  # defining systemd.services."serial-getty@ttyGS0" outright would generate a
+  # whole unit file and lose the template's ExecStart.
+  systemd.services."serial-getty@ttyGS0" = {
+    overrideStrategy = "asDropin";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "usb-gadget-net.service" ];
   };
 
   users.users.max = {

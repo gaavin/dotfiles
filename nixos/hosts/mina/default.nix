@@ -29,6 +29,32 @@
     "d /var/cache/ccache 0770 root nixbld - -"
   ];
 
+  # The Pixel 9a's USB-C debug link. Its gadget (hosts/tegu/default.nix) takes
+  # 10.42.0.1 and gives this end a fixed MAC, so a profile can be keyed to the
+  # phone rather than to an interface name that depends on which port it is
+  # plugged into. Without this someone has to run
+  #   sudo ip addr add 10.42.0.2/24 dev enp...
+  # every time the phone reboots, and nothing that automates the port -- a
+  # build script, a background agent -- can reach it at all.
+  #
+  # never-default and no DNS: this link goes nowhere except the phone.
+  networking.networkmanager.ensureProfiles.profiles.tegu-usb = {
+    connection = {
+      id = "tegu-usb";
+      type = "ethernet";
+      autoconnect = true;
+    };
+    ethernet.mac-address = "02:1A:11:00:00:02";
+    ipv4 = {
+      method = "manual";
+      address1 = "10.42.0.2/24";
+      never-default = true;
+      ignore-auto-dns = true;
+      may-fail = true;
+    };
+    ipv6.method = "link-local";
+  };
+
   virtualisation.virtualbox.host = {
     enable = true;
     enableExtensionPack = true;

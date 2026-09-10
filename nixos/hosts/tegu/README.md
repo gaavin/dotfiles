@@ -128,6 +128,7 @@ sources, then tested by booting it.
 | S2MPG14 rails | **Yes.** `LDO4M` and `LDO25M` enabled over ACPM, verified by reading the enable bit back from the PMIC |
 | Touch input | **Yes**, now on the shared tree's `syna_tcm` over an s3c64xx that holds a native chip select across the whole message |
 | USB | **Yes**, first boot of the shared tree, 2026-09-09. A UDC exists, the NCM gadget binds, and the host sees `18d1:4ee1`. `ssh max@10.42.0.1` over the USB-C port replaces the reflash-per-question loop |
+| USB serial console | **Yes**, 2026-09-10. An `acm.GS0` function beside the NCM one gives `/dev/ttyGS0` on the phone and `/dev/ttyACM0` on the host, with a getty on it — the first channel that can carry a keystroke *in*, which the UART cannot |
 | WLAN, modem, GPU, audio, camera | No. Drivers for all of them are in the shared tree, aimed at the Pixel 9 boards, and none of it is enabled for tegu yet |
 
 ## The panel console
