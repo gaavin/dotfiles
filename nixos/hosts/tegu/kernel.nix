@@ -168,6 +168,40 @@ let
           INPUT_TOUCHSCREEN = yes;
           TOUCHSCREEN_SYNA_TCM = yes;
 
+          # NixOS's firewall shells out to iptables, which is iptables-nft --
+          # it speaks to nf_tables, not to x_tables. Their defconfig enables
+          # only the legacy x_tables path, so firewall.service died on every
+          # boot with "Could not fetch rule set generation id: Invalid
+          # argument". (The kernel this port built before the base swap had the
+          # same gap; it took having a shell on the phone to notice.)
+          NF_TABLES = yes;
+          NF_TABLES_INET = yes;
+          NFT_COMPAT = yes;
+          NFT_CT = yes;
+          NFT_LOG = yes;
+          NFT_LIMIT = yes;
+          NFT_MASQ = yes;
+          NFT_NAT = yes;
+          NFT_REJECT = yes;
+          NFT_REJECT_INET = yes;
+
+          # nf_tables alone was not enough: iptables-nft hands any match it
+          # has no native translation for to nft_compat, which then needs the
+          # x_tables module behind it. NixOS's firewall-start uses three
+          # matches, and two of them had nothing to load --
+          #
+          #   ip46tables -A nixos-fw-log-refuse -m pkttype ! --pkt-type unicast ...
+          #   ip46tables -t mangle -A nixos-fw-rpfilter -m rpfilter --validmark ...
+          #
+          # -- neither guarded by "|| true", so under the script's "set -e"
+          # the first of them still ended the boot with
+          # "[FAILED] Failed to start Firewall." Their defconfig already has
+          # the conntrack and addrtype matches, which is why only these two
+          # are here.
+          NETFILTER_XT_MATCH_PKTTYPE = yes;
+          IP_NF_MATCH_RPFILTER = yes;
+          IP6_NF_MATCH_RPFILTER = yes;
+
           # Console log survives a crash in Android's ramoops window
           PSTORE = yes;
           PSTORE_RAM = yes;
