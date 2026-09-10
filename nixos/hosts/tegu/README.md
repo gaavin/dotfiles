@@ -1,8 +1,12 @@
 # tegu — Google Pixel 9a (Tensor G4) on mainline NixOS
 
-Status: **it boots.** Mainline Linux 7.3-rc1 runs NixOS 26.11 on a Tensor G4
+Status: **it boots.** Mainline Linux runs NixOS 26.11 on a Tensor G4
 (`zumapro`) from the phone's own UFS storage, with Plasma Mobile on the panel
 and a login prompt on UART.
+
+Since 2026-09-09 the kernel is no longer this port's own tree — see [The kernel
+base changed](#the-kernel-base-changed-2026-09-09) — and that swap has not been
+booted on hardware yet.
 
 ```
 Power mode changed to : FAST series_B G_4 L_2
@@ -25,13 +29,71 @@ A/B retry, and at zero ABL forces fastboot and marks the slot unbootable;
 Everything below was established on hardware. Where something is inferred
 rather than observed it says so.
 
+## The kernel base changed (2026-09-09)
+
+Until now this was plain torvalds 7.3-rc1 with this port's own `zumapro.dtsi`
+and a dozen grafted drivers and register patchers. It is now built from the
+shared zumapro port tree — [Trijal08/kernel-mainline][trijal], branch
+`zumapro-google-caimito`: mainline 7.3-rc2 plus ~400 commits of Tensor G4 work
+for the Pixel 9 family, and it already carries a `zumapro-tegu.dts`.
+
+That tree independently reached every hardware conclusion this port paid boots
+for — PHY isolation at `0x3ec0`, calibration-done at TRSV `0x31d`, no CDR wait,
+PCS `0x202 = 0x22` for the 38.4 MHz M-PHY reference, the four quirks the stock
+`fixed-prdt-req_list-ocs` property clears, the touchscreen on `spi@111d0000`
+with native manual chip select and a 2 µs CS setup delay — and then kept going
+where this port had not started: pinctrl and clock drivers for every CMU,
+secure power domains, System MMU v9, ACPM TMU thermal zones, cpufreq, MCT v3,
+the eUSB2 + USB-DP combo PHY that USB here is blocked on, PCIe, Wi-Fi, and the
+exynos9 DECON/DSIM display pipeline. The silicon is the same either way, and
+re-deriving any one of those would cost weeks of boots.
+
+What this port still owns: the whole NixOS side (`images.nix`, the initrd, the
+rootfs, the host config), `kernel/zumapro-bootfb.c`, and the board deltas in
+`dts/zumapro-tegu-nixos.dtsi`. The old self-contained kernel — its own
+`zumapro.dtsi`, the HSI0/HSI2 clock drivers, `zumapro-touch.c`, the UFS
+patchers — is at commit `32c547c`.
+
+**It builds and the tegu DTB compiles, but it has not been booted.** What is
+new and therefore at risk on the first boot:
+
+- **The watchdog is now gs101's variant with the PMU quirks on**
+  (`google,gs101-wdt` + `samsung,syscon-phandle`), where this port used a
+  variant with no PMU access at all because zumapro's PMU offsets were
+  unverified. Theirs writes `CLUSTER0_NONCPU_INT_EN`/`_OUT` at gs101's
+  offsets. Their phones boot with it; if this one resets on a timer again,
+  that is the first place to look.
+- **Memory is described statically** — the low 2 GiB bank in `zumapro.dtsi`
+  plus three 2 GiB banks in `zumapro-pixel-common.dtsi`, which is exactly the
+  Pixel 9a's 8 GiB — instead of relying on ABL to patch one placeholder node.
+- **Every rail on both PMICs is now described**, so `regulator_ignore_unused`
+  is on the command line. Without it the regulator framework switches off
+  every LDO and buck no driver has claimed, at `late_initcall`, on a phone
+  whose panel has no driver.
+- **`bootargs` is forced back to empty** by `dts/zumapro-tegu-nixos.dtsi`.
+  The shared tree puts postmarketOS's arguments there; `images.nix` is the
+  only place this port wants the command line to come from.
+- **Their defconfig builds the AoC, the Touch Bus Negotiator, the modem and
+  GNSS as modules.** Nothing on the boot path needs them, and NixOS carries
+  the module tree in the closure, so this is only a note for when audio or
+  the negotiator matter.
+
+[trijal]: https://github.com/Trijal08/kernel-mainline/commits/zumapro-google-caimito/
+
 ## Why this is not a daily driver
 
-Mainline has no Tensor G4 support at all. As of 7.3-rc1 upstream carries device
-trees only for the Tensor G1 (`gs101`, Pixel 6). Nobody has posted `zuma` or
-`zumapro` support, postmarketOS has no `google-tegu` port, and Mobile NixOS has
-no Google phones. Google's own mainline effort skipped to the Pixel 10 and only
-reaches a serial shell.
+Mainline has no Tensor G4 support at all: as of 7.3-rc2 upstream carries device
+trees only for the Tensor G1 (`gs101`, Pixel 6), nothing has been posted for
+`zuma` or `zumapro`, and Mobile NixOS has no Google phones. Google's own
+mainline effort skipped to the Pixel 10 and only reaches a serial shell.
+
+Out of tree, two community trees do carry this SoC —
+[Trijal08/kernel-mainline][trijal] (the base this port now builds from, aimed
+at the Pixel 9 family, with postmarketOS packaging) and
+[zumapro-mainline/linux](https://github.com/zumapro-mainline/linux) — and
+between them most of the SoC is described. None of it is upstream, none of it
+is a phone you would carry, and the Pixel 9a is the least-tested board in
+either.
 
 So every hardware description here was reverse-derived from Google's downstream
 sources, then tested by booting it.
@@ -42,7 +104,7 @@ sources, then tested by booting it.
 | --- | --- |
 | Boot to userspace | **Yes.** Memory, interrupts, timers, SMP, driver model, initramfs |
 | Panel as console | **Yes**, via the bootloader's framebuffer (see below) |
-| Our own device tree | **Yes.** Bootloader fills in the real 8 GiB; machine reports as "Google Pixel 9a" |
+| Device tree | The shared tree's `zumapro.dtsi` + `zumapro-tegu.dts`, with this port's board deltas on top; machine reports as "Pixel 9a" |
 | Debug UART | **Yes** (`ttySAC0` at `0x10870000`), with a USB-C debug board; read-only |
 | Register access from userspace | **Yes**, `/dev/mem` (`STRICT_DEVMEM` deliberately off) |
 | Rescue userspace | **Yes**, linked into the kernel image |
@@ -54,8 +116,8 @@ sources, then tested by booting it.
 | ACPM | **Yes.** Mailbox, SRAM and protocol confirmed; the route to the PMIC |
 | S2MPG14 rails | **Yes.** `LDO4M` and `LDO25M` enabled over ACPM, verified by reading the enable bit back from the PMIC |
 | Touch input | **Yes.** Synaptics S3908 (fw `GA1B0-15.0`) answers commands and streams reports; coordinates reach `/dev/input` |
-| USB | Not yet, and the reason is now precise. Controller described and reachable, clocks on; blocked on an eUSB2 + combo USB-DP PHY driver |
-| WLAN, modem, GPU, audio, camera | No |
+| USB | Not yet on this board. The blocker this port measured — the eUSB2 + combo USB-DP PHY — exists in the shared tree now; wiring it up for tegu is the next item |
+| WLAN, modem, GPU, audio, camera | No. Drivers for all of them are in the shared tree, aimed at the Pixel 9 boards, and none of it is enabled for tegu yet |
 
 ## The panel console
 
@@ -245,33 +307,28 @@ Things that are not documented anywhere and cost real time to discover:
 
 | File | Purpose |
 | --- | --- |
-| `dts/zumapro.dtsi` | SoC: 4×A520 + 3×A720 + 1×X4, PSCI, GIC-v3, arch timer, debug UART, firmware/modem carve-outs, ramoops |
-| `dts/zumapro-pixel-common.dtsi` | `chosen`, placeholder memory node (the bootloader patches in the real 8 GiB) |
-| `dts/zumapro-tegu.dts` | Board |
-| `kernel/zumapro-bootfb.c` | Boot framebuffer adoption, staged reset probes, early stripe |
-| `kernel/apply.sh` | Grafts everything below into the kernel tree; fails loudly if an upstream anchor moves |
-| `kernel/clk-zumapro-hsi2.c` | CMU_HSI2 clock provider for UFS. Its writes are no-ops (see fact 8); needed so the UFS node can resolve its clocks |
-| `kernel/clk-zumapro-hsi0.c` | CMU_HSI0 USI2 divider — the touch SPI's real clock (see fact 10) |
-| `kernel/zumapro-ufs-host.py` | Tensor G4 host-controller corrections: PCS `0x202` (the 38.4 MHz reference), PCS RX `0x2f`, and the four quirks the stock tree drops |
-| `kernel/zumapro-pmic-dump.c` | Read-only dump of the S2MPG14 register map over ACPM. Never writes; see the file for why that matters |
-| `kernel/zumapro-s2mpg14-regulator.c` | The two touch rails as regulators, over ACPM directly. Not `sec-acpm.c`: that knows S2MPG10's map, where `0x43` is a different LDO |
-| `kernel/check.sh` | Cross-compile one of these drivers against the kernel's store build tree, in seconds, without building an image |
-| `kernel/zumapro-touch.c` | Synaptics TouchComm v1 over SPI. Owns the rails, drives reset, decodes reports into input events |
-| `notes/s2mpg14-dump.txt` | The live PMIC dump, and how the vendor map was matched against it |
-| `notes/HANDOVER.md`, `notes/HANDOVER-PROMPT.md` | Briefing for picking this up cold, and the prompt to hand a new session |
-| `kernel/add-zumapro-wdt.py` | `google,zumapro-wdt`, with no PMU quirks — zumapro's PMU offsets are unverified and gs101's differ |
-| `notes/HARDWARE.md` | Every address, offset and measured value this port has established, in one place — including the gs101 values that turned out wrong and what they should be |
-| `notes/UPSTREAM.md` | What to take from github.com/zumapro-mainline and what not to — their CMU_HSI0 USI clocks agree with our measurements; their USB clocks and PHY are gs101's and name registers this SoC does not have |
-| `touch-probe.sh` | Register dump for the touch stack, via `devmem` (never `dd`: arm64 restricts `/dev/mem` `read()` to real memory). No longer runs at boot — it drives reset and pulls ATTN, which belong to the driver now; `systemctl start tegu-touch-probe` when the driver is unbound |
-| `tegu-cmd.sh`, `../../tools/tegu-cmd` | Run a shell command passed on the kernel command line. The write half of the debug loop on a phone with a receive-only UART |
-| `kernel/add-zumapro-ufs-phy.py` | Adds the `google,zumapro-ufs-phy` variant: isolation offset, calibration-done register, Tensor G4 PMA table, failure diagnostics |
-| `kernel/dump-ufs-clkstop.py` | Diagnostic: prints `HCI_CLKSTOP_CTRL` at calibration time |
-| `kernel/keep-boot-phy.py` | Adds `phy_exynos_ufs.keep_boot_phy=1` to skip the PRE_INIT table |
-| `kernel.nix` | 7.3-rc1, arm64 defconfig with other SoCs and unused subsystems trimmed |
+| `kernel.nix` | The kernel: shared port tree pinned by commit, their `zumapro_defconfig`, and the NixOS/bring-up config on top |
+| `kernel/apply.sh` | Grafts what is left of this port into that tree; fails loudly if an upstream anchor moves |
+| `dts/zumapro-tegu-nixos.dtsi` | Board deltas appended to their `zumapro-tegu.dts`: empty `bootargs`, and their two framebuffer nodes off in favour of `zumapro-bootfb.c` |
+| `kernel/zumapro-bootfb.c` | Boot framebuffer adoption: reads geometry, stride and format out of DECON, reserves the buffer NOMAP, keeps triggering the command-mode panel |
+| `kernel/check.sh` | Cross-compile one driver against the kernel's store build tree, in seconds, without building an image |
 | `initramfs.nix`, `rescue-init` | Rescue userspace, linked into the kernel image |
 | `cross-kernel.nix` | Cross-compiles the kernel from x86_64 instead of emulating |
-| `default.nix` | NixOS host (aspirational: needs a root filesystem) |
+| `default.nix` | NixOS host: root on the phone's `userdata`, Plasma Mobile, the kernel command line |
 | `images.nix` | Flashable images and `flash.sh` |
+| `notes/HARDWARE.md` | Every address, offset and measured value this port established, in one place — including the gs101 values that turned out wrong and what they should be |
+| `notes/UPSTREAM.md` | The two community trees: what each got right, and the traps in taking a gs101 name for a zumapro register |
+| `notes/HANDOVER.md`, `notes/HANDOVER-PROMPT.md` | Briefing for picking this up cold, and the prompt to hand a new session |
+| `notes/s2mpg14-dump.txt` | The live PMIC dump, and how the vendor map was matched against it |
+| `touch-probe.sh`, `spi-*.sh` | Bring-up probes over `devmem` (never `dd`: arm64 restricts `/dev/mem` `read()` to real memory). All written against this port's own touch driver, which the shared tree's `syna_tcm` replaces — kept for the register maps in them |
+| `tegu-cmd.sh`, `../../tools/tegu-cmd` | Run a shell command passed on the kernel command line. The write half of the debug loop on a phone with a receive-only UART |
+| `uart-capture.py` | Capture the UART to a file, tolerating the characters it drops |
+
+Gone with the base swap, and recoverable from commit `32c547c`: this port's
+`zumapro.dtsi` and board files, `clk-zumapro-hsi0.c`, `clk-zumapro-hsi2.c`,
+`zuma-pinctrl-data.c`, `zumapro-touch.c`, `zumapro-pmic-dump.c`,
+`zumapro-ufs-restore.c`, the S2MPG14 regulator patcher, and the seven UFS
+patchers and diagnostics. The shared tree has a better version of every one.
 
 ## Building
 
@@ -534,44 +591,51 @@ cannot write an S2MPG10 offset by accident.
 
 ## Next steps, in order
 
-1. **The eUSB2 + combo USB-DP PHY.** Everything under it is done and
-   measured: the domain is powered, the registers answer, every CMU gate was
-   already open, the Q-channels are enabled and the user muxes moved off the
-   oscillator. What remains is `DWC3 controller soft reset failed,
-   -ETIMEDOUT`, and `dwc3_core_soft_reset()` calls `phy_init()` before
-   asserting `DCTL.CSFTRST` — so the PHY is a prerequisite, not a later step.
-   `notes/HANDOVER.md` opens with the method to use, which is the one that
-   worked for the UFS PHY. Mainline's `google,gs101-usb31drd-phy` is a
-   starting point and not a fit: this is eUSB2 behind a combo block with six
-   register ranges against gs101's three.
+The list changed shape with the base swap: most of what used to be on it now
+exists in the shared tree and is waiting to be switched on for this board
+rather than written.
 
-   Two loose ends to tidy when it works: `USB_G_SERIAL=y` (precomposed)
-   contends with the configfs gadget in `default.nix` for the single UDC, and
-   `USB_CONFIGFS` is not set at all, so that unit has never worked — it exits
-   0 on an empty `/sys/class/udc` and reports success.
-2. **A zumapro pinctrl driver.** It removes three problems at once: touch
-   reset is currently written straight into peric0's GPIO block from the
-   driver, the touch IRQ is polled at 16 ms instead of taken from `gpn0-0`,
-   and `sec-acpm` cannot probe at all without an interrupt. Mainline has the
-   Samsung pinctrl driver and gs101 bank tables; zumapro needs its own — and
-   the data is already written down. `soc-gs`'s
-   `drivers/pinctrl/gs/pinctrl-gs.c` carries a full set of `zumapro_pin_*[]`
-   tables giving every bank's pin count, offset, name and EINT number, with
-   the block base in the comment above each. They are *not* zuma's — that set
-   exists separately and differs — so take the ones named for zumapro. Both
-   banks this port already pokes by hand agree with them. This is a
-   transcription job, not a reverse-engineering one.
-3. **USB.** `usb@11210000`, PHY `@11100000`. A gadget serial console would end
-   the reflash-per-question loop that costs this port most of its time;
-   `USB_G_SERIAL` and `U_SERIAL_CONSOLE` are already enabled.
-4. **Clocks and power domains, properly.** `clk-zumapro-hsi0.c` and
-   `clk-zumapro-hsi2.c` each cover one block and do not model the CMU_TOP
-   mux/divider tree at all. A real driver, starting from
-   `drivers/clk/samsung/clk-gs101.c`, is still needed for the GPU and USB.
-   Note this is **not** what blocked storage — that belief was wrong, see
-   fact 8.
-5. **Display proper.** DPU/DSIM plus the `google,gs-tg4a/b/c` panel driver, to
-   replace the borrowed bootloader framebuffer.
+1. **Boot the new base, and fix the fallout.** Nothing below can be trusted
+   until this happens. Flash and watch the UART for, in order: the watchdog
+   binding (`google,gs101-wdt` with PMU quirks, where this port used none),
+   UFS enumerating, `zumapro-bootfb` finding the framebuffer, `syna_tcm`
+   probing on `spi@111d0000`, cpufreq appearing, the ACPM TMU thermal zones,
+   and — new and unproven on this board — `dwc3` and the eUSB2 + USB-DP combo
+   PHY, which `zumapro-pixel-common.dtsi` enables for every board including
+   this one. A boot that reaches a login prompt with `/sys/class/udc`
+   non-empty would close both of the two items this port had queued.
+2. **USB, if the first boot does not just do it.** Their CMU_HSI0 USB gate
+   offsets are the gs101 ones this port's `notes/UPSTREAM.md` flagged as
+   transplanted (`REF_CLK_40` at 0x2078, not zumapro's 0x20ac) — but this port
+   also measured eight live gates reading `0x00200000` in exactly that range,
+   so the objection may be about names rather than addresses. Their tree does
+   have the eUSB2 repeater, the combo PHY and the role switch wired end to
+   end, so the fastest test is hardware, not more reading.
+3. **The display, properly.** This is the one place the shared tree does not
+   already cover this board: `DRM_EXYNOS` is not even enabled in their
+   `zumapro_defconfig`, their exynos9 DECON/DSIM work is aimed at komodo and
+   caiman, and the panel drivers they added are those panels. tegu keeps the
+   bootloader's framebuffer until it has a panel driver of its own — 1080×2424,
+   command mode, DSC. Doing it means enabling `DRM_EXYNOS9_DECON` and the zuma
+   DSIM, then writing the tegu panel against their komodo one.
+4. **Wi-Fi.** `brcmfmac` with their BCM4390 work plus the PCIe host and PHY,
+   all SoC-level and enabled in their defconfig. What is missing is a tegu
+   wireless description: theirs lives in `zumapro-caimito-bcm4390.dtsi`, which
+   only the four caimito boards include, and the firmware still has to come
+   from the vendor image.
+5. **Audio.** The AoC path is the deep one: their `GOOGLE_AOC` needs GSA and
+   Trusty to release the core from reset, and their own defconfig does not
+   currently build it (`CONFIG_TRUSTY` is absent, so `GOOGLE_AOC=m` silently
+   drops out — check that before assuming audio is a config away). The
+   speaker amplifier on this board also has to be identified; theirs is a
+   CS35L41 pair described in `zumapro-caimito-cs35l41.dtsi`.
+6. **Modem.** Their `s5xxx` driver reaches a stable ONLINE with data on the
+   caimito boards, over PCIe CH0 with a CP power sequencer and a bit-banged
+   SPMI bus. Everything board-specific is in `zumapro-caimito-s5400.dtsi`.
+7. **The long tail, roughly in order of how much a phone needs it:** charger
+   and fuel gauge (`max77779`), the GPU's ACPM DVFS and thermal throttling,
+   deep idle (MCT v3 and the c2 states are in their DT already), NFC, the
+   camera flash LED, GNSS.
 
 ## Sources
 
@@ -580,3 +644,11 @@ Downstream references used, all fetched at bring-up time:
 - GrapheneOS `kernel_devices_google_tegu` — board device tree sources
 - GrapheneOS `device_google_tegu-kernels_6.1` — prebuilt DTBs, `dtbo.img`, stock kernel
 - AOSP `kernel/google-modules/display/samsung`, branch `android-gs-tegu-6.1-android16` — DECON/DPP register maps (`cal_9865`)
+
+Community trees for this SoC:
+
+- [Trijal08/kernel-mainline][trijal], branch `zumapro-google-caimito` — the base this port now builds from
+- [zumapro-mainline/linux](https://github.com/zumapro-mainline/linux) — the other one; `clk-zuma.c` and the pinctrl data came from here first
+
+See `notes/UPSTREAM.md` for what each got right and where a borrowed gs101
+name is not a zumapro register.

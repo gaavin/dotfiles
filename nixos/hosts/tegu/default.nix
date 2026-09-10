@@ -50,10 +50,18 @@ in
       # One fbcon= only: a second occurrence replaces the first rather
       # than adding to it, which silently discarded the font setting.
       "fbcon=font:TER16x32,nodefer"
-      # No clock/power-domain drivers for zumapro yet: never gate what the
-      # bootloader left on, or the panel goes dark
+      # Never gate or unpower what the bootloader left on. There are real
+      # clock and power-domain drivers for this SoC now, which makes this
+      # matter more rather than less: the panel is still the bootloader's
+      # framebuffer, with no driver holding a reference to anything under it.
       "clk_ignore_unused"
       "pd_ignore_unused"
+      # Same argument for the rails. The device tree now describes the whole
+      # S2MPG14/15 pair, so at late_initcall the regulator framework would
+      # switch off every LDO and buck no driver has claimed -- which on this
+      # phone includes the panel's and, until a consumer appears, plenty that
+      # the system is running on. The shared port tree passes this too.
+      "regulator_ignore_unused"
       "no_console_suspend"
       "printk.devkmsg=on"
       # Leave a crash on screen instead of rebooting into Android
@@ -74,6 +82,11 @@ in
         enable = true;
         # Root cannot mount until UFS is described; land in a shell on the UART
         emergencyAccess = true;
+        # There is no TPM here, and this pulls tpm-crb into the initrd's
+        # module set -- which the shared port tree's config does not build, so
+        # the initrd's module-shrinking step fails outright:
+        #   modprobe: FATAL: Module tpm-crb not found
+        tpm2.enable = false;
       };
       # Everything the initrd needs is built in; a lean kernel has no modules
       # to pull from the usual x86-centric default list.

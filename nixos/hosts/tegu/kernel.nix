@@ -1,80 +1,44 @@
-# Mainline Linux 7.3-rc1 for the Google Pixel 9a (tegu, Tensor G4 / zumapro).
+# Kernel for the Google Pixel 9a (tegu, Tensor G4 / zumapro).
 #
-# Upstream has no support for this SoC, so the device tree under ./dts is
-# grafted into the tree at build time. The config is the arm64 defconfig with
-# every other SoC family switched off and the subsystems this port cannot use
-# yet (media, sound, WLAN, PCI ethernet...) trimmed, which keeps a native build
-# on an 8 GiB machine tolerable.
+# This used to be plain torvalds 7.3-rc1 with this port's own device tree and a
+# handful of grafted drivers. It is now built from the shared zumapro port tree
+# (github.com/Trijal08/kernel-mainline, branch zumapro-google-caimito), which
+# is mainline 7.3-rc2 plus ~400 commits of Tensor G4 work for the Pixel 9
+# family -- and which already carries a zumapro-tegu.dts.
+#
+# Why the swap. That tree independently reached every hardware conclusion this
+# port paid for -- PHY isolation at 0x3ec0, cal-done at TRSV 0x31d, no CDR
+# wait, PCS 0x202 = 0x22 for the 38.4 MHz M-PHY reference, the four quirks the
+# stock "fixed-prdt-req_list-ocs" property clears, the touch part on
+# spi@111d0000 with native manual chip select and a 2 us CS setup delay -- and
+# then kept going: full pinctrl and clock drivers for every CMU, secure power
+# domains, System MMU v9, ACPM TMU thermal, cpufreq, MCT v3, the eUSB2 +
+# USB-DP combo PHY, PCIe, the exynos9 DECON/DSIM display pipeline. Re-deriving
+# any one of those here would cost weeks of boots; the register data is the
+# same silicon either way.
+#
+# What this file still owns: the NixOS-shaped config (a built-in rescue
+# initramfs, a console on the panel, /dev/mem left open for bring-up) and the
+# tegu device-tree deltas in ./kernel/apply.sh.
+#
+# The previous, self-contained bring-up kernel -- its own zumapro.dtsi, the
+# HSI0/HSI2 clock drivers, zumapro-touch.c, the UFS patchers -- is at commit
+# 32c547c if it is ever needed again.
 {
   lib,
   buildLinux,
-  fetchurl,
+  fetchFromGitHub,
   callPackage,
   ...
 }@args:
 
 let
-  version = "7.3-rc1";
+  # Upstream base of that branch. Their Makefile says 7.3.0-rc2.
+  version = "7.3-rc2";
 
   # Built into the image because the bootloader discards boot.img's ramdisk
   # on this device; see ./initramfs.nix.
   initramfs = callPackage ./initramfs.nix { };
-
-  # Every CONFIG_ARCH_*=y in arch/arm64/configs/defconfig for 7.3-rc1 except
-  # ARCH_EXYNOS, which the Tensor line (gs101 and, here, zumapro) lives under.
-  otherSocs = [
-    "ARCH_ACTIONS"
-    "ARCH_AIROHA"
-    "ARCH_SUNXI"
-    "ARCH_ALPINE"
-    "ARCH_APPLE"
-    "ARCH_ARTPEC"
-    "ARCH_ASPEED"
-    "ARCH_AXIADO"
-    "ARCH_BCM"
-    "ARCH_BCM2835"
-    "ARCH_BCM_IPROC"
-    "ARCH_BCMBCA"
-    "ARCH_BRCMSTB"
-    "ARCH_BERLIN"
-    "ARCH_BLAIZE"
-    "ARCH_BST"
-    "ARCH_CIX"
-    "ARCH_K3"
-    "ARCH_LG1K"
-    "ARCH_HISI"
-    "ARCH_KEEMBAY"
-    "ARCH_MEDIATEK"
-    "ARCH_MESON"
-    "ARCH_MICROCHIP"
-    "ARCH_SPARX5"
-    "ARCH_MVEBU"
-    "ARCH_NXP"
-    "ARCH_LAYERSCAPE"
-    "ARCH_MXC"
-    "ARCH_S32"
-    "ARCH_MA35"
-    "ARCH_NPCM"
-    "ARCH_QCOM"
-    "ARCH_REALTEK"
-    "ARCH_RENESAS"
-    "ARCH_ROCKCHIP"
-    "ARCH_SEATTLE"
-    "ARCH_INTEL_SOCFPGA"
-    "ARCH_SOPHGO"
-    "ARCH_STM32"
-    "ARCH_SYNQUACER"
-    "ARCH_TEGRA"
-    "ARCH_TESLA_FSD"
-    "ARCH_SPRD"
-    "ARCH_THUNDER"
-    "ARCH_THUNDER2"
-    "ARCH_UNIPHIER"
-    "ARCH_VEXPRESS"
-    "ARCH_VISCONTI"
-    "ARCH_XGENE"
-    "ARCH_ZYNQMP"
-  ];
 
   kernel = buildLinux (
     args
@@ -87,194 +51,148 @@ let
       # until then a cache miss is cheaper than a broken build.
 
       inherit version;
-      modDirVersion = "7.3.0-rc1";
+      # 7.3.0-rc2 plus their defconfig's CONFIG_LOCALVERSION="-zumapro",
+      # which is what "make kernelrelease" prints and therefore what names
+      # the module directory. Overriding LOCALVERSION to empty from here is
+      # not an option: nixpkgs renders freeform "" as CONFIG_LOCALVERSION="\"\"",
+      # and the kernel then tags the release with two literal quote characters.
+      modDirVersion = "7.3.0-rc2-zumapro";
       extraMeta.branch = "7.3";
 
-      src = fetchurl {
-        url = "https://git.kernel.org/torvalds/t/linux-${version}.tar.gz";
-        sha256 = "0w62iaz3yfmv82h36dziqc26ah4q97w31k5s3vxcq1l9gkygndld";
+      src = fetchFromGitHub {
+        owner = "Trijal08";
+        repo = "kernel-mainline";
+        rev = "b00e05d92c9c9d4eb7188c979754a52930fb890d";
+        hash = "sha256-emNnq0MKK5nBPIFFacIrBz/63h9ntqp9hwrEXQpUcK0=";
       };
 
-      defconfig = "defconfig";
+      # Their own config for these phones. It is what their boots are tested
+      # with, so this port diverges from it as little as possible: everything
+      # in structuredExtraConfig below is either a NixOS requirement or a
+      # bring-up instrument, not a second opinion about the hardware.
+      defconfig = "zumapro_defconfig";
       # Don't let nixpkgs' generic "enable everything as a module" pass undo
-      # the trimming below.
+      # the choices in that defconfig.
       autoModules = false;
       # The fragment deliberately turns off options that defconfig-selected
       # code re-enables; let the generator warn rather than fail.
       ignoreConfigErrors = true;
 
       # nixpkgs layers its own common-config.nix over defconfig; force every
-      # choice here over that (it wants DEBUG_INFO, sound, media, ... on).
+      # choice here over that (it wants DEBUG_INFO, its own LOCALVERSION, ...).
       structuredExtraConfig =
         with lib.kernel;
-        lib.mapAttrs (_: lib.mkForce) (
-          (lib.genAttrs otherSocs (_: no))
-          // {
-            ARCH_EXYNOS = yes;
+        lib.mapAttrs (_: lib.mkForce) {
+          # Their tag ("-zumapro") is kept, so keep it reproducible too: with
+          # LOCALVERSION_AUTO the release would grow a "+" or a git hash and
+          # modDirVersion above would stop matching.
+          LOCALVERSION_AUTO = no;
 
-            # Touchscreen SPI. The controller and the USI in front of it are
-            # both drivers mainline already ships; what this port has to
-            # supply is the device tree. Measured on hardware: the USI's
-            # SW_CONF is NONE at boot, and setting it to SPI brings the
-            # controller out of reset.
-            SPI = yes;
-            SPI_MASTER = yes;
-            SPI_S3C64XX = yes;
-            SPI_SPIDEV = yes;
-            EXYNOS_USI = yes;
+          # Rescue userspace, linked into the image (see ./initramfs.nix).
+          # This is not the NixOS initrd -- that arrives in vendor_kernel_boot
+          # -- it is the fallback for a boot that never gets that far.
+          BLK_DEV_INITRD = yes;
+          INITRAMFS_SOURCE = freeform "${initramfs}";
+          RD_GZIP = yes;
 
-            # ACPM, and through it the PMIC. The touch part's rails are
-            # S2MPG14 LDO25M (DVDD 1.8V) and LDO4M (AVDD 3.3V) and nothing
-            # turns them on, which is the leading explanation for a SPI bus
-            # that transfers correctly (loopback echoes) while the part stays
-            # silent and its active-low IRQ sits at 0 even through a pull-up.
-            #
-            # Mainline already has the whole stack -- exynos-acpm.c,
-            # sec-acpm.c, and S2MPG10/11 regulator descriptors in s2mps11.c.
-            # Only the addresses differ here, and ACPM's shared-memory layout
-            # is identical: the driver's ACPM_GS101_INITDATA_BASE is 0xa000
-            # and zumapro's own device tree declares initdata-base = <0xa000>.
-            #
-            # The chip is S2MPG14, not S2MPG10, and its register map is not in
-            # any source available here, so nothing is written to it yet. This
-            # is the instrument: regmap debugfs makes the PMIC readable from
-            # userspace so the real map can be measured rather than assumed.
-            # Touchscreen: input stack for kernel/zumapro-touch.c, and the
-            # regulator framework for its two S2MPG14 rails.
-            INPUT = yes;
-            INPUT_EVDEV = yes;
-            INPUT_TOUCHSCREEN = yes;
+          # Console on the panel: ./kernel/zumapro-bootfb.c hands the
+          # framebuffer the bootloader left scanning out to simpledrm, and
+          # fbcon puts the kernel log on it. Their tree does the same job with
+          # a simple-framebuffer node plus an mmio-init-helper writing the
+          # DECON autorefresh bit; the driver here is kept because it reads
+          # the geometry and format out of DECON instead of hard-coding them,
+          # and reserves the buffer as NOMAP before memblock is up.
+          DRM = yes;
+          DRM_SIMPLEDRM = yes;
+          DRM_FBDEV_EMULATION = yes;
+          FB_CORE = yes;
+          VT = yes;
+          VT_CONSOLE = yes;
+          FRAMEBUFFER_CONSOLE = yes;
+          FRAMEBUFFER_CONSOLE_ROTATION = yes;
+          FONTS = yes;
+          FONT_8x16 = yes;
+          FONT_TER16x32 = yes;
+          LOGO = yes;
+          LOGO_LINUX_CLUT224 = yes;
 
-            MAILBOX = yes;
-            EXYNOS_MBOX = yes;
-            EXYNOS_ACPM_PROTOCOL = yes;
-            MFD_SEC_ACPM = yes;
-            MFD_SEC_CORE = yes;
-            REGULATOR = yes;
-            REGULATOR_S2MPS11 = yes;
-            REGMAP_DEBUGFS = yes;
-            DEBUG_FS = yes;
+          # Debug UART (samsung_tty, google,gs101-uart binding + earlycon)
+          SERIAL_SAMSUNG = yes;
+          SERIAL_SAMSUNG_CONSOLE = yes;
+          SERIAL_EARLYCON = yes;
 
-            # BL2 arms a 60s cluster watchdog on every boot and nothing in
-            # this port used to pet it, so the phone reset on a timer.
-            WATCHDOG = yes;
-            WATCHDOG_SYSFS = yes;
-            S3C2410_WATCHDOG = yes;
-            WATCHDOG_HANDLE_BOOT_ENABLED = yes;
+          # Bring-up instrument: most of this SoC still has no driver, so
+          # /dev/mem from userspace is how a block gets inspected.
+          # STRICT_DEVMEM would refuse those reads and IO_STRICT_DEVMEM also
+          # refuses any range a driver has claimed.
+          DEVMEM = yes;
+          STRICT_DEVMEM = no;
+          IO_STRICT_DEVMEM = no;
+          DEBUG_FS = yes;
+          REGMAP_DEBUGFS = yes;
 
-            # Debug UART (samsung_tty, google,gs101-uart binding + earlycon)
-            SERIAL_SAMSUNG = yes;
-            SERIAL_SAMSUNG_CONSOLE = yes;
-            SERIAL_EARLYCON = yes;
+          # Root is the phone's own UFS, so none of this may be a module.
+          SCSI = yes;
+          BLK_DEV_SD = yes;
+          SCSI_UFSHCD = yes;
+          SCSI_UFSHCD_PLATFORM = yes;
+          SCSI_UFS_EXYNOS = yes;
+          PHY_SAMSUNG_UFS = yes;
+          EXT4_FS = yes;
+          SQUASHFS = yes;
+          OVERLAY_FS = yes;
 
-            # Console log survives a crash in Android's ramoops window
-            PSTORE = yes;
-            PSTORE_RAM = yes;
-            PSTORE_CONSOLE = yes;
-            PSTORE_PMSG = yes;
+          # BL2 arms a 60s cluster watchdog on every boot; nothing petting it
+          # is a reset on a timer. Their zumapro.dtsi has both cluster nodes
+          # and pixel-common enables cl0 at 30s.
+          WATCHDOG = yes;
+          S3C2410_WATCHDOG = yes;
+          WATCHDOG_SYSFS = yes;
+          WATCHDOG_HANDLE_BOOT_ENABLED = yes;
 
-            # Storage: UFS with the Exynos glue (ufs node still to be written)
-            SCSI = yes;
-            BLK_DEV_SD = yes;
-            SCSI_UFSHCD = yes;
-            SCSI_UFSHCD_PLATFORM = yes;
-            SCSI_UFS_EXYNOS = yes;
+          # cpufreq-dt is instantiated by cpufreq-dt-platdev, which publishes
+          # no module alias, so as a module (=m in their defconfig) nothing
+          # ever loads it and the CPUs stay at whatever the bootloader left.
+          CPUFREQ_DT = yes;
 
-            # USB: DWC3 + gadget side for NCM/ACM debugging over the C port
-            USB = yes;
-            USB_XHCI_HCD = yes;
-            USB_DWC3 = yes;
-            USB_DWC3_DUAL_ROLE = yes;
-            USB_DWC3_EXYNOS = yes;
-            USB_GADGET = yes;
-            USB_ROLE_SWITCH = yes;
+          # The touchscreen. Their driver, on the SPI controller their s3c64xx
+          # patches taught to hold a native chip select across a whole
+          # message -- which is the thing this port's own driver worked around
+          # by calling spi_setup() on both sides of every transfer.
+          SPI = yes;
+          SPI_MASTER = yes;
+          SPI_S3C64XX = yes;
+          EXYNOS_USI = yes;
+          INPUT = yes;
+          INPUT_EVDEV = yes;
+          INPUT_TOUCHSCREEN = yes;
+          TOUCHSCREEN_SYNA_TCM = yes;
 
-            # Gadget serial, precomposed and built in.
-            #
-            # None of this runs yet: dwc3 does not probe (see the USB node in
-            # ./dts/zumapro.dtsi), so there is no UDC for a gadget to bind to
-            # and /sys/class/udc is empty.
-            #
-            # Two things to fix when it does. USB_CONFIGFS is not set, so the
-            # configfs gadget systemd unit in ./default.nix cannot work -- it
-            # has never worked, and reports success because it exits 0 on an
-            # empty /sys/class/udc. And a precomposed driver like USB_G_SERIAL
-            # contends with a configfs gadget for the single UDC; upstream
-            # forks disable the precomposed ones for exactly this reason. Pick
-            # one path, do not ship both.
-            USB_LIBCOMPOSITE = yes;
-            USB_U_SERIAL = yes;
-            USB_F_ACM = yes;
-            USB_F_SERIAL = yes;
-            USB_G_SERIAL = yes;
-            U_SERIAL_CONSOLE = yes;
+          # Console log survives a crash in Android's ramoops window
+          PSTORE = yes;
+          PSTORE_RAM = yes;
+          PSTORE_CONSOLE = yes;
+          PSTORE_PMSG = yes;
 
-            # Display: no DPU driver exists, so ./kernel/zumapro-bootfb.c hands
-            # the framebuffer the bootloader left scanning out to simpledrm,
-            # and fbcon puts the kernel log on the panel. That is the debug
-            # console for this port until something else works.
-            DRM = yes;
-            DRM_SIMPLEDRM = yes;
-            DRM_FBDEV_EMULATION = yes;
-            FB_CORE = yes;
-            VT = yes;
-            VT_CONSOLE = yes;
-            FRAMEBUFFER_CONSOLE = yes;
-            FRAMEBUFFER_CONSOLE_ROTATION = yes;
-            FONTS = yes;
-            FONT_8x16 = yes;
-            FONT_TER16x32 = yes;
-            LOGO = yes;
-            LOGO_LINUX_CLUT224 = yes;
+          # Trimmed: nothing on this phone needs them and they are minutes of
+          # build time each. Their defconfig turns them on because it is also
+          # a development config.
+          RUST = no;
+          CORESIGHT = no;
+          KVM = no;
+          VIRTUALIZATION = no;
+          XFS_FS = no;
+          BTRFS_FS = no;
+          NTFS_FS = no;
 
-            # Bring-up: this port has no driver for most of the SoC, so the
-            # only way to inspect or drive a block is /dev/mem from userspace.
-            # STRICT_DEVMEM would refuse those reads, and IO_STRICT_DEVMEM
-            # also refuses any range a driver has claimed. Both are dropped
-            # deliberately, and should come back once real drivers exist.
-            DEVMEM = yes;
-            STRICT_DEVMEM = no;
-            IO_STRICT_DEVMEM = no;
-
-            # Filesystems used by the images
-            # Rescue userspace, linked into the image (see ./initramfs.nix)
-            BLK_DEV_INITRD = yes;
-            INITRAMFS_SOURCE = freeform "${initramfs}";
-            RD_GZIP = yes;
-
-            EXT4_FS = yes;
-            F2FS_FS = yes;
-            SQUASHFS = yes;
-            OVERLAY_FS = yes;
-
-            # Nothing in these subsystems has a driver for this SoC yet;
-            # dropping them roughly halves the build.
-            MEDIA_SUPPORT = no;
-            SOUND = no;
-            WLAN = no;
-            ETHERNET = no;
-            INFINIBAND = no;
-            MMC = no;
-            IIO = no;
-            STAGING = no;
-            CRYPTO_HW = no;
-            BLK_DEV_NVME = no;
-            KVM = no;
-            XEN = no;
-            VIRTUALIZATION = no;
-            NET_VENDOR_INTEL = no;
-            NET_VENDOR_MELLANOX = no;
-
-            # Keep the build lean; debug info alone would be gigabytes here.
-            DEBUG_INFO_NONE = yes;
-            DEBUG_INFO = no;
-            DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT = no;
-            DEBUG_INFO_BTF = no;
-            KEXEC = no;
-            KEXEC_FILE = no;
-            MODULE_COMPRESS = no;
-          }
-        );
+          # Keep the build lean; debug info alone would be gigabytes here.
+          DEBUG_INFO_NONE = yes;
+          DEBUG_INFO = no;
+          DEBUG_INFO_REDUCED = no;
+          DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT = no;
+          DEBUG_INFO_BTF = no;
+          MODULE_COMPRESS = no;
+        };
     }
   );
 in
