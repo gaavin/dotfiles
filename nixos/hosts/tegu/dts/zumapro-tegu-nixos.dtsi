@@ -36,11 +36,16 @@
  * devices for one buffer, is worse than either alone -- so those two nodes
  * stay off here.
  *
- * cont_splash_mem is deliberately left enabled: it is only a no-map
- * reservation over the buffer, and it keeps the allocator off the framebuffer
- * even on a boot that does not pass zumapro_bootfb.
+ * cont_splash_mem goes with them. It reserves the same buffer, but bootfb's
+ * early_param runs before the device tree's reserved-memory scan and has
+ * already marked the range NOMAP by then, so all the node can do is fail:
+ *   OF: reserved mem: failed to reserve memory for node 'splash@fac00000'
  */
 &framebuffer0 {
+	status = "disabled";
+};
+
+&cont_splash_mem {
 	status = "disabled";
 };
 
