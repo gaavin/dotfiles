@@ -5,8 +5,10 @@ Status: **it boots.** Mainline Linux runs NixOS 26.11 on a Tensor G4
 and a login prompt on UART.
 
 Since 2026-09-09 the kernel is no longer this port's own tree — see [The kernel
-base changed](#the-kernel-base-changed-2026-09-09) — and that swap has not been
-booted on hardware yet.
+base changed](#the-kernel-base-changed-2026-09-09) — and **on its first boot
+USB came up**, which had been this port's blocker: `dwc3` probes, the eUSB2 +
+USB-DP combo PHY initialises, and the host enumerates `18d1:4ee1 NixOS
+Pixel 9a` about 40 s after reset. The touchscreen works on their `syna_tcm`.
 
 ```
 Power mode changed to : FAST series_B G_4 L_2
@@ -17,7 +19,7 @@ Welcome to NixOS 26.11 (Zokor)!
 tegu login:
 ```
 
-Not yet a usable phone: no USB, no WLAN, no modem, no GPU.
+Not yet a usable phone: no WLAN, no modem, no GPU acceleration, no audio.
 
 The "powers off after a few minutes" that this file used to describe was the
 cluster watchdog. BL2 arms it for 60 s (`WD: enabled(60s, 1/3)`) and nothing
@@ -54,15 +56,18 @@ rootfs, the host config), `kernel/zumapro-bootfb.c`, and the board deltas in
 `zumapro.dtsi`, the HSI0/HSI2 clock drivers, `zumapro-touch.c`, the UFS
 patchers — is at commit `32c547c`.
 
-**It builds and the tegu DTB compiles, but it has not been booted.** What is
-new and therefore at risk on the first boot:
+**Booted 2026-09-09, and it came up.** Evidence, all from the build host with
+no debug cable attached: the gadget enumerated with the product strings this
+repo's `usb-gadget-net` unit writes, which means the flashed closure ran from
+UFS and systemd reached `multi-user.target`; and it stayed up for minutes,
+which means the cluster watchdog is being petted. Touch was confirmed on the
+phone. What was new and therefore at risk, and how it landed:
 
 - **The watchdog is now gs101's variant with the PMU quirks on**
   (`google,gs101-wdt` + `samsung,syscon-phandle`), where this port used a
   variant with no PMU access at all because zumapro's PMU offsets were
   unverified. Theirs writes `CLUSTER0_NONCPU_INT_EN`/`_OUT` at gs101's
-  offsets. Their phones boot with it; if this one resets on a timer again,
-  that is the first place to look.
+  offsets. **Fine:** the phone stayed up well past the 60 s BL2 arms.
 - **Memory is described statically** — the low 2 GiB bank in `zumapro.dtsi`
   plus three 2 GiB banks in `zumapro-pixel-common.dtsi`, which is exactly the
   Pixel 9a's 8 GiB — instead of relying on ABL to patch one placeholder node.
@@ -77,6 +82,12 @@ new and therefore at risk on the first boot:
   GNSS as modules.** Nothing on the boot path needs them, and NixOS carries
   the module tree in the closure, so this is only a note for when audio or
   the negotiator matter.
+- **USB was the surprise.** `zumapro-pixel-common.dtsi` enables `usbdrd31`,
+  `usbdrd31_dwc3` and `usbdrd31_phy` for every board, so the flash that tested
+  the base swap also tested the PHY this port had spent a session narrowing
+  down — and it works. Their CMU_HSI0 USB gate offsets are the gs101 ones
+  `notes/UPSTREAM.md` had dismissed as transplanted; the hardware says the
+  addresses are right.
 
 [trijal]: https://github.com/Trijal08/kernel-mainline/commits/zumapro-google-caimito/
 
@@ -115,8 +126,8 @@ sources, then tested by booting it.
 | Touch SPI bus | **Yes.** Loopback echoes at 9.98 MHz |
 | ACPM | **Yes.** Mailbox, SRAM and protocol confirmed; the route to the PMIC |
 | S2MPG14 rails | **Yes.** `LDO4M` and `LDO25M` enabled over ACPM, verified by reading the enable bit back from the PMIC |
-| Touch input | **Yes.** Synaptics S3908 (fw `GA1B0-15.0`) answers commands and streams reports; coordinates reach `/dev/input` |
-| USB | Not yet on this board. The blocker this port measured — the eUSB2 + combo USB-DP PHY — exists in the shared tree now; wiring it up for tegu is the next item |
+| Touch input | **Yes**, now on the shared tree's `syna_tcm` over an s3c64xx that holds a native chip select across the whole message |
+| USB | **Yes**, first boot of the shared tree, 2026-09-09. A UDC exists, the NCM gadget binds, and the host sees `18d1:4ee1`. `ssh max@10.42.0.1` over the USB-C port replaces the reflash-per-question loop |
 | WLAN, modem, GPU, audio, camera | No. Drivers for all of them are in the shared tree, aimed at the Pixel 9 boards, and none of it is enabled for tegu yet |
 
 ## The panel console
@@ -591,51 +602,47 @@ cannot write an S2MPG10 offset by accident.
 
 ## Next steps, in order
 
-The list changed shape with the base swap: most of what used to be on it now
-exists in the shared tree and is waiting to be switched on for this board
-rather than written.
+The base swap booted, and it closed both items this list used to open with.
+What is left is mostly board description rather than reverse engineering.
 
-1. **Boot the new base, and fix the fallout.** Nothing below can be trusted
-   until this happens. Flash and watch the UART for, in order: the watchdog
-   binding (`google,gs101-wdt` with PMU quirks, where this port used none),
-   UFS enumerating, `zumapro-bootfb` finding the framebuffer, `syna_tcm`
-   probing on `spi@111d0000`, cpufreq appearing, the ACPM TMU thermal zones,
-   and — new and unproven on this board — `dwc3` and the eUSB2 + USB-DP combo
-   PHY, which `zumapro-pixel-common.dtsi` enables for every board including
-   this one. A boot that reaches a login prompt with `/sys/class/udc`
-   non-empty would close both of the two items this port had queued.
-2. **USB, if the first boot does not just do it.** Their CMU_HSI0 USB gate
-   offsets are the gs101 ones this port's `notes/UPSTREAM.md` flagged as
-   transplanted (`REF_CLK_40` at 0x2078, not zumapro's 0x20ac) — but this port
-   also measured eight live gates reading `0x00200000` in exactly that range,
-   so the objection may be about names rather than addresses. Their tree does
-   have the eUSB2 repeater, the combo PHY and the role switch wired end to
-   end, so the fastest test is hardware, not more reading.
-3. **The display, properly.** This is the one place the shared tree does not
-   already cover this board: `DRM_EXYNOS` is not even enabled in their
-   `zumapro_defconfig`, their exynos9 DECON/DSIM work is aimed at komodo and
-   caiman, and the panel drivers they added are those panels. tegu keeps the
-   bootloader's framebuffer until it has a panel driver of its own — 1080×2424,
-   command mode, DSC. Doing it means enabling `DRM_EXYNOS9_DECON` and the zuma
-   DSIM, then writing the tegu panel against their komodo one.
-4. **Wi-Fi.** `brcmfmac` with their BCM4390 work plus the PCIe host and PHY,
+1. **Make the USB link a first-class debug channel.** It works, but the host
+   side is still manual: the gadget takes no fixed MAC, so mina cannot key a
+   NetworkManager profile to it and someone has to
+   `ip addr add 10.42.0.2/24 dev <iface>` by hand each time. Set `dev_addr`
+   and `host_addr` on `functions/ncm.usb0` in `usb-gadget-net`, then add a
+   matching profile on the build host. While in there: an ACM function
+   alongside NCM would give a writable serial console, which the UART cannot
+   be.
+2. **The display, properly.** The one place the shared tree does not cover this
+   board: `DRM_EXYNOS` is not even enabled in their `zumapro_defconfig`, their
+   exynos9 DECON/DSIM work is aimed at komodo and caiman, and the panel drivers
+   they added are those panels. tegu keeps the bootloader's framebuffer until it
+   has a panel driver of its own — 1080×2424, command mode, DSC. Enable
+   `DRM_EXYNOS9_DECON` and the zuma DSIM, then write the tegu panel against
+   their komodo one. This is what stands between the phone and a display that
+   can change modes, sleep, or dim.
+3. **Wi-Fi.** `brcmfmac` with their BCM4390 work plus the PCIe host and PHY,
    all SoC-level and enabled in their defconfig. What is missing is a tegu
    wireless description: theirs lives in `zumapro-caimito-bcm4390.dtsi`, which
-   only the four caimito boards include, and the firmware still has to come
-   from the vendor image.
-5. **Audio.** The AoC path is the deep one: their `GOOGLE_AOC` needs GSA and
+   only the four caimito boards include, and the firmware has to come from the
+   vendor image.
+4. **Audio.** The AoC path is the deep one: their `GOOGLE_AOC` needs GSA and
    Trusty to release the core from reset, and their own defconfig does not
    currently build it (`CONFIG_TRUSTY` is absent, so `GOOGLE_AOC=m` silently
-   drops out — check that before assuming audio is a config away). The
+   drops out — check `.config` before assuming audio is a config away). The
    speaker amplifier on this board also has to be identified; theirs is a
-   CS35L41 pair described in `zumapro-caimito-cs35l41.dtsi`.
-6. **Modem.** Their `s5xxx` driver reaches a stable ONLINE with data on the
+   CS35L41 pair in `zumapro-caimito-cs35l41.dtsi`.
+5. **Modem.** Their `s5xxx` driver reaches a stable ONLINE with data on the
    caimito boards, over PCIe CH0 with a CP power sequencer and a bit-banged
    SPMI bus. Everything board-specific is in `zumapro-caimito-s5400.dtsi`.
-7. **The long tail, roughly in order of how much a phone needs it:** charger
+6. **The long tail, roughly in order of how much a phone needs it:** charger
    and fuel gauge (`max77779`), the GPU's ACPM DVFS and thermal throttling,
    deep idle (MCT v3 and the c2 states are in their DT already), NFC, the
    camera flash LED, GNSS.
+
+Worth an early check now that a shell is reachable: whether cpufreq has OPPs,
+whether the ACPM TMU thermal zones read sane temperatures, and whether USB
+negotiated SuperSpeed or fell back to high speed.
 
 ## Sources
 

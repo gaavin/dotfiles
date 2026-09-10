@@ -159,11 +159,14 @@ in
   # Debug network over the USB-C port (10.42.0.1 on the phone) once the
   # DWC3 controller is described; fails harmlessly until then.
   systemd.services.usb-gadget-net = {
-    # Reports success without doing anything, and has always done so: with
-    # no UDC (dwc3 does not probe on this SoC yet) the first line exits 0, so
-    # "[  OK  ] Finished USB NCM gadget" in a boot log means nothing has
-    # happened. It also needs USB_CONFIGFS, which ./kernel.nix does not set,
-    # so /sys/kernel/config/usb_gadget would not exist even with a UDC.
+    # This works as of 2026-09-09, on the first boot of the shared port tree:
+    # dwc3 probes, the eUSB2 + USB-DP combo PHY comes up, and the host sees
+    # 18d1:4ee1 "NixOS Pixel 9a" about 40 s after reset.
+    #
+    # It reported success without doing anything for the whole life of the
+    # port before that, and the shape of the lie is worth keeping in mind: with
+    # no UDC the first line exits 0, so "[  OK  ] Finished USB NCM gadget" in a
+    # boot log meant nothing had happened.
     description = "USB NCM gadget for host<->phone networking";
     wantedBy = [ "multi-user.target" ];
     after = [ "sys-kernel-config.mount" ];
@@ -223,12 +226,16 @@ in
     spi-tools
   ];
 
-  # Run whatever command the kernel command line carries. This is the write
-  # half of the debug loop: the UART is receive-only and there is no USB
-  # gadget yet, so without it the only way to change what the phone does is to
-  # rebuild and reflash an 11 GB rootfs. vendor_boot is 24 KB and flashes in
+  # Run whatever command the kernel command line carries. This was the write
+  # half of the debug loop while the UART was receive-only and there was no USB
+  # gadget: without it the only way to change what the phone did was to rebuild
+  # and reflash an 11 GB rootfs. vendor_boot is 24 KB and flashes in
   # milliseconds, and ABL appends its vendor_cmdline, so a command can ride in
   # there. See tools/tegu-cmd on the build host.
+  #
+  # Superseded in practice now that the USB gadget works and sshd answers on
+  # 10.42.0.1 -- but keep it: it is the channel that still works when userspace
+  # does not come up far enough to bring the gadget with it.
   systemd.services.tegu-cmd = {
     description = "Run a command passed on the kernel command line";
     wantedBy = [ "multi-user.target" ];
