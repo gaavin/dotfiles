@@ -29,6 +29,8 @@ in
     packages =
       with pkgs;
       [
+        picom
+        android-tools
         htop
         grok-bot-nix.packages.${pkgs.stdenv.hostPlatform.system}.default
         claude-code
