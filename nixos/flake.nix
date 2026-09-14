@@ -47,6 +47,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nix-osu-lazer-tearing = {
+      url = "github:gaavin/nix-osu-lazer-tearing";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     nix-grok-build = {
       url = "github:gaavin/nix-grok-build";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -87,6 +92,7 @@
       nix-epic-games-launcher,
       nix-spotify-aarch64,
       nix-osu-lazer-aarch64,
+      nix-osu-lazer-tearing,
       nix-grok-build,
       grok-bot-nix,
       disko,
@@ -115,9 +121,7 @@
                 claude-code.overlays.default
                 helium-browser.overlays.default
                 grok-bot-nix.overlays.default
-                (final: _prev: {
-                  osu-lazer-tearing = final.callPackage ./pkgs/osu-lazer-tearing { };
-                })
+                nix-osu-lazer-tearing.overlays.default
               ];
             }
             {

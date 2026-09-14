@@ -297,6 +297,26 @@
         "type": "github"
       }
     },
+    "nix-osu-lazer-tearing": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1789361855,
+        "narHash": "sha256-pfOCfeUabFvjn+KIOK4kyYPYMXKnwuBJyTQlceQoAvw=",
+        "owner": "gaavin",
+        "repo": "nix-osu-lazer-tearing",
+        "rev": "31bd5eda408635e92354ebddab9875b1db152a5b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gaavin",
+        "repo": "nix-osu-lazer-tearing",
+        "type": "github"
+      }
+    },
     "nix-spotify-aarch64": {
       "inputs": {
         "nixpkgs": [
@@ -434,6 +454,7 @@
         "nix-epic-games-launcher": "nix-epic-games-launcher",
         "nix-grok-build": "nix-grok-build",
         "nix-osu-lazer-aarch64": "nix-osu-lazer-aarch64",
+        "nix-osu-lazer-tearing": "nix-osu-lazer-tearing",
         "nix-spotify-aarch64": "nix-spotify-aarch64",
         "nixos-apple-silicon": "nixos-apple-silicon",
         "nixpkgs": "nixpkgs_3",
