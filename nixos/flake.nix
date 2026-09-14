@@ -117,6 +117,7 @@
                 helium-browser.overlays.default
                 (final: _prev: {
                   ghidra-cli = final.callPackage ./pkgs/ghidra-cli { };
+                  osu-lazer-tearing = final.callPackage ./pkgs/osu-lazer-tearing { };
                 })
               ];
             }
