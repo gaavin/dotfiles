@@ -29,6 +29,7 @@ in
     packages =
       with pkgs;
       [
+        kicad
         picom
         android-tools
         htop
