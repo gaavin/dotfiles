@@ -115,6 +115,7 @@
               nixpkgs.overlays = [
                 claude-code.overlays.default
                 helium-browser.overlays.default
+                grok-bot-nix.overlays.default
                 (final: _prev: {
                   ghidra-cli = final.callPackage ./pkgs/ghidra-cli { };
                   osu-lazer-tearing = final.callPackage ./pkgs/osu-lazer-tearing { };
@@ -127,7 +128,6 @@
                 useUserPackages = true;
                 extraSpecialArgs = {
                   inherit firefox-addons;
-                  inherit grok-bot-nix;
                 };
                 users.max.imports = [
                   ./home.nix
