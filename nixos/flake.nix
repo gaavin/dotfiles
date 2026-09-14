@@ -1,5 +1,5 @@
 {
-  description = "NixOS configurations for mina, air and tegu";
+  description = "NixOS configurations for mina and air";
 
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
@@ -77,7 +77,6 @@
 
   outputs =
     {
-      self,
       nixpkgs,
       chaotic,
       home-manager,
@@ -116,7 +115,6 @@
                 claude-code.overlays.default
                 helium-browser.overlays.default
                 (final: _prev: {
-                  ghidra-cli = final.callPackage ./pkgs/ghidra-cli { };
                 })
               ];
             }
@@ -151,12 +149,6 @@
           ]
           ++ extraModules;
         };
-      mkTegu =
-        extraModules:
-        nixpkgs.lib.nixosSystem {
-          system = "aarch64-linux";
-          modules = [ ./hosts/tegu ] ++ extraModules;
-        };
     in
     {
       nixosConfigurations.mina = mkHost {
@@ -177,33 +169,5 @@
           nixos-apple-silicon.nixosModules.apple-silicon-support
         ];
       };
-
-      # Google Pixel 9a. Standalone: the desktop configuration.nix assumes an
-      # EFI machine, and the phone is delivered as flashable images instead.
-      nixosConfigurations.tegu = mkTegu [ ];
-
-      packages.aarch64-linux.tegu-images =
-        nixpkgs.legacyPackages.aarch64-linux.callPackage ./hosts/tegu/images.nix
-          {
-            nixos = self.nixosConfigurations.tegu;
-          };
-
-      # Reverse-engineering tooling. Upstream ships no Nix packaging, so it
-      # lives in pkgs/ and is wrapped to use nixpkgs' Ghidra and JDK rather
-      # than the tarball its own `ghidra setup` would download.
-      packages.x86_64-linux.ghidra-cli =
-        nixpkgs.legacyPackages.x86_64-linux.callPackage ./pkgs/ghidra-cli { };
-
-      packages.aarch64-linux.ghidra-cli =
-        nixpkgs.legacyPackages.aarch64-linux.callPackage ./pkgs/ghidra-cli { };
-
-      # From an x86_64 host the kernel is cross-compiled natively rather than
-      # under QEMU user emulation, and the images are assembled natively too;
-      # only the NixOS closure's own small derivations run emulated.
-      packages.x86_64-linux.tegu-images =
-        nixpkgs.legacyPackages.x86_64-linux.callPackage ./hosts/tegu/images.nix
-          {
-            nixos = mkTegu [ ./hosts/tegu/cross-kernel.nix ];
-          };
     };
 }
