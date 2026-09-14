@@ -6,7 +6,16 @@
   osu-lazer-bin,
   sdl3,
   wayland-protocols,
+  writeShellApplication,
   nativeWayland ? true,
+  # BASS device update period handed to osu!framework's testing hook, in
+  # samples when negative. osu!'s default 10ms period is most of its audio
+  # latency; 128 samples keeps pace with a 128-sample PipeWire quantum. null
+  # keeps the default.
+  bassDevicePeriod ? -128,
+  # Stop the desktop OpenTabletDriver daemon for as long as osu! runs. Turn
+  # this off if osu!'s own tablet support is disabled in its settings.
+  stopTabletDaemon ? true,
 }:
 
 # The official AppImage, so score submission and multiplayer keep working: the
@@ -72,6 +81,40 @@ let
       install -m 555 ${lib.getLib sdl3-patched}/lib/libSDL3.so.0 $out/usr/bin/libSDL3.so
     '';
   };
+
+  bassDevicePeriodFlag = lib.optionalString (bassDevicePeriod != null) (
+    "--set-default OSU_TEMP_TESTING_BASS_CONFIG_DEV_PERIOD ${toString bassDevicePeriod}"
+  );
+
+  # osu! reads the tablet over hidraw through its bundled OpenTabletDriver. A
+  # running otd-daemon reads the same tablet and replays it through its virtual
+  # tablet, so the pen would also reach osu! through the compositor: later, and
+  # mapped by the daemon's area instead of osu!'s.
+  tabletDaemonGuard = writeShellApplication {
+    name = "osu-tablet-daemon-guard";
+    text = ''
+      unit=opentabletdriver.service
+      stopped=
+
+      restart_daemon() {
+        if [ -n "$stopped" ]; then
+          systemctl --user --no-block start "$unit" || true
+        fi
+      }
+      trap restart_daemon EXIT
+      trap 'exit 129' HUP
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+
+      # A second launch only hands its arguments to the running instance. It
+      # finds the daemon already stopped, so restarting it is left to the first.
+      if systemctl --user --quiet is-active "$unit" 2>/dev/null; then
+        systemctl --user stop "$unit" && stopped=1
+      fi
+
+      "@osu@" "$@"
+    '';
+  };
 in
 appimageTools.wrapAppImage {
   inherit pname version contents;
@@ -89,12 +132,19 @@ appimageTools.wrapAppImage {
 
     wrapProgram $out/bin/osu! \
       ${lib.optionalString nativeWayland "--set SDL_VIDEODRIVER wayland"} \
+      ${bassDevicePeriodFlag} \
       --set OSU_EXTERNAL_UPDATE_PROVIDER 1
 
     install -m 444 -D ${contents}/osu!.desktop -t $out/share/applications
     for i in 16 32 48 64 96 128 256 512 1024; do
       install -D ${contents}/osu.png $out/share/icons/hicolor/''${i}x$i/apps/osu.png
     done
+  ''
+  + lib.optionalString stopTabletDaemon ''
+    mkdir -p $out/libexec
+    mv $out/bin/osu! $out/libexec/osu!
+    substitute ${lib.getExe tabletDaemonGuard} $out/bin/osu! --replace-fail @osu@ $out/libexec/osu!
+    chmod 555 $out/bin/osu!
   '';
 
   passthru = {
