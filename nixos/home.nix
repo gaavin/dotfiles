@@ -86,7 +86,7 @@ in
       ]
       ++ lib.optionals isX86 [
         arduino-ide
-        osu-lazer-bin
+        osu-lazer-tearing
         spotify
       ];
   };

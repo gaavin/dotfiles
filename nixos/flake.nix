@@ -115,6 +115,7 @@
                 claude-code.overlays.default
                 helium-browser.overlays.default
                 (final: _prev: {
+                  osu-lazer-tearing = final.callPackage ./pkgs/osu-lazer-tearing { };
                 })
               ];
             }
