@@ -4,7 +4,6 @@
   pkgs,
   osConfig,
   firefox-addons,
-  grok-bot-nix,
   ...
 }:
 
@@ -33,7 +32,7 @@ in
         picom
         android-tools
         htop
-        grok-bot-nix.packages.${pkgs.stdenv.hostPlatform.system}.default
+        grok-bot
         claude-code
         helium
         python3
