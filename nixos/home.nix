@@ -85,7 +85,6 @@ in
       ]
       ++ lib.optionals isX86 [
         arduino-ide
-        osu-lazer-tearing
         spotify
       ];
   };
@@ -372,6 +371,46 @@ in
     epic-games-launcher = {
       enable = true;
       protonVersion = pkgs.proton-cachyos_x86_64_v3;
+    };
+
+    nix-osu-lazer = {
+      enable = true;
+
+      settings = {
+        BeatmapColours = false;
+        BeatmapSkins = false;
+        DimLevel = 1.0;
+        ShowFirstRunSetup = false;
+        StarFountains = false;
+      };
+
+      frameworkSettings = {
+        AudioDevice = "PipeWire Sound Server";
+        FrameSync = "Unlimited";
+        Locale = "en";
+        Renderer = "OpenGL";
+        ShowUnicode = true;
+        VolumeEffect = 0.47;
+        VolumeUniversal = 0.83;
+      };
+
+      beatmaps = [
+        376552
+        377930
+        636839
+        1898232
+        2142914
+        2198943
+        2258243
+        2281545
+        2298941
+        2432962
+        2512831
+        2527269
+        2533966
+      ];
+
+      skins = [ "https://circle-people.com/wp-content/Skins/Cookiezi/Cookiezi%2004.osk" ];
     };
   }
   // lib.optionalAttrs (!isX86) {
