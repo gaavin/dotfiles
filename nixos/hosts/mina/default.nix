@@ -156,4 +156,14 @@
     ACTION=="add|change", KERNEL=="nvme[0-9]*|sd[a-z]*|mmcblk[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="adios"
     ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
   '';
+
+  # Tablet firmware flasher access (Wacom 056a, bootloader 0ac3). Shipped as its
+  # own 70- file because extraRules lands in 99-local.rules, after
+  # 73-seat-late.rules has already applied uaccess tags.
+  services.udev.packages = [
+    (pkgs.writeTextDir "etc/udev/rules.d/70-lc87.rules" ''
+      KERNEL=="hidraw*", ATTRS{idVendor}=="056a", TAG+="uaccess"
+      SUBSYSTEM=="usb", ATTR{idVendor}=="0ac3", TAG+="uaccess"
+    '')
+  ];
 }
