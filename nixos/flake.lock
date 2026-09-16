@@ -7,11 +7,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1789331472,
-        "narHash": "sha256-RBd2QyJCjg5z+x7J+SlaihMYeVSULi//t5IofGFfRP0=",
+        "lastModified": 1789461054,
+        "narHash": "sha256-NzJyoZlQ30B85SDY5RJvMT5aVihA9ICszSWZpyRxTDw=",
         "owner": "chaotic-cx",
         "repo": "nyx",
-        "rev": "be105ca0649b88a9a2d63cfa877c459239fb5ad8",
+        "rev": "8c1a5235a94d5a73f017110c2010b3c4a182b6b5",
         "type": "github"
       },
       "original": {
@@ -29,11 +29,11 @@
         "systems": "systems"
       },
       "locked": {
-        "lastModified": 1789243306,
-        "narHash": "sha256-YTEDtq7KPYlR5kMdioqHSdq5LP7Ol4lNFN1jffCUCXU=",
+        "lastModified": 1789506088,
+        "narHash": "sha256-BTpzemdCBYhjBXsl6EirYaWUFxRkCW8JmgAMelDDg6U=",
         "owner": "sadjow",
         "repo": "claude-code-nix",
-        "rev": "e2fe3829b5fcbd493256b42a8f2bfbf86771dbdb",
+        "rev": "f5783590a83ea9e2e9c710dc839abf13f59aec37",
         "type": "github"
       },
       "original": {
@@ -70,11 +70,11 @@
       },
       "locked": {
         "dir": "pkgs/firefox-addons",
-        "lastModified": 1789272187,
-        "narHash": "sha256-7oAdO2mooeKvDEDJzksd6o3aK5D/s6bCi51qYExywQs=",
+        "lastModified": 1789531373,
+        "narHash": "sha256-DxsYphGAbt4LXL7druVkwKPhDcudSSTcryqPXDCYHUY=",
         "owner": "rycee",
         "repo": "nur-expressions",
-        "rev": "7d6cc3eff8f493e672d675836ccada705da73800",
+        "rev": "6d7da906a1c5d0a1104a97b1bdaaf1054339907d",
         "type": "gitlab"
       },
       "original": {
@@ -141,11 +141,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1788985191,
-        "narHash": "sha256-yCUVLshUVEgwr38Nut8dfBa/4P+16J3aO3ogCrySy+U=",
+        "lastModified": 1789527752,
+        "narHash": "sha256-UX70PpOrqBKV40ykHa3d5w8Hyhokkyrcp1+joSLL1yQ=",
         "owner": "d-513",
         "repo": "grok-bot-nix",
-        "rev": "f5f972a4ded9318db499f974d189cdeacd7e7a5f",
+        "rev": "c8229dbd16c9a34c6f51ca4f20ea1afc32ed8be7",
         "type": "github"
       },
       "original": {
@@ -184,11 +184,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1789230132,
-        "narHash": "sha256-u7aiV01Iu11NGOjXbxoCCrew6n0vo/LnULqOvZa+Agc=",
+        "lastModified": 1789352311,
+        "narHash": "sha256-E9hlcRNSRQ1vb+UicOusX/ucroGlBAz/pYhCBorLOn4=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "17bf375751d457efa3897c7c3d68106616b1d469",
+        "rev": "cfcda3f99334c8459fa4cd46cce87502e0b48f0a",
         "type": "github"
       },
       "original": {
@@ -204,11 +204,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1789352311,
-        "narHash": "sha256-E9hlcRNSRQ1vb+UicOusX/ucroGlBAz/pYhCBorLOn4=",
+        "lastModified": 1789482455,
+        "narHash": "sha256-pD3qVlQ4mUCFoTWrYtxecpSitQMsgJvJIN0FUIDZoEU=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "cfcda3f99334c8459fa4cd46cce87502e0b48f0a",
+        "rev": "efa3ccb4c3cc90d832eab232976379058fa75aa3",
         "type": "github"
       },
       "original": {
@@ -277,6 +277,27 @@
         "type": "github"
       }
     },
+    "nix-osu-lazer": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1789556375,
+        "narHash": "sha256-MIYI3+RMtQB1UhAMJYMJk5Nj6JXZWFhJYKPGwoWz42o=",
+        "owner": "gaavin",
+        "repo": "nix-osu-lazer",
+        "rev": "3c0063df09ba6829075f6d4273a050059896b4b7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gaavin",
+        "ref": "raster-sync",
+        "repo": "nix-osu-lazer",
+        "type": "github"
+      }
+    },
     "nix-osu-lazer-aarch64": {
       "inputs": {
         "nixpkgs": [
@@ -294,26 +315,6 @@
       "original": {
         "owner": "gaavin",
         "repo": "nix-osu-lazer-aarch64",
-        "type": "github"
-      }
-    },
-    "nix-osu-lazer-tearing": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1789361855,
-        "narHash": "sha256-pfOCfeUabFvjn+KIOK4kyYPYMXKnwuBJyTQlceQoAvw=",
-        "owner": "gaavin",
-        "repo": "nix-osu-lazer-tearing",
-        "rev": "31bd5eda408635e92354ebddab9875b1db152a5b",
-        "type": "github"
-      },
-      "original": {
-        "owner": "gaavin",
-        "repo": "nix-osu-lazer-tearing",
         "type": "github"
       }
     },
@@ -358,18 +359,15 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1789149629,
-        "narHash": "sha256-H6GwaZzZf+4npqv0tph94w9tZddSjFjmQrVsW0z78uk=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "eaad089433ca2bb662274377d33df3d0e51ef28b",
-        "type": "github"
+        "lastModified": 1789286504,
+        "narHash": "sha256-3i80JnZ9pZ7tWReb/Sqpc32cfzffCu8TWLnbnH0hN9c=",
+        "rev": "ef34387ddd751e1ab8857adf4676492d32eb24ec",
+        "type": "tarball",
+        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1073009.ef34387ddd75/nixexprs.tar.zst"
       },
       "original": {
-        "owner": "NixOS",
-        "ref": "nixos-unstable",
-        "repo": "nixpkgs",
-        "type": "github"
+        "type": "tarball",
+        "url": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst"
       }
     },
     "nixpkgs-darwin": {
@@ -406,11 +404,11 @@
     },
     "nixpkgs_3": {
       "locked": {
-        "lastModified": 1789149629,
-        "narHash": "sha256-eQUZVehWLDBbpBR2rq6DnuRee1ULT6Y675RhsYDSjYI=",
-        "rev": "eaad089433ca2bb662274377d33df3d0e51ef28b",
+        "lastModified": 1789426278,
+        "narHash": "sha256-LMzzTWExGdJ1S8U3IP5egkZEtyMswAwYowTAxIlkEZs=",
+        "rev": "efe6f071ede9d21c37462d2d6682d5e670099684",
         "type": "tarball",
-        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1072397.eaad089433ca/nixexprs.tar.xz"
+        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1074086.efe6f071ede9/nixexprs.tar.zst"
       },
       "original": {
         "id": "nixpkgs",
@@ -453,8 +451,8 @@
         "nix-battle-net": "nix-battle-net",
         "nix-epic-games-launcher": "nix-epic-games-launcher",
         "nix-grok-build": "nix-grok-build",
+        "nix-osu-lazer": "nix-osu-lazer",
         "nix-osu-lazer-aarch64": "nix-osu-lazer-aarch64",
-        "nix-osu-lazer-tearing": "nix-osu-lazer-tearing",
         "nix-spotify-aarch64": "nix-spotify-aarch64",
         "nixos-apple-silicon": "nixos-apple-silicon",
         "nixpkgs": "nixpkgs_3",

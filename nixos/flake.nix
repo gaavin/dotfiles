@@ -47,8 +47,8 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    nix-osu-lazer-tearing = {
-      url = "github:gaavin/nix-osu-lazer-tearing";
+    nix-osu-lazer = {
+      url = "github:gaavin/nix-osu-lazer/raster-sync";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -92,7 +92,7 @@
       nix-epic-games-launcher,
       nix-spotify-aarch64,
       nix-osu-lazer-aarch64,
-      nix-osu-lazer-tearing,
+      nix-osu-lazer,
       nix-grok-build,
       grok-bot-nix,
       disko,
@@ -121,7 +121,7 @@
                 claude-code.overlays.default
                 helium-browser.overlays.default
                 grok-bot-nix.overlays.default
-                nix-osu-lazer-tearing.overlays.default
+                nix-osu-lazer.overlays.default
               ];
             }
             {
@@ -142,6 +142,7 @@
                 ++ nixpkgs.lib.optionals (system == "x86_64-linux") [
                   nix-battle-net.homeModules.battle-net
                   nix-epic-games-launcher.homeModules.epic-games-launcher
+                  nix-osu-lazer.homeModules.nix-osu-lazer
                 ]
                 ++ nixpkgs.lib.optionals (system == "aarch64-linux") [
                   nix-spotify-aarch64.homeModules.nix-spotify-aarch64
