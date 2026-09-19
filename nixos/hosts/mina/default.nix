@@ -125,6 +125,19 @@
     IdleAction = "ignore";
   };
 
+  # Holds the RX 6800 XT (card1) and the CPU at their top clocks for as long as a
+  # game asks. osu!'s launcher asks for its whole session: left on auto, both drop
+  # their clocks between presents, and holding them took 0.3 ms off every frame.
+  programs.gamemode = {
+    enable = true;
+    settings.gpu = {
+      apply_gpu_optimisations = "accept-responsibility";
+      gpu_device = 1;
+      amd_performance_level = "high";
+    };
+  };
+  users.users.max.extraGroups = [ "gamemode" ];
+
   # air stays off this; it uses hardware.asahi.setupAsahiSound instead.
   services.pipewire = {
     extraConfig.pipewire."92-low-latency" = {
