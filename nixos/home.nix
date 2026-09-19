@@ -375,6 +375,7 @@ in
 
     nix-osu-lazer = {
       enable = true;
+      package = pkgs.nix-osu-lazer.override { requestGamemode = true; };
 
       settings = {
         BeatmapColours = false;
