@@ -178,5 +178,11 @@
       KERNEL=="hidraw*", ATTRS{idVendor}=="056a", TAG+="uaccess"
       SUBSYSTEM=="usb", ATTR{idVendor}=="0ac3", TAG+="uaccess"
     '')
+
+    # Switch in RCM mode (NVIDIA Tegra, 0955). Upstream hands it to plugdev,
+    # which NixOS has no group for; uaccess gives the seat's user the same thing.
+    (pkgs.writeTextDir "etc/udev/rules.d/70-switch.rules" ''
+      SUBSYSTEM=="usb", ATTR{idVendor}=="0955", TAG+="uaccess"
+    '')
   ];
 }
