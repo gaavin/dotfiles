@@ -62,6 +62,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    nix-deepseek = {
+      url = "github:gaavin/nix-deepseek";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     grok-bot-nix = {
       url = "github:d-513/grok-bot-nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -101,6 +106,7 @@
       nix-osu-lazer,
       nix-grok-build,
       nix-pipewire-patched,
+      nix-deepseek,
       grok-bot-nix,
       disko,
       nixos-apple-silicon,
@@ -149,6 +155,7 @@
                 sharedModules = [
                   plasma-manager.homeModules.plasma-manager
                   nix-grok-build.homeModules.grok-build
+                  nix-deepseek.homeModules.deepseek-harness
                 ]
                 ++ nixpkgs.lib.optionals (system == "x86_64-linux") [
                   nix-battle-net.homeModules.battle-net

@@ -361,6 +361,8 @@ in
     };
 
     grok-build.enable = true;
+
+    deepseek-harness.enable = true;
   }
   // lib.optionalAttrs isX86 {
     battle-net = {
