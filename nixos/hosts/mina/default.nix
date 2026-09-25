@@ -139,7 +139,17 @@
   users.users.max.extraGroups = [ "gamemode" ];
 
   # air stays off this; it uses hardware.asahi.setupAsahiSound instead.
+  #
+  # Stock PipeWire cannot hold the 128-sample quantum below on this HDA codec:
+  # the ALSA sink's timer pacing drifts off the hardware pointer and the stream
+  # is reset on every underrun that drift causes, which is what the crackling
+  # was. nix-pipewire-patched paces the sink by the hardware queue depth
+  # instead, and lifts the 64-frame period clamp in the ALSA plugin that osu!'s
+  # BASS reaches PipeWire through. One package covers both: the service runs
+  # its daemon, and /etc/alsa/conf.d points ALSA clients at its plugin.
   services.pipewire = {
+    package = pkgs.nix-pipewire-patched;
+
     extraConfig.pipewire."92-low-latency" = {
       "context.properties" = {
         "default.clock.rate" = 48000;
