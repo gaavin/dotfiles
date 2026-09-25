@@ -48,12 +48,17 @@
     };
 
     nix-osu-lazer = {
-      url = "github:gaavin/nix-osu-lazer/raster-sync";
+      url = "github:gaavin/nix-osu-lazer";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
     nix-grok-build = {
       url = "github:gaavin/nix-grok-build";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    nix-pipewire-patched = {
+      url = "github:gaavin/nix-pipewire-patched";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -95,6 +100,7 @@
       nix-osu-lazer-aarch64,
       nix-osu-lazer,
       nix-grok-build,
+      nix-pipewire-patched,
       grok-bot-nix,
       disko,
       nixos-apple-silicon,
@@ -123,6 +129,7 @@
                 helium-browser.overlays.default
                 grok-bot-nix.overlays.default
                 nix-osu-lazer.overlays.default
+                nix-pipewire-patched.overlays.default
                 (final: _prev: {
                   ghidra-cli = final.callPackage ./pkgs/ghidra-cli { };
                 })
