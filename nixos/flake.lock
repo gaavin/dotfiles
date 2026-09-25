@@ -237,6 +237,26 @@
         "type": "github"
       }
     },
+    "nix-deepseek": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790362942,
+        "narHash": "sha256-EWpugo3WFHm50jJXQpe/5629nADp/lgB+wSFefQtvj8=",
+        "owner": "gaavin",
+        "repo": "nix-deepseek",
+        "rev": "0ec2156db2cc2af532c6ce2c773d3392bf9cb125",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gaavin",
+        "repo": "nix-deepseek",
+        "type": "github"
+      }
+    },
     "nix-epic-games-launcher": {
       "inputs": {
         "nixpkgs": [
@@ -468,6 +488,7 @@
         "helium-browser": "helium-browser",
         "home-manager": "home-manager_2",
         "nix-battle-net": "nix-battle-net",
+        "nix-deepseek": "nix-deepseek",
         "nix-epic-games-launcher": "nix-epic-games-launcher",
         "nix-grok-build": "nix-grok-build",
         "nix-osu-lazer": "nix-osu-lazer",
