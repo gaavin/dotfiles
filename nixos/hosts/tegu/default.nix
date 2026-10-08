@@ -390,8 +390,11 @@ in
       "video"
       "audio"
     ];
-    # First-boot credential on a device with no installer; change it once in
-    initialPassword = "nixos";
+    # First-boot credential on a device with no installer. initialPassword only
+    # takes effect when the account is created, so this is what a freshly
+    # flashed rootfs gets; for an account that already exists, set it with
+    #   printf 'max:password\n' | sudo chpasswd
+    initialPassword = "password";
   };
   security.sudo.wheelNeedsPassword = false;
 
