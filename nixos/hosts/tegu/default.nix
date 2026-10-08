@@ -250,6 +250,73 @@ in
     "d /home/max/.config 0700 max users -"
   ];
 
+  # The bootloader's own A/B state, which nothing in this port maintained.
+  #
+  # ABL keeps per-slot state in the devinfo partition (Google's
+  # devinfo_ab_slot_data_t: two 4-byte entries at offset 48 of the 128-byte
+  # "DEVI" struct, the definition of which is published in AOSP as
+  # device/google/zuma/interfaces/boot/aidl/DevInfo.h marked "taken from ABL
+  # code"). Byte 0 of an entry is retry_count and byte 1 is a flag byte: bit 0
+  # unbootable, bit 1 successful, bit 2 active, bit 3 fastboot_ok. On every
+  # boot ABL decrements the *active* slot's retry_count unless that slot is
+  # flagged successful -- its log calls this "AB Decision: decrement active
+  # slot boot retry" -- and past zero it logs "decrement active slot boot
+  # retry & force ABL into fastboot" and gives up instead of booting. Flashing
+  # rewrites these flags, which is why a flash looked like it "reset the
+  # counter". Nothing here ever marked a slot successful, so every boot burned
+  # one of the three retries and the phone was permanently three boots from
+  # being stuck in fastboot.
+  #
+  # Measured on the device before relying on it: with the successful bit
+  # cleared, one boot took the active slot from retry 3 to 2 and left the
+  # inactive slot alone; with the bit set, two consecutive boots left 3 and 3.
+  # Android marks the slot from userspace once the system is up, so this does
+  # the same on every boot (a flash clears the flags again), and marks both
+  # slots so the state is right whichever one ABL is told to boot next.
+  systemd.services.tegu-mark-slot-successful = {
+    description = "Mark the A/B slots successful in the devinfo partition";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "local-fs.target" ];
+    path = [ pkgs.python3 ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      python3 - <<'PY'
+      import os, time
+
+      dev = "/dev/disk/by-partlabel/devinfo"
+      deadline = time.monotonic() + 30
+      while not os.path.exists(dev):
+          if time.monotonic() > deadline:
+              raise SystemExit(f"{dev} never appeared")
+          time.sleep(1)
+
+      fd = os.open(dev, os.O_RDWR)
+      try:
+          if os.pread(fd, 4, 0) != b"DEVI":
+              raise SystemExit(f"{dev}: no DEVI magic, refusing to write")
+          for i in (0, 1):
+              off = 48 + i * 4
+              entry = os.pread(fd, 4, off)
+              if len(entry) != 4:
+                  raise SystemExit(f"slot {i}: short read at offset {off}")
+              # A full retry count (so a boot that fails before this runs still
+              # has its retries), successful set, every other flag preserved.
+              new = bytes([3, entry[1] | 0x02]) + entry[2:]
+              if new != entry:
+                  os.pwrite(fd, new, off)
+              if os.pread(fd, 4, off) != new:
+                  raise SystemExit(f"slot {i}: write did not stick")
+          os.fsync(fd)
+          print(f"devinfo slots marked successful: {new.hex()}")
+      finally:
+          os.close(fd)
+      PY
+    '';
+  };
+
   networking.networkmanager.enable = true;
   # Debug network over the USB-C port (10.42.0.1 on the phone) once the
   # DWC3 controller is described; fails harmlessly until then.
