@@ -58,28 +58,45 @@
 /*
  * Wi-Fi: the board's Broadcom combo chip sits on PCIe channel 1 (HSI2).
  *
- * The shared tree leaves pcie_1 and its phy disabled and only enables them for
- * the boards it lists as BCM4390 carriers -- caiman, komodo, tokay and comet,
- * with its comment saying "tegu uses a different part". Whatever the part is,
- * the wiring is the same, and it is written down in the stock device tree
- * overlays the bootloader still applies from the factory dtbo (fragment@15-17):
+ * The shared tree leaves pcie_1 and its phy disabled, and only enables them for
+ * the boards it lists as BCM4390 carriers -- caiman, komodo, tokay and comet --
+ * with a note that "tegu uses a different part". The vendor's own tegu device
+ * tree settles it: the dtb inside the factory's vendor_kernel_boot.img has
  *
- *   WLAN_EN      gph3-4, driven as a GPIO (function 1 = output)
- *   PERST        gph3-0
- *   WL_HOST_WAKE gpa5-3, function 15, pulled up
- *   WL_DEV_WAKE  gph3-5
- *   wlan ch-num  1          -> this PCIe channel
- *   max-link-speed 2        -> trained at Gen2, not the SoC's Gen4
+ *   pcie@13120000   gpios = <&gph3 0 1>            PERST on gph3-0
+ *                   pinctrl-0 = clkreq, perst       gph3-1 (func 2), gph3-0 (func 1)
+ *                   ch-num = <1>, num-lanes = <1>   this channel
+ *                   no power-domains                so none is added here
+ *   its dtbo overlay  max-link-speed = <2>          Gen2, overriding the base's Gen3
+ *   its wlan node     wl_reg_on gph3-4, wl_host_wake gpa5-3, wl_dev_wake gph3-5
  *
- * The GPIO properties below are the names mainline's brcmfmac and the zuma
- * PCIe host driver actually read: brcmfmac finds WL_HOST_WAKE / WL_DEV_WAKE on
- * the host controller node through the host bridge, because the endpoint has no
- * node of its own, and pci-exynos drives wlan-reg-on-gpios for link
- * enumeration. Nothing in mainline looks at the stock overlays' bcmdhd-style
- * properties (pcie,wlan-gpio and the android,bcmdhd_wlan node), so those are
- * deliberately not repeated here -- the out-of-tree dhd driver is not built.
+ * The shared tree's pcie1_clkreq/pcie1_perst groups are gph2-1/gph2-0 -- gs101's
+ * routing, and nothing on zumapro uses those pins -- so this defines its own
+ * groups with the vendor's pins rather than reusing those labels.
+ *
+ * The GPIO properties are the names mainline actually reads: brcmfmac finds
+ * WL_HOST_WAKE / WL_DEV_WAKE on the PCIe host controller node (it reaches it
+ * through the host bridge, because the endpoint has no node of its own), and
+ * pci-exynos drives wlan-reg-on-gpios for link enumeration. The vendor's
+ * bcmdhd-only properties (pcie,wlan-gpio, the android,bcmdhd_wlan node) are not
+ * repeated: the out-of-tree dhd driver is not built here.
+ *
+ * reset-gpios is deliberately absent from this first cut even though the vendor
+ * puts PERST on gph3-0: zumapro.dtsi configures this port's UFS with
+ * pinctrl-0 = <&ufs_rst_n &ufs_refclk_out>, and ufs_refclk_out is gph3-0 as
+ * well. Claiming that pin as a PCIe reset is the one thing here that could take
+ * the root filesystem down, so the link gets its chance with clkreq alone first.
  */
 &pinctrl_hsi2 {
+	wlan_pcie1_clkreq: wlan-pcie1-clkreq-pins {
+		samsung,pins = "gph3-1";
+		samsung,pin-function = <2>;
+		samsung,pin-pud = <3>;
+		samsung,pin-drv = <3>;
+		samsung,pin-con-pdn = <3>;
+		samsung,pin-pud-pdn = <3>;
+	};
+
 	wlan_reg_on: wlan-reg-on-pins {
 		samsung,pins = "gph3-4";
 		samsung,pin-function = <1>;		/* output */
@@ -116,11 +133,10 @@
 
 &pcie_1 {
 	pinctrl-names = "default";
-	pinctrl-0 = <&pcie1_clkreq &pcie1_perst &wlan_reg_on &wlan_host_wake &wlan_dev_wake>;
-	reset-gpios = <&gph3 0 GPIO_ACTIVE_HIGH>;		/* PERST */
+	pinctrl-0 = <&wlan_pcie1_clkreq &wlan_reg_on &wlan_host_wake &wlan_dev_wake>;
 	wlan-reg-on-gpios = <&gph3 4 GPIO_ACTIVE_HIGH>;		/* WLAN_EN */
 	host-wake-gpios = <&gpa5 3 GPIO_ACTIVE_HIGH>;		/* WL_HOST_WAKE */
 	device-wake-gpios = <&gph3 5 GPIO_ACTIVE_HIGH>;		/* WL_DEV_WAKE */
-	max-link-speed = <2>;					/* Gen2 */
+	max-link-speed = <2>;					/* Gen2, per the dtbo overlay */
 	status = "okay";
 };
