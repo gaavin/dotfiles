@@ -180,11 +180,6 @@
     config.allowUnfree = true;
     overlays = [
       (final: prev: {
-        xdg-desktop-portal-gtk = prev.xdg-desktop-portal-gtk.overrideAttrs (old: {
-          patches = (old.patches or [ ]) ++ [
-            ./patches/xdg-desktop-portal-gtk-fc-monitor.patch
-          ];
-        });
         kdePackages = prev.kdePackages.overrideScope (
           kdeFinal: kdePrev: {
             ksystemstats = kdePrev.ksystemstats.overrideAttrs (old: {
