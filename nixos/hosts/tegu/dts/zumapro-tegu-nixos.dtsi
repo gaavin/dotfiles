@@ -9,6 +9,8 @@
  * tree unchanged, and is better than what this port wrote by hand.
  */
 
+#include <dt-bindings/gpio/gpio.h>
+
 / {
 	chosen {
 		/*
@@ -51,4 +53,74 @@
 
 &decon_autorefresh_bit {
 	status = "disabled";
+};
+
+/*
+ * Wi-Fi: the board's Broadcom combo chip sits on PCIe channel 1 (HSI2).
+ *
+ * The shared tree leaves pcie_1 and its phy disabled and only enables them for
+ * the boards it lists as BCM4390 carriers -- caiman, komodo, tokay and comet,
+ * with its comment saying "tegu uses a different part". Whatever the part is,
+ * the wiring is the same, and it is written down in the stock device tree
+ * overlays the bootloader still applies from the factory dtbo (fragment@15-17):
+ *
+ *   WLAN_EN      gph3-4, driven as a GPIO (function 1 = output)
+ *   PERST        gph3-0
+ *   WL_HOST_WAKE gpa5-3, function 15, pulled up
+ *   WL_DEV_WAKE  gph3-5
+ *   wlan ch-num  1          -> this PCIe channel
+ *   max-link-speed 2        -> trained at Gen2, not the SoC's Gen4
+ *
+ * The GPIO properties below are the names mainline's brcmfmac and the zuma
+ * PCIe host driver actually read: brcmfmac finds WL_HOST_WAKE / WL_DEV_WAKE on
+ * the host controller node through the host bridge, because the endpoint has no
+ * node of its own, and pci-exynos drives wlan-reg-on-gpios for link
+ * enumeration. Nothing in mainline looks at the stock overlays' bcmdhd-style
+ * properties (pcie,wlan-gpio and the android,bcmdhd_wlan node), so those are
+ * deliberately not repeated here -- the out-of-tree dhd driver is not built.
+ */
+&pinctrl_hsi2 {
+	wlan_reg_on: wlan-reg-on-pins {
+		samsung,pins = "gph3-4";
+		samsung,pin-function = <1>;		/* output */
+		samsung,pin-pud = <0>;
+		samsung,pin-drv = <0>;
+		samsung,pin-con-pdn = <3>;
+		samsung,pin-pud-pdn = <0>;
+	};
+
+	wlan_dev_wake: wlan-dev-wake-pins {
+		samsung,pins = "gph3-5";
+		samsung,pin-function = <0>;		/* input */
+		samsung,pin-pud = <1>;
+		samsung,pin-drv = <0>;
+		samsung,pin-con-pdn = <3>;
+		samsung,pin-pud-pdn = <1>;
+	};
+};
+
+&pinctrl_far_alive {
+	wlan_host_wake: wlan-host-wake-pins {
+		samsung,pins = "gpa5-3";
+		samsung,pin-function = <0x0f>;
+		samsung,pin-pud = <1>;
+		samsung,pin-drv = <0>;
+		samsung,pin-con-pdn = <3>;
+		samsung,pin-pud-pdn = <1>;
+	};
+};
+
+&pcie_1_phy {
+	status = "okay";
+};
+
+&pcie_1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pcie1_clkreq &pcie1_perst &wlan_reg_on &wlan_host_wake &wlan_dev_wake>;
+	reset-gpios = <&gph3 0 GPIO_ACTIVE_HIGH>;		/* PERST */
+	wlan-reg-on-gpios = <&gph3 4 GPIO_ACTIVE_HIGH>;		/* WLAN_EN */
+	host-wake-gpios = <&gpa5 3 GPIO_ACTIVE_HIGH>;		/* WL_HOST_WAKE */
+	device-wake-gpios = <&gph3 5 GPIO_ACTIVE_HIGH>;		/* WL_DEV_WAKE */
+	max-link-speed = <2>;					/* Gen2 */
+	status = "okay";
 };

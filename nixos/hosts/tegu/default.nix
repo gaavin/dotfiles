@@ -35,6 +35,17 @@ let
     cp -rL ${pkgs.linux-firmware}/lib/firmware/arm/mali $out/lib/firmware/arm/
   '';
 
+  # Wi-Fi firmware for the Broadcom combo chip the Wi-Fi side of the device
+  # tree brings up. linux-firmware has nothing for this part, so the blobs are
+  # checked in beside this file -- see ./wifi-firmware/README.md for where they
+  # came from and why they are named this way.
+  wifi-firmware = pkgs.runCommand "tegu-wifi-firmware" { } ''
+    mkdir -p $out/lib/firmware/brcm
+    cp ${./wifi-firmware}/brcmfmac4390b1-pcie.bin $out/lib/firmware/brcm/
+    cp ${./wifi-firmware}/brcmfmac4390b1-pcie.clm_blob $out/lib/firmware/brcm/
+    cp ${./wifi-firmware}/brcmfmac4390b1-pcie.txcap_blob $out/lib/firmware/brcm/
+  '';
+
   # Seeded into max's ~/.config (see below). It is a plain file in the store
   # rather than an environment.etc entry so that the copy made from it is a
   # plain file too -- see the note at systemd.services.tegu-kwinrc.
@@ -167,7 +178,7 @@ in
     # cooling device, and the g3d-thermal zone's power_allocator then calls
     # devfreq_cooling_get_requested_power() on the freed devfreq -- a panic at
     # 5 s that panic=0 leaves spinning on the panel and UART.
-    firmware = [ mali-firmware ];
+    firmware = [ mali-firmware wifi-firmware pkgs.wireless-regdb ];
     enableRedistributableFirmware = false;
     graphics.enable = true;
     bluetooth.enable = false;
