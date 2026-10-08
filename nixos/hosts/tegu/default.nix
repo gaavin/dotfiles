@@ -20,10 +20,29 @@ let
     mkdir -p $out/bin
     ln -s ${pkgs.busybox}/bin/busybox $out/bin/devmem
   '';
+
+  # Panthor's CSF firmware, and only that. linux-firmware carries it as
+  #   lib/firmware/arm/mali/arch<major>.<minor>/mali_csffw.bin
+  # with several of the arch directories symlinked to one blob, so -L is what
+  # makes every arch a real file; the buildEnv behind hardware.firmware then
+  # compresses each into the .zst that FW_LOADER_COMPRESS_ZSTD wants.
+  #
+  # Not the whole of linux-firmware: panthor is the only driver on this board
+  # that can use firmware yet, and installing all of it would let unrelated
+  # drivers probe further than the device tree describes.
+  mali-firmware = pkgs.runCommand "mali-csf-firmware" { } ''
+    mkdir -p $out/lib/firmware/arm
+    cp -rL ${pkgs.linux-firmware}/lib/firmware/arm/mali $out/lib/firmware/arm/
+  '';
 in
 {
   nixpkgs.hostPlatform = "aarch64-linux";
   networking.hostName = "tegu";
+
+  # linux-firmware is unfreeRedistributableFirmware. Only that one package is
+  # wanted (see mali-firmware above), so allow it by name rather than turning
+  # on hardware.enableRedistributableFirmware and pulling in the whole tree.
+  nixpkgs.config.allowUnfreePredicate = pkg: lib.hasPrefix "linux-firmware" (lib.getName pkg);
 
   boot = {
     # ./cross-kernel.nix overrides this with an x86_64-built kernel
@@ -93,6 +112,19 @@ in
       includeDefaultModules = false;
       availableKernelModules = [ ];
       kernelModules = [ ];
+
+      # Panthor is built into the kernel and probes at device_initcall, i.e.
+      # before the rootfs is mounted, so its firmware has to be in this
+      # initramfs and not merely on the system. The paths are given without
+      # the extension because modules-closure.sh tries ".zst" itself.
+      extraFirmwarePaths = [
+        "arm/mali/arch10.8/mali_csffw.bin"
+        "arm/mali/arch10.10/mali_csffw.bin"
+        "arm/mali/arch10.12/mali_csffw.bin"
+        "arm/mali/arch11.8/mali_csffw.bin"
+        "arm/mali/arch12.8/mali_csffw.bin"
+        "arm/mali/arch13.8/mali_csffw.bin"
+      ];
     };
 
     # The root image is populated by make-ext4-fs, which leaves a store
@@ -121,7 +153,13 @@ in
   zramSwap.enable = true;
 
   hardware = {
-    # Nothing is loaded from linux-firmware until a driver can use it
+    # Panthor is the one driver here that can use firmware, so it gets exactly
+    # its own blob and nothing else from linux-firmware. Without it the GPU
+    # probe fails *after* panthor_devfreq_init() has registered a devfreq
+    # cooling device, and the g3d-thermal zone's power_allocator then calls
+    # devfreq_cooling_get_requested_power() on the freed devfreq -- a panic at
+    # 5 s that panic=0 leaves spinning on the panel and UART.
+    firmware = [ mali-firmware ];
     enableRedistributableFirmware = false;
     graphics.enable = true;
     bluetooth.enable = false;

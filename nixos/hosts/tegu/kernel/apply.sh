@@ -50,3 +50,22 @@ if grep -q b8g8r8x8 "$hdr"; then
 fi
 sed -i "/$anchor/a\\	{ \"b8g8r8x8\", 32, {8, 8}, {16, 8}, {24, 8}, {0, 0}, DRM_FORMAT_BGRX8888 }, \\\\" "$hdr"
 grep -q b8g8r8x8 "$hdr" || { echo "apply.sh: simplefb edit did not apply" >&2; exit 1; }
+
+# --- fuel gauge ----------------------------------------------------------
+# The gauge is fine and the driver still refuses to read it. Status.POR is
+# sticky -- nothing acknowledges it, so it stays set for the life of the boot
+# -- and the driver treats it as "the model is not loaded", which makes
+# capacity and state-of-charge return -ENODATA forever. Measured on the phone
+# with that bit set: RepSOC (0x07) read 0x63f3, i.e. 99%, and the model
+# registers at 0x80..0x9f were fully populated. So UPower saw a battery at 0%
+# with warning-level "action", ran its CriticalPowerAction (HybridSleep), and
+# the phone powered itself off ~25 s after userspace started, every boot.
+#
+# The patch gates on FStat.DNR instead -- the bit that actually means "the
+# data is not ready" -- and turns the misleading probe warning into a report
+# of Status/FStat/OCV0 that still catches a genuinely absent model.
+fg=drivers/power/supply/max77779_fg.c
+test -f "$fg"   # fail loudly if the shared tree moves or drops this driver
+patch -p1 < "$src"/max77779-fg-portable-state.patch
+grep -q "FStat.DNR says exactly that" "$fg" ||
+	{ echo "apply.sh: fuel gauge patch did not apply" >&2; exit 1; }
