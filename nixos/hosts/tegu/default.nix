@@ -201,6 +201,21 @@ in
     logind.settings.Login.HandlePowerKey = "ignore";
   };
 
+  # The mobile shell's QML (org.kde.plasma.private.mobileshell, which draws the
+  # home screen) imports org.kde.bluezqt for its Bluetooth indicator, but
+  # plasmashell is started by startplasma-wayland from plasma-workspace, whose
+  # wrapped environment only covers plasma-workspace's own closure. The module
+  # is therefore not on the QML import path, so the folio home screen
+  # containment fails to load -- the journal says
+  #   module "org.kde.bluezqt" is not installed
+  #   Could not set containment property on rootObject
+  # and the phone sits on a blank screen once the initial setup finishes. (The
+  # setup wizard is a standalone binary carrying its own environment, which is
+  # why it worked.) startplasmamobile sources /etc/profile before starting the
+  # shell, so a session variable reaches plasmashell.
+  environment.sessionVariables.QML_IMPORT_PATH =
+    lib.makeSearchPath "lib/qt-6/qml" [ pkgs.kdePackages.bluez-qt ];
+
   # The on-screen keyboard. KWin launches it from kwinrc's [Wayland]
   # InputMethod, and that value is a *path* to a desktop file whose Exec is the
   # keyboard command -- not the keyboard's name. Nothing set it, so the phone
