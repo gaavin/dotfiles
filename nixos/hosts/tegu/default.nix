@@ -34,6 +34,14 @@ let
     mkdir -p $out/lib/firmware/arm
     cp -rL ${pkgs.linux-firmware}/lib/firmware/arm/mali $out/lib/firmware/arm/
   '';
+
+  # Seeded into max's ~/.config (see below). It is a plain file in the store
+  # rather than an environment.etc entry so that the copy made from it is a
+  # plain file too -- see the note at systemd.services.tegu-kwinrc.
+  tegu-kwinrc = pkgs.writeText "tegu-kwinrc" ''
+    [Wayland]
+    InputMethod=${pkgs.kdePackages.plasma-keyboard}/share/applications/org.kde.plasma.keyboard.desktop
+  '';
 in
 {
   nixpkgs.hostPlatform = "aarch64-linux";
@@ -208,13 +216,31 @@ in
   # /etc/xdg/kwinrc does not reach KWin even though kreadconfig6 reports it
   # (KF6's KSharedConfig::openConfig no longer merges the system directories
   # the way the kreadconfig6 tool does), so it was set system-wide first and
-  # measured not to work. tmpfiles copies it in only when the file is absent,
-  # which seeds a fresh rootfs without clobbering a later choice made in the
-  # KCM.
-  environment.etc."tegu/kwinrc".text = ''
-    [Wayland]
-    InputMethod=${pkgs.kdePackages.plasma-keyboard}/share/applications/org.kde.plasma.keyboard.desktop
-  '';
+  # measured not to work.
+  #
+  # Seeded by a boot-time unit rather than tmpfiles' "C": "C" copies a
+  # symlinked source as a symlink, so the file it left in ~/.config pointed
+  # into the read-only store and KConfig refused to save over it (measured:
+  # kwriteconfig6 leaves a symlinked kwinrc untouched and writes fine to a
+  # regular one), which would have left that KCM unable to keep a change.
+  # Only written when absent, so a later choice made in the KCM survives.
+  systemd.services.tegu-kwinrc = {
+    description = "Seed max's kwinrc with the on-screen keyboard";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "display-manager.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      if [ ! -e /home/max/.config/kwinrc ]; then
+        install -d -m 0700 -o max -g users /home/max/.config
+        cp ${tegu-kwinrc} /home/max/.config/kwinrc
+        chown max:users /home/max/.config/kwinrc
+        chmod 0600 /home/max/.config/kwinrc
+      fi
+    '';
+  };
 
   systemd.tmpfiles.rules = [
     # /home/max itself is listed because tmpfiles creates any missing parent
@@ -222,7 +248,6 @@ in
     # it the home the phone logs in to would be root-owned.
     "d /home/max 0700 max users -"
     "d /home/max/.config 0700 max users -"
-    "C /home/max/.config/kwinrc 0600 max users - /etc/tegu/kwinrc"
   ];
 
   networking.networkmanager.enable = true;
