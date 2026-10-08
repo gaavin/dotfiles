@@ -193,6 +193,38 @@ in
     logind.settings.Login.HandlePowerKey = "ignore";
   };
 
+  # The on-screen keyboard. KWin launches it from kwinrc's [Wayland]
+  # InputMethod, and that value is a *path* to a desktop file whose Exec is the
+  # keyboard command -- not the keyboard's name. Nothing set it, so the phone
+  # came up with no on-screen keyboard at all: KWin reported available=false
+  # (InputMethod::isAvailable() is just "is a command configured") and Plasma
+  # Mobile's shell, which only asks KWin to show and hide the panel, had
+  # nothing to show. plasma-keyboard is the Plasma 6 keyboard and carries
+  # X-KDE-Wayland-VirtualKeyboard=true, which is the marker KWin's own
+  # Virtual Keyboard KCM looks for; maliit-keyboard stays installed so it can
+  # still be chosen there.
+  #
+  # It has to go in the *user's* kwinrc, which is what that KCM writes:
+  # /etc/xdg/kwinrc does not reach KWin even though kreadconfig6 reports it
+  # (KF6's KSharedConfig::openConfig no longer merges the system directories
+  # the way the kreadconfig6 tool does), so it was set system-wide first and
+  # measured not to work. tmpfiles copies it in only when the file is absent,
+  # which seeds a fresh rootfs without clobbering a later choice made in the
+  # KCM.
+  environment.etc."tegu/kwinrc".text = ''
+    [Wayland]
+    InputMethod=${pkgs.kdePackages.plasma-keyboard}/share/applications/org.kde.plasma.keyboard.desktop
+  '';
+
+  systemd.tmpfiles.rules = [
+    # /home/max itself is listed because tmpfiles creates any missing parent
+    # directory as root, and this runs before the display manager -- without
+    # it the home the phone logs in to would be root-owned.
+    "d /home/max 0700 max users -"
+    "d /home/max/.config 0700 max users -"
+    "C /home/max/.config/kwinrc 0600 max users - /etc/tegu/kwinrc"
+  ];
+
   networking.networkmanager.enable = true;
   # Debug network over the USB-C port (10.42.0.1 on the phone) once the
   # DWC3 controller is described; fails harmlessly until then.
