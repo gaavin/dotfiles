@@ -1,0 +1,493 @@
+# bcm4383A3 WLBGA iPA/iLNA - TG3 - 12.08.2023
+#********************SUMMARY********************
+#Board Name: bcm94383a3w1007TG4
+#SSID: 0x0b07
+#macmid: 0x05b3
+#Successfully made SSID entry in sromdefs.tcl.
+#Successfully made macmid entry in sromdefs.tcl.
+#Successfully made SSID entry in tblssid.py.
+#*************************************************
+
+# $ Copyright Broadcom $
+#
+#
+# <<Broadcom-WL-IPTag/Vendor1007>>
+#
+#
+#
+NVRAMRev=$Rev: 884954 $
+#
+# All svn keyword entries must come before this comment. Any change within four
+# lines of an svn keyword line will cause patching errors in precommit.
+#
+sromrev=11
+boardrev=0x1204
+boardtype=0x0b07
+boardflags=0x00400201
+boardflags2=0x00000000
+boardflags3=0x40002100
+
+
+#Regulatory specific
+ccode=0
+regrev=0
+
+# Board specific
+vendid=0x14e4
+devid=0x4449
+manfid=0x2d0
+antswitch=0
+pdgain5g=0
+pdgain2g=0
+
+# Ant related
+aa2g=2
+aa5g=2
+agbg0=0
+aga0=0
+ag6ga0=0
+agbg1=0
+aga1=0
+ag6ga1=0
+
+# Feature flags
+femctrl=17
+subband6gver=0x1
+subband5gver=0x4
+
+# RX gain related
+rxgains2gelnagaina0=0
+rxgains2gtrisoa0=0
+rxgains2gtrelnabypa0=1
+rxgains5gelnagaina0=0
+rxgains5gtrisoa0=0
+rxgains5gtrelnabypa0=1
+rxgains5gmelnagaina0=0
+rxgains5gmtrisoa0=0
+rxgains5gmtrelnabypa0=1
+rxgains5ghelnagaina0=0
+rxgains5ghtrisoa0=0
+rxgains5ghtrelnabypa0=1
+#Feloss related
+rxgains2gfelossa0=1
+rxgains5gfelossa0=1
+rxgains5gmfelossa0=1
+rxgains5ghfelossa0=1
+felossTx2ga0=0,0,0,0,0,0,0,0,0,0,0,0,0,0
+felossRx2ga0=0,0,0,0,0,0,0,0,0,0,0,0,0,0
+felossTx5ga0=0,0,0,0
+felossRx5ga0=0,0,0,0
+felossTx6ga0=0,0,0,0,0,0
+felossRx6ga0=0,0,0,0,0,0
+rxgains2gelnagaina1=0
+rxgains2gtrisoa1=0
+rxgains2gtrelnabypa1=1
+rxgains5gelnagaina1=0
+rxgains5gtrisoa1=0
+rxgains5gtrelnabypa1=1
+rxgains5gmelnagaina1=0
+rxgains5gmtrisoa1=0
+rxgains5gmtrelnabypa1=1
+rxgains5ghelnagaina1=0
+rxgains5ghtrisoa1=0
+rxgains5ghtrelnabypa1=1
+#Feloss related
+rxgains2gfelossa1=1
+rxgains5gfelossa1=1
+rxgains5gmfelossa1=1
+rxgains5ghfelossa1=1
+felossTx2ga1=0,0,0,0,0,0,0,0,0,0,0,0,0,0
+felossRx2ga1=0,0,0,0,0,0,0,0,0,0,0,0,0,0
+felossTx5ga1=0,0,0,0
+felossRx5ga1=0,0,0,0
+felossTx6ga1=0,0,0,0,0,0
+felossRx6ga1=0,0,0,0,0,0
+
+# RSSI related
+rssi_bimodal_fix=1
+rssi_cal_rev=1
+rxgaincal_rssical=1
+gain_cal_temp=31
+rssi_cal_freq_grp_2g=0x08,0x01,0x91,0x2a,0x23,0xb3,0xc4
+
+rssi_delta_2gb0=2,11,9,9,2,11,9,9,3,12,7,6,3,12,7,6											
+rssi_delta_2gb1=5,11,6,9,5,11,6,9,5,9,6,6,5,9,6,6											
+rssi_delta_2gb2=5,10,8,7,5,10,8,7,2,11,6,6,2,11,6,6											
+rssi_delta_2gb3=7,15,10,6,7,15,10,6,2,10,7,8,2,10,7,8											
+rssi_delta_2gb4=8,14,12,12,8,14,12,12,5,10,7,8,5,10,7,8											
+rssi_delta_5gl=15,13,22,13,19,8,22,13,18,-6,25,18,12,9,18,12,17,3,17,8,15,11,15,20											
+rssi_delta_5gml=9,7,17,5,19,2,17,6,16,-9,22,13,6,5,14,3,11,3,16,-5,12,0,17,9											
+rssi_delta_5gmu=13,8,20,9,17,3,23,11,16,-5,23,18,9,1,16,4,16,0,15,1,13,-1,19,9											
+rssi_delta_5gh=13,10,20,8,24,5,21,12,20,-6,26,17,10,1,18,4,17,0,16,1,17,0,17,15											
+rssi_delta_6gb0=21,11,22,6,18,5,22,8,18,-4,25,17,11,4,17,0,15,1,18,-4,14,8,21,9											
+rssi_delta_6gb1=21,11,26,15,24,5,26,15,24,0,31,21,21,7,22,8,19,3,22,7,20,-7,26,16											
+rssi_delta_6gb2=28,14,29,16,27,6,31,13,26,0,33,21,24,10,25,11,22,2,27,8,21,-8,29,17											
+rssi_delta_6gb3=31,15,33,21,30,11,35,16,30,4,36,26,29,14,30,18,27,8,32,13,26,-1,33,23											
+rssi_delta_6gb4=28,19,37,21,32,13,37,21,32,4,40,26,31,15,33,18,29,11,35,13,26,0,38,23											
+rssi_delta_6gb5=38,18,42,27,37,12,41,26,26,9,41,28,34,20,42,24,34,7,40,25,29,0,38,23
+
+tone_to_pkt_rssi_offset=0,0,4,4,12,12,0,0,4,4,12,12
+slice/1/tone_to_pkt_rssi_offset=0,0,0,0
+
+rxgain_tempcoeff2g_sub=0,0,0,0,0
+rxgain_tempcoeff5gl=0
+rxgain_tempcoeff5gml=0
+rxgain_tempcoeff5gmu=0
+rxgain_tempcoeff5gh=0
+rxgain_tempcoeff6g_sub=0,0,0,0,0,0
+rxgain_tempcoeff2g_sub_elnaoff=0,0,0,0,0
+rxgain_tempcoeff5gl_elnaoff=0
+rxgain_tempcoeff5gml_elnaoff=0
+rxgain_tempcoeff5gmu_elnaoff=0
+rxgain_tempcoeff5gh_elnaoff=0
+rxgain_tempcoeff6g_sub_elnaoff=0,0,0,0,0,0
+
+# MISC Core related
+siso_coremask=1
+bandcap=7
+slice/1/bandcap=1
+txchain=3
+slice/1/txchain=1
+rxchain=3
+slice/1/rxchain=1
+nocrc=1
+otpimagesize=502
+xtalfreq=59970
+mac_clkgating=1
+cckdigfilttype=4
+#papr params from 4388
+
+paprdis=1
+
+# energy detect threshold
+ed_thresh2g=-63
+ed_thresh5g=-63
+ed_thresh6g=-71,-71
+# energy detect threshold for EU
+eu_edthresh2g=-57
+eu_edthresh5g=-65
+eu_edthresh6g=-71,-63
+
+#fdss
+fdss_level_5g=9,9
+fdss_level_11ax_5g=0,0
+fdss_level_2g=4,4
+fdss_level_11ax_2g=0,0
+
+# --- PAPD Cal related params ----
+papd_skip=0
+txwbpapden=3 # 0:NBPAPD 1:WBPAPD
+epsilonoff_5g20_c0=0,1,1,1
+epsilonoff_5g40_c0=2,1,2,1
+epsilonoff_5g80_c0=0,1,-1,1
+epsilonoff_2g20_c0=0
+epsilonoff_5g20_c1=0,2,0,-2
+epsilonoff_5g40_c1=2,2,0,0
+epsilonoff_5g80_c1=1,2,1,0
+epsilonoff_2g20_c1=0
+epsilonoff_6g20_c0=2,2,0,1,1,1
+epsilonoff_6g40_c0=3,1,2,3,3,2
+epsilonoff_6g80_c0=3,2,2,1,4,2
+epsilonoff_6g20_c1=1,0,2,2,1,0
+epsilonoff_6g40_c1=2,2,2,3,1,2
+epsilonoff_6g80_c1=3,1,1,3,2,3
+
+# Tempsense Related
+tempoffset=27
+rawtempsense=0x1ff
+phycal_tempdelta=15
+temps_period=15
+temps_hysteresis=0xf
+#TVPM related
+tvpm_dc_temp_threshold=100,90,80
+tvpm_dc_vbat_temp=25,25,25,50,50,50,75,75,75,100,100,100
+tvpm_dc_cltm=100,100,90,90,80,80,70,70,60,60,50,50,40,40,30,30,20,20,1,1
+
+# OLPC
+disable_olpc=0
+olpc_thresh5g=48
+olpc_anchor5g=56
+olpc_thresh6g=48
+olpc_anchor6g=56
+olpc_thresh2g=64
+olpc_anchor2g=64
+olpc_thresh2g_hi=0x7f7f
+hwolpc_offset_c0=0x00000000,0x000000fd,0x000000fe,0x000000fe,0x010102fe
+hwolpc_offset_c1=0x00000000,0xfefefefe,0xfefefefe,0xffffffff,0xffffffff
+hwolpc_offset6g_c0=0xfdfdfdfd,0xfdfdfdfd,0xfefefefe,0xfefefefe,0xfefefefe,0xfdfdfdfd
+hwolpc_offset6g_c1=0xfefefefe,0xfefefefe,0xfefefefe,0xfefefefe,0xfefefefe,0xfefefefe
+
+# PA and tssi related
+extpagain5g=2
+extpagain2g=2
+tssipos2g=1
+tssipos5g=1
+tworangetssi2g=0
+tworangetssi5g=0
+slice/1/extpagain5g=2
+slice/1/extpagain2g=2
+slice/1/tworangetssi2g=0
+slice/1/tworangetssi5g=0
+paparambwver=3
+
+AvVmid_c0=3,120,3,95,3,95,2,120,2,120
+AvVmid_c1=3,120,3,90,3,90,2,115,2,115
+AvVmid_6g_c0=3,93,3,94,5,61,4,74,4,79,3,102
+AvVmid_6g_c1=4,87,4,84,5,72,5,65,5,72,4,91
+
+##### paparams
+# 2G high power range
+pa2ga0=0xff33,0x19a6,0xfc4a
+pa2ga1=0xff2c,0x1906,0xfc67
+
+# 5G high power range
+pa5ga0=0xff20,0x15f6,0xfcb5,0xff38,0x166e,0xfcc6,0xff25,0x1797,0xfc85,0xff29,0x17bd,0xfc87
+pa5ga1=0xff0e,0x159e,0xfca2,0xff01,0x154b,0xfc9f,0xfef1,0x1660,0xfc6b,0xff13,0x1715,0xfc78
+
+# 6G high power range
+pa6ga0=0xff32,0x16da,0xfcac,0xff12,0x161d,0xfcab,0xff2a,0x1508,0xfcf5,0xff0b,0x14b7,0xfcd4,0xff09,0x144b,0xfce8,0xff04,0x13df,0xfcfb
+pa6ga1=0xff35,0x1556,0xfd01,0xff42,0x156c,0xfd0f,0xff32,0x1458,0xfd2a,0xfefe,0x12b1,0xfd19,0xff08,0x1235,0xfd41,0xff1c,0x136d,0xfd26
+
+# Max power and offsets
+powoffs2gtna0=1,2,1,1,0,2,3,1,2,2,1,2,1,-4
+powoffsccktna0=-1,0,-1,-1,-2,0,0,-1,0,0,-2,0,-1,-4
+powoffs2gtna1=-2,0,0,-1,0,0,-1,0,0,0,-1,-2,-2,-6
+powoffsccktna1=-5,-2,-2,-3,-2,-2,-3,-2,-2,-2,-3,-4,-4,-8
+
+maxp2ga0=80
+maxp2ga1=80
+maxp5ga0=74,76,76,76
+maxp5ga1=74,76,76,76
+maxp6ga0=74,74,74,74,74,70
+maxp6ga1=74,74,74,74,74,70
+cckpwroffset0=4
+cckpwroffset1=4
+pdoffset40ma0=0x1221
+pdoffset40ma1=0x2102
+pdoffset80ma0=0x2211
+pdoffset80ma1=0x2001
+pdoffset6g40ma0=0x211122
+pdoffset6g40ma1=0x114422
+pdoffset6g80ma0=0x111112
+pdoffset6g80ma1=0x212311
+pdoffset20mRU_c0=3,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0
+pdoffset20mRU_c1=1,0,0,0,0,0,0,0,4,0,0,0,0,0,0,0
+pdoffset40mRU_c0=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset40mRU_c1=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset80mRUset1_c0=2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset80mRUset1_c1=2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset80mRUset2_c0=0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0
+pdoffset80mRUset2_c1=0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0
+pdoffset6g20mRU_c0=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset6g20mRU_c1=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset6g40mRU_c0=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset6g40mRU_c1=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset6g80mRUset1_c0=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset6g80mRUset1_c1=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pdoffset6g80mRUset2_c0=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0
+pdoffset6g80mRUset2_c1=0,0,-5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-2,0
+cckbw202gpo=0x0000
+cckbw20ul2gpo=0x4400
+dot11agofdmhrbw202gpo=0x3210
+mcsbw202gpo=0x75432111
+mcs1024qam2gpo=0xFE
+ofdmlrbw202gpo=0x0000
+
+mcsbw205glpo=0xCA864210
+mcsbw205gmpo=0xB9754210
+mcsbw205ghpo=0xA8754210
+mcsbw405glpo=0xDC987654
+mcsbw405gmpo=0xB9765543
+mcsbw405ghpo=0xA8654433
+mcsbw805glpo=0xDCA87654
+mcsbw805gmpo=0xB9765543
+mcsbw805ghpo=0xA8654443
+mcs1024qam5glpo=0xFFFFFF
+mcs1024qam5gmpo=0xEEEEEE
+mcs1024qam5ghpo=0xDDDDDD
+mcslr5glpo=0x0
+mcslr5gmpo=0x0
+mcslr5ghpo=0x0
+
+# 5G power offset per channel for band edge channel
+powoffs5g20mtna0=0,0,0,0,0,0,0
+powoffs5g40mtna0=0,0,0,0,0
+powoffs5g80mtna0=0,0,0,0,0
+powoffs5g20mtna1=0,0,0,0,0,0,0
+powoffs5g40mtna1=0,0,0,0,0
+powoffs5g80mtna1=0,0,0,0,0
+## 6G related PPR params
+mcsbw206gb1po=0x97543200
+mcsbw406gb1po=0x97653222
+mcsbw806gb1po=0x97654222
+mcs1024qam6gb1po=0xCCCCCC
+
+mcsbw206gb2po=0x97543200
+mcsbw406gb2po=0x97653222
+mcsbw806gb2po=0x97654222
+mcs1024qam6gb2po=0xCCCCCC
+
+mcsbw206gb3po=0xA8653200
+mcsbw406gb3po=0xA8764222
+mcsbw806gb3po=0xA8765222
+mcs1024qam6gb3po=0xDDDDDD
+
+mcsbw206gb4po=0xA8653200
+mcsbw406gb4po=0xA8764222
+mcsbw806gb4po=0xA8765222
+mcs1024qam6gb4po=0xDDDDDD
+
+mcsbw206gb5po=0xA8653200
+mcsbw406gb5po=0xA8764222
+mcsbw806gb5po=0xA8765222
+mcs1024qam6gb5po=0xDDDDDD
+
+mcsbw206gb6po=0xB9765311
+mcsbw406gb6po=0xA9765422
+mcsbw806gb6po=0xA8654222
+mcs1024qam6gb6po=0xEEEEEE
+
+## ULOFDMA Board limit PPRs for 2G20 ##
+ruppr2g20bpsk=0x00008421
+ruppr2g20qpsk=0x00008421
+ruppr2g20qam16=0x00008421
+ruppr2g20qam64=0x00021084
+ruppr2g20qam256=0x00039ce7
+ruppr2g20qam1024=0x5294A
+## ULOFDMA Board limit PPRs for 5G20 ##
+ruppr5g20bpsk=0x08200000
+ruppr5g20qpsk=0x08200000
+ruppr5g20qam16=0x08210842
+ruppr5g20qam64=0x08239ce7
+ruppr5g20qam256=0x0825ad6b
+ruppr5g20qam1024=0x082739ce
+## ULOFDMA Board limit PPRs for 5G40 ##
+ruppr5g40bpsk=0x08318c63
+ruppr5g40qpsk=0x08318c63
+ruppr5g40qam16=0x085294a5
+ruppr5g40qam64=0x08739ce7
+ruppr5g40qam256=0x08b5ad6b
+ruppr5g40qam1024=0x08e739ce
+## ULOFDMA Board limit PPRs for 5G80 ##
+ruppr5g80bpsk=0x0c318c63
+ruppr5g80qpsk=0x0c318c63
+ruppr5g80qam16=0x10421084
+ruppr5g80qam64=0x1c739ce7
+ruppr5g80qam256=0x2cb5ad6b
+ruppr5g80qam1024=0x38E739CE
+
+## ULOFDMA Board limit PPRs for 6G20 ##
+ruppr6g20bpsk=0x04100000
+ruppr6g20qpsk=0x04100000
+ruppr6g20qam16=0x04110842
+ruppr6g20qam64=0x04110842
+ruppr6g20qam256=0x041318c6
+ruppr6g20qam1024=0x0416b5ad
+## ULOFDMA Board limit PPRs for 6G40 ##
+ruppr6g40bpsk=0x04210842
+ruppr6g40qpsk=0x04210842
+ruppr6g40qam16=0x04210842
+ruppr6g40qam64=0x04739ce7
+ruppr6g40qam256=0x04a5294a
+ruppr6g40qam1024=0x04d6b5ad
+## ULOFDMA Board limit PPRs for 6G80 ##
+ruppr6g80bpsk=0x08210842
+ruppr6g80qpsk=0x08210842
+ruppr6g80qam16=0x08210842
+ruppr6g80qam64=0x1c739ce7
+ruppr6g80qam256=0x28a5294a
+ruppr6g80qam1024=0x34d6b5ad
+
+#OOB params
+#device_wake_opt=1
+host_wake_opt=0
+#ds_hc_enable=0
+
+# SWCTRL Related
+swctrlmap_5g=0x00000000,0x00000000,0x00000000,0x00000000,0x3ff
+swctrlmapext_5g=0x00000000,0x00000000,0x00000000,0x00000000,0x000
+swctrlmap_6g=0x00000000,0x00000000,0x00000000,0x00000000,0x3ff
+swctrlmapext_6g=0x00000000,0x00000000,0x00000000,0x00000000,0x000
+
+swctrlmap_2g=0x00000101,0x00000101,0x00000101,0x00000000,0x3ff
+swctrlmapext_2g=0x00000000,0x00000000,0x00000000,0x00000000,0x000
+
+#placeholder clb params to get around TCL init errors about missing clb mask when mask init proc is called.. this will need review later
+# 4383 is not bandlocked (either band on either slice so we need to define more clb params)
+# slice0=Main, slice1=Aux
+clb5gslice0core0=0x00
+clb5gslice0core1=0x00
+clb2gslice0core0=0x01
+clb2gslice0core1=0x01
+
+clb5gslice1core0=0x00
+clb2gslice1core0=0x01
+clb2gslice1core1=0x01
+
+###Comment out BT section for initial bringup
+#BT Coex
+btc_mode=1
+#btc_params82=0x1a0
+# BT shared ant configuration
+btc_prisel_ant_mask=0x0
+clb_swctrl_smask_ant0=0x3ff
+clb_swctrl_smask_ant1=0x3ff
+
+# UWB Coex
+uwbcx_en=1
+uwbcx_gpio_input=0x04
+uwbcx_coex_bitmap_5g=0x03ff,0x07ff,0x7f
+uwbcx_coex_bitmap_6g=0xffff,0xffff,0xffff,0x07ff
+
+# Fem bkoff param
+rxgains2gbkoffa0=0
+rxgains5gbkoffa0=0
+rxgains2gbkoffa1=0
+rxgains5gbkoffa1=0
+
+# Kvalues for PHYTS method, in ps resolution
+phyts_5g80_kval=3328,2615,2076,2425,1801,2351,0
+phyts_5g40_kval=4465,134,3803,2411,749,1740,2890,1274,2874,1941,285,2460,0,0
+phyts_5g20_kval=3426,3583,-1309,-648,1488,1995,1585,1336,-340,-1428,1229,1056,3004,1173,-2151,837,-640,-809,-694,-1388,-2834,1338,-151,45,-2822,0,0,0
+phyts_2g20_kval=0,0,0,0,0,0,0,0,0,0,0,0,0,0
+# Base K Values (For the VHT case 5G80/40/20/2G20)
+proxd_basekival=35784,34710,36493,36555
+proxd_basektval=35784,34710,36493,36555
+# Offsets across channels (Upper nibble for target, lower nibble for initiator - saved in hex)
+proxd_80mkval=0x0f0f,0x2929,0x1111,0x0909,0x0000,0x1111,0
+proxd_40mkval=0x1e1e,0x1a1a,0x1414,0x1616,0x0000,0x0303,0x0202,0x0101,0x0404,0x0303,0x0e0e,0x4747,0,0
+proxd_20mkval=0x4e4e,0x2929,0x3232,0x3333,0x2323,0x2e2e,0x3232,0x1f1f,0x1515,0x1b1b,0x0000,0x1c1c,0x1616,0x0808,0x0a0a,0x0f0f,0x0101,0x0505,0x0a0a,0x5a5a,0x1f1f,0x1f1f,0x2b2b,0x1919,0x6363,0,0,0
+proxd_2gkval=25,24,4,4,12,15,16,20,0,3,15,20,31,0
+# Offsets across frame formats @ Initiator
+# Only for non-VHT frame (Leg6, Leg non-6, mcs0, non-mcs0)
+# Delta between the base values are adjusted here
+proxdi_rate80m=2700,7950,0,0
+proxdi_rate40m=1645,7542,11,9
+proxdi_rate20m=2307,7717,80,74
+proxdi_rate2g=2311,7762,79,74
+proxdi_ack=0,0,0,0
+# Offsets across frame formats @ Responder
+proxdt_rate80m=2700,7950,0,0
+proxdt_rate40m=1645,7542,11,9
+proxdt_rate20m=2307,7717,80,74
+proxdt_rate2g=2311,7762,79,74
+proxdt_ack=0,0,0,0
+# Offsets for sub-bands (VHT, Leg6, Leg non-6, mcs0, non-mcs0)
+proxd_sub80m40m=978,-70,656,0,0
+proxd_sub80m20m=1640,86,1340,0,0
+proxd_sub40m20m=186,-317,150,181,177
+
+
+# Base K Values (For the VHT case 5G80/40/20/2G20)
+slice/1/proxd_basekival=0,0,0,36373
+slice/1/proxd_basektval=0,0,0,36373
+# Offsets across channels (Upper nibble for target, lower nibble for initiator - saved in hex)
+slice/1/proxd_2gkval=30,21,8,8,11,17,18,20,0,3,8,17,27,0
+# Offsets across frame formats @ Initiator
+# Only for non-VHT frame (Leg6, Leg non-6, mcs0, non-mcs0)
+# Delta between the base values are adjusted here
+slice/1/proxdi_rate2g=2236,7755,74,75
+# Offsets across frame formats @ Responder
+slice/1/proxdt_rate2g=2236,7755,74,75
+dynsar_fcc_rev=2
+cck_onecore_tx=1

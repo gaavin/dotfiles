@@ -42,11 +42,20 @@ let
   # this way. The name has to be this one: kernel/apply.sh maps the chip to
   # BRCMF_FW_CLM_DEF(4383A3, "brcmfmac4383a3-pcie"), and brcmfmac appends
   # ".bin"/".clm_blob"/".txcap_blob" to it.
+  #
+  # The .txt is the board NVRAM, which the driver asks for by the same stem and
+  # which the boot log reported missing:
+  #   brcmf_pcie_download_fw_nvram No matching NVRAM file found
+  #   brcm/brcmfmac4383a3-pcie.txt
+  # Without it the dongle boots with no board parameters and aborts at a fixed
+  # point (~7.7 s of firmware uptime, pc 72b34a) before it answers a single
+  # dcmd. Provenance and the alternate vendor variant: wifi-firmware/README.md.
   wifi-firmware = pkgs.runCommand "tegu-wifi-firmware" { } ''
     mkdir -p $out/lib/firmware/brcm
     cp ${./wifi-firmware}/brcmfmac4383a3-pcie.bin $out/lib/firmware/brcm/
     cp ${./wifi-firmware}/brcmfmac4383a3-pcie.clm_blob $out/lib/firmware/brcm/
     cp ${./wifi-firmware}/brcmfmac4383a3-pcie.txcap_blob $out/lib/firmware/brcm/
+    cp ${./wifi-firmware}/brcmfmac4383a3-pcie.txt $out/lib/firmware/brcm/
     # wireless-regdb itself ships these uncompressed; the .zst copies come
     # from the compressed firmware env, and this kernel's loader cannot read
     # those -- measured: with the search path pointed straight at the firmware
@@ -173,6 +182,12 @@ in
         "brcm/brcmfmac4383a3-pcie.bin"
         "brcm/brcmfmac4383a3-pcie.clm_blob"
         "brcm/brcmfmac4383a3-pcie.txcap_blob"
+        # The board NVRAM. brcmfmac asks for it by the same stem, from the
+        # same workqueue at the same 1.5 s, so it needs the same treatment:
+        # leaving it only in the system firmware env would fail exactly the
+        # way the comment above records, and would look like "the NVRAM does
+        # not help" rather than "the NVRAM was not reachable".
+        "brcm/brcmfmac4383a3-pcie.txt"
         "regulatory.db"
         "regulatory.db.p7s"
       ];
