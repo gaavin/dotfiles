@@ -672,10 +672,28 @@ open on this port.
   all, so nothing describes how a device-initiated access reaches DRAM. The
   vendor driver configures that itself (its node has an `"ia"` register region,
   `use-ia`/`use-sysmmu` flags, and a `samsung,pcie-sysmmu` at `131c0000` that
-  stock Android leaves disabled); mainline's `pci-exynos.c` does neither. Next
-  experiments, in order: restrict the endpoint's DMA mask to 32 bits so its
-  buffers land in the low bank, then give the RC an inbound window (or bring up
-  the sysmmu).
+  stock Android leaves disabled); mainline's `pci-exynos.c` does neither.
+
+Two of those candidates have since been tested, with `kernel/apply.sh`'s
+`brcmfmac-tegu-dma-knobs.patch` in the kernel. Both knobs are read at probe
+time, so each run is "write the parameter, re-bind the PCI device" over ssh:
+
+| `dma_mask_bits` | `force_tcm_idx` | result |
+| --- | --- | --- |
+| 64 | 0 | the original failure (AXI timeout on the first command) |
+| 32 | 0 | **identical** -- so the buffers' address range is not it |
+| 64 | 1 | **two commands further**: revision info and the CLM blob now succeed, then `Retrieving cur_etheraddr failed, -5` and the same trap |
+
+`force_tcm_idx` skips `BRCMF_PCIE_SHARED_DMA_INDEX`, i.e. it keeps the ring
+*indices* in dongle RAM instead of host RAM. That the driver gets further
+without them says the dongle *can* read the ring items out of host memory --
+it is the host-resident index feature that breaks first. A write/read-back
+sweep of the whole range from userspace (34 addresses at 64 KiB steps, windows
+`0x400000` and `0x800000`) also finds no hole, so every address the dongle
+traps on is writable through BAR1. The remaining question is why a
+device-initiated access to a *host* address is what dies -- the vendor's need
+for an `"ia"` region and a BAR2 window (`dhdpcie_setbar2win`) looks like the
+place to look next.
 
 The devcoredump (`/sys/class/devcoredump/devcdN/data`, the raw 2.2 MB of
 dongle RAM at `rambase`) is what made this readable: the real shared-info

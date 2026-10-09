@@ -113,3 +113,19 @@ grep -q "BRCM_CC_4383_CHIP_ID, 0xFFFFFFFF, 4383A3" "$wifi/brcmfmac/pcie.c" ||
 	{ echo "apply.sh: brcmfmac firmware mapping patch did not apply" >&2; exit 1; }
 grep -q "BRCM_PCIE_4383_DEVICE_ID, WCC_SEED" "$wifi/brcmfmac/pcie.c" ||
 	{ echo "apply.sh: brcmfmac pci table patch did not apply" >&2; exit 1; }
+
+# --- Wi-Fi: device->host DMA test knobs ----------------------------------
+# Where the 4383 stops is the other direction: the dongle boots, then traps the
+# moment msgbuf puts its rings and indices in host memory, and the buffers the
+# host publishes are 64-bit coherent allocations (measured
+# h2d_w_idx_hostaddr = 0x91e0aa000) while nothing in the PCIe node describes a
+# device-initiated access to DRAM. Both knobs are read at probe time and the
+# driver is built in, so once this is in the kernel the whole set of values can
+# be swept from userspace -- write the parameter under
+# /sys/module/brcmfmac/parameters/, re-bind the PCI device -- instead of
+# rebuilding and reflashing for each one.
+patch -p1 < "$src"/brcmfmac-tegu-dma-knobs.patch
+grep -q "brcmf_pcie_dma_mask_bits" "$wifi/brcmfmac/pcie.c" ||
+	{ echo "apply.sh: dma mask knob patch did not apply" >&2; exit 1; }
+grep -q "brcmf_pcie_force_tcm_idx" "$wifi/brcmfmac/pcie.c" ||
+	{ echo "apply.sh: tcm index knob patch did not apply" >&2; exit 1; }
