@@ -1,0 +1,24 @@
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+@@ -1145,8 +1145,21 @@
+ 	if (!console->base_addr)
+ 		return;
+ 	addr = console->base_addr + BRCMF_CONSOLE_WRITEIDX_OFFSET;
+ 	newidx = brcmf_pcie_read_tcm32(devinfo, addr);
++	/* A dongle that has halted stops maintaining its console write index,
++	 * and that word then reads back as all-ones. The loop below only ends
++	 * when read_idx reaches newidx, and read_idx wraps at bufsize, so an
++	 * out-of-range newidx makes it re-read and re-print the whole buffer
++	 * forever. Measured on tegu after the BCM4383 traps: the console then
++	 * runs at the full line rate (~12 KB/s at 115200) and never stops,
++	 * which drowns the serial login prompt -- and once the dongle has
++	 * trapped, that console is the only way to reach the phone. A write
++	 * index that is merely stale is still in range, where the loop is
++	 * bounded by a single wrap, so only the impossible value is refused.
++	 */
++	if (newidx >= console->bufsize)
++		return;
+ 	while (newidx != console->read_idx) {
+ 		addr = console->buf_addr + console->read_idx;
+ 		ch = brcmf_pcie_read_tcm8(devinfo, addr);
+ 		console->read_idx++;

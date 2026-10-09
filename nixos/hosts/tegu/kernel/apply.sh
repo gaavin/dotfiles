@@ -154,6 +154,30 @@ patch -p1 < "$src"/brcmfmac-ctl-mb.patch
 grep -q "which mailbox mechanism it drives" "$wifi/brcmfmac/pcie.c" ||
 	{ echo "apply.sh: brcmfmac ctl-mailbox patch did not apply" >&2; exit 1; }
 
+# --- Wi-Fi: stop a dead dongle's console from flooding the UART -----------
+# brcmf_pcie_bus_console_read() loops "while (newidx != console->read_idx)"
+# and wraps read_idx at bufsize, so it terminates only while the firmware's
+# console write index is inside the buffer. Once the 4383 has trapped, that
+# word reads back as all-ones -- the same value the mailbox read returns --
+# which no wrapped read_idx can ever equal, so the loop re-reads and
+# re-prints the whole 8 KB buffer forever. brcmf_pcie_isr_thread() calls it
+# on every interrupt, so it then runs at the full line rate and never stops.
+#
+# This is what the ctl-mailbox fix above traded in. Before it, the driver
+# answered the garbage mailbox word by tearing down the dead dongle
+# (brcmf_pcie_remove at ~17 s), which stopped the poller; now the driver
+# stays bound and the console is saturated. Per-boot UART capture size, same
+# board and workload, is the measurement:
+#   pre-patch  boots 11/12/13:  205900 /  63029 /  91929 bytes
+#   post-patch boots 18/19/20: 7906197 / 2151401 / 1416745 bytes
+# The cost is not just bytes: the flood drowns the serial-getty prompt, and
+# with USB gadget access off the table that console is the only channel left
+# once the dongle has trapped. The guard refuses only the impossible value --
+# a stale but in-range write index still drains, bounded by a single wrap.
+patch -p1 < "$src"/brcmfmac-console-idx.patch
+grep -q "newidx >= console->bufsize" "$wifi/brcmfmac/pcie.c" ||
+	{ echo "apply.sh: brcmfmac console-index patch did not apply" >&2; exit 1; }
+
 # --- framebuffer: keep the panel blit inside the framebuffer --------------
 # This is not a Wi-Fi change; it is what makes the serial console usable, and
 # therefore what makes every later boot debuggable.
