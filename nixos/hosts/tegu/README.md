@@ -768,6 +768,29 @@ later `setpci` read of the RC's DBI at `0x1a0`/`0xb44` appears to have done the
 same. Use the UART for anything in that range, and prefer the driver's own
 paths to hand-rolled MMIO.
 
+**Separately: the console panics the phone, and it is not the MMIO.** Two
+"hangs" during this work turned out to be a panic that fires once the console
+draws after userspace is up -- which is exactly what logging in does:
+
+    memcpy_toio+0x44/0xc0 (P)
+    drm_fb_xrgb8888_to_bgrx8888+0x64/0xb0
+    drm_sysfb_plane_helper_atomic_update+0x160/0x1a0
+    drm_atomic_helper_commit_planes+0x100/0x340
+    drm_atomic_helper_commit_tail+0x74/0xf0
+    commit_tail+0x13c/0x1b0
+    commit_work+0x1c/0x30
+    Code: 8b060006 aa0103e4 aa0003e3 f8408485 (f9000065)
+    Kernel panic - not syncing: Oops: Fatal exception
+
+`drm_sysfb_plane_helper_atomic_update()` is this port's own path --
+`kernel/zumapro-bootfb.c` reserves the bootloader's buffer and hands it to
+simpledrm -- so that fault is a *store into the framebuffer*, not into dongle
+RAM, and it is a different bug from the Wi-Fi one. It is also what made the
+UART console go silent minutes into both earlier sessions. Until it is fixed,
+treat the UART as a channel for reading a boot log, do interactive work over
+SSH (where the previous session ran for long stretches), and expect a login on
+the serial console to end the boot.
+
 ### What the vendor and the shared tree both do, and this port does not
 
 Mainline's `pci-exynos.c` implements none of the `use-*` properties above. The

@@ -46,12 +46,20 @@ it is still in L0 the dongle is failing from the inside.
 The loop is otherwise unchanged, but the transport now matters. The phone is
 reachable over its USB gadget (`ssh max@10.42.0.1`, re-bind with
 `echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind`) *or* on the UART
-board's console -- the two are mutually exclusive. **Prefer the UART when
-anything might hang**: it survives a wedged interconnect and it prints the
-endpoint's AER decode, which the dongle's console buffer does not. **Do not
-hand-poke dongle RAM:** a `devmem` *read* at `0x850090` is fine, but a `devmem`
-*write* there took the whole phone down, and a `setpci` read of the RC's DBI at
-`0x1a0`/`0xb44` appears to have done the same. On that console, use
+board's console -- the two are mutually exclusive. **Prefer SSH**, because the
+serial console panics the kernel a minute or so into userspace: logging in
+draws, and the draw dies in this port's own framebuffer path,
+
+    drm_sysfb_plane_helper_atomic_update -> drm_fb_xrgb8888_to_bgrx8888
+    -> memcpy_toio -> Kernel panic - not syncing: Oops: Fatal exception
+
+which is a store into the bootloader framebuffer via
+`kernel/zumapro-bootfb.c`'s simpledrm hand-off, not an MMIO fault. That is a
+separate bug from Wi-Fi and it is what made the console go silent minutes into
+two earlier sessions; it needs its own fix before the UART is an interactive
+channel again. **Do not hand-poke dongle RAM either:**
+a `devmem` *read* at `0x850090` is fine, but a `devmem` *write* there took the
+whole phone down. On that console, use
 `/run/wrappers/bin/sudo` -- the scripts' PATH export shadows the setuid wrapper
 with the store's copy.
 
