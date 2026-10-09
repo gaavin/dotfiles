@@ -652,24 +652,30 @@ completion aborts at the same time. `msgbuf` is a *shared memory* protocol: the
 rings live in host RAM and the dongle DMAs into them, so this is the
 device->host direction failing, not the firmware.
 
-Two things are worth knowing before attacking it:
+What has been ruled out since, by driving BAR1 from userspace: the device is
+unbound, so `setpci -s 01:00.0 0x84.l=00800000` (the window register) plus
+`devmem 0x60000000+off` reaches the dongle's RAM directly, `/dev/mem` being
+open on this port.
 
-* `Shared RAM addr: 0x008503b4`, and the driver reaches it. BAR1 is a 4 MiB
-  window (PCI `60000000-603fffff`) and this chip's RAM spans
-  `0x6e0000-0x8fffff`, i.e. across the 4 MiB boundary at `0x800000`, so the
-  shared tree's own BAR1-window-sliding code (`brcmf_pcie_tcm_addr`,
-  `BRCMF_PCIE_BAR1_WINDOW` at config `0x84`) is on the critical path here. It
-  is the first thing to suspect; it is also new code in that tree, not
-  upstream.
-* The host memory indices it feeds the dongle are *64-bit coherent
-  allocations* (measured: `h2d_w_idx_hostaddr = 0x91e0aa000`), and the PCIe
-  node has **no `dma-ranges` and no `iommus`** property — `find
-  /proc/device-tree -name dma-ranges` is empty. So there is nothing describing
-  how a device-initiated access reaches DRAM. The vendor driver configures
-  that itself (its node has an `"ia"` register region, `use-ia`/`use-sysmmu`
-  flags, and a `samsung,pcie-sysmmu` at `131c0000` that stock Android leaves
-  disabled); mainline's `pci-exynos.c` does neither. If the dongle is only
-  reaching host memory because no translation exists at all, that is the gap.
+* **The window mechanism is fine.** With the window at `0x800000`, offsets
+  `0..0xfffff` read back as ordinary memory and `0x100000` and up read
+  `0xffffffff`: the mapping really is `window + offset`, and the RAM really is
+  `0x6e0000-0x8fffff`. The shared tree's BAR1 window sliding, and the RAM size
+  the driver computes, are both correct -- and every address the dongle traps
+  on (`0x8196b0`, `0x819fe8`, `0x81b380`, `0x83581c`) is inside backed RAM, so
+  it is not a memory hole either.
+* That leaves the **other** direction. The dongle is not failing to reach its
+  own memory; it is failing when it goes out to host memory, which is exactly
+  what msgbuf needs: the ring and index buffers the host publishes are *64-bit
+  coherent allocations* (measured `h2d_w_idx_hostaddr = 0x91e0aa000`, ring at
+  `0x91e0ac000`). The PCIe node has no `dma-ranges` and no `iommus` property at
+  all, so nothing describes how a device-initiated access reaches DRAM. The
+  vendor driver configures that itself (its node has an `"ia"` register region,
+  `use-ia`/`use-sysmmu` flags, and a `samsung,pcie-sysmmu` at `131c0000` that
+  stock Android leaves disabled); mainline's `pci-exynos.c` does neither. Next
+  experiments, in order: restrict the endpoint's DMA mask to 32 bits so its
+  buffers land in the low bank, then give the RC an inbound window (or bring up
+  the sysmmu).
 
 The devcoredump (`/sys/class/devcoredump/devcdN/data`, the raw 2.2 MB of
 dongle RAM at `rambase`) is what made this readable: the real shared-info
@@ -684,12 +690,12 @@ What is left is mostly board description rather than reverse engineering.
 1. **Wi-Fi.** The chip is a BCM4383 and the driver plus firmware now boot it
    (see the Wi-Fi section above); what is left is the host<->dongle msgbuf
    path. The dongle halts on its own AXI timeout the moment the host feeds the
-   rings, and the two suspects are the shared tree's BAR1-window sliding (this
-   chip's RAM spans the 4 MiB window boundary at `0x800000`, so that code is
-   live on every access) and the missing device->host DMA description for PCIe
-   (`dma-ranges` and `iommus` are both absent from the node; the vendor driver
-   configures an `"ia"` register region and a PCIe sysmmu instead, and
-   mainline's `pci-exynos.c` does neither). This needs no flashing to iterate:
+   rings; the driver's own BAR1 windowing and RAM size have since been verified
+   good with `setpci`/`devmem` (see that section), so what is left is the
+   missing device->host DMA description for PCIe (`dma-ranges` and `iommus`
+   are both absent from the node, while the vendor driver configures an `"ia"`
+   register region and a PCIe sysmmu, and mainline's `pci-exynos.c` does
+   neither). This needs no flashing to iterate:
    the phone reaches the network over its USB gadget, so
    `ssh max@10.42.0.1` and then
    `echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind` reproduces the
