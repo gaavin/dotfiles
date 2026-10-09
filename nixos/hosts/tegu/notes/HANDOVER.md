@@ -46,11 +46,36 @@ an ordinary PCI config access, so the same sequence can be applied with
 `state` is the read-only discriminator. Gen3 link training is *not* a difference:
 that shared-tree work is about the BCM4390, and the BCM4383 endpoint is a
 Gen2-only part (`LnkCap: Speed 5GT/s`, `LnkCap2: 2.5-5GT/s`), so the driver's
-"sub-Gen3" line is expected and `max-link-speed = <2>` is right. Before
-spending a build on the arm, use the cheap discriminator: after a failure, read
-`PCI_EXP_LNKSTA` on `01:00.0` and `PCIE_ELBI_RDLH_LINKUP` in the RC's ELBI --
-if the LTSSM has left L0 it is power management and the arm is the fix, and if
-it is still in L0 the dongle is failing from the inside.
+"sub-Gen3" line is expected and `max-link-speed = <2>` is right.
+
+**The discriminator has been run and the arm is not the cause (2026-10-09).**
+Read on the phone after a failure, over the USB-gadget link: ELBI
+`RDLH_LINKUP` (`0x131202c8`) is `0x03999811`, low 6 bits `0x11` = **L0**;
+`LNKSTA` is Gen2 x1 at both ends; `DevSta`/`CESta` are clean and no AER state
+is latched. The link never left L0, so the dongle is failing from the inside.
+
+**The actual cause: a D2H mailbox word this firmware does not drive.** Shared
+flags are `0x70050107`, which *clears* `BRCMF_PCIE_SHARED_USE_MAILBOX`, so
+brcmfmac sets `mb_via_ctl = true` and mailbox words travel over the **control
+ring**. The H2D send side honours that (`pcie.c:994`); the D2H *poll* does not
+-- `brcmf_pcie_poll_mb_data()` reads `shared->dtoh_mb_data_addr` over TCM from
+both the MSI ISR thread and the poll worker, unconditionally. On this part that
+word reads back `0xffffffff`, and `brcmf_pcie_handle_mb_data()` only tests
+bits, so one garbage word decodes as `DS_ENTER_REQ|DS_EXIT|D3_ACK|FW_HALT` at
+once and the driver tears down a dongle that never halted (a deep-sleep NAK,
+`brcmf_fw_crashed`, then a 2.2 MB memdump). One boot, addresses from the same
+probe:
+
+    Shared RAM addr     0x00833234
+    dtoh_mb_data_addr   0x008a0b88
+    D2H_MB_DATA: 0xffffffff
+    AER CmpltAbrt TLP   0x600a0b88     (backplane 0x8a0b88)
+    CONSOLE err check   addr(0x...:008a0b88) / AXI timeout / TRAP 4
+
+`kernel/brcmfmac-ctl-mb.patch`, applied by `kernel/apply.sh`, skips the TCM
+poll when `mb_via_ctl` is set. The D2H word already arrives over the ctl ring
+through `brcmf_pcie_d2h_mb_rx` (`msgbuf.c:1448` -> `brcmf_bus_d2h_mb_rx` ->
+`bus->ops->d2h_mb_rx`), so nothing is lost. `README.md` has the full write-up.
 
 The loop is otherwise unchanged, but the transport matters. The phone is
 reachable over its USB gadget (`ssh max@10.42.0.1`, re-bind with

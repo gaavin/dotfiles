@@ -130,6 +130,30 @@ grep -q "brcmf_pcie_dma_mask_bits" "$wifi/brcmfmac/pcie.c" ||
 grep -q "brcmf_pcie_force_tcm_idx" "$wifi/brcmfmac/pcie.c" ||
 	{ echo "apply.sh: tcm index knob patch did not apply" >&2; exit 1; }
 
+# --- Wi-Fi: stop polling a TCM mailbox this firmware does not drive -------
+# The shared tree added ctl-ring mailbox messages and gated the H2D *send*
+# side on shared->mb_via_ctl, but left the D2H poll reading the TCM mailbox
+# unconditionally. The BCM4383's firmware clears
+# BRCMF_PCIE_SHARED_USE_MAILBOX (shared flags read 0x70050107), so mb_via_ctl
+# is true and that word is not maintained: the host reads 0xffffffff, and
+# brcmf_pcie_handle_mb_data() -- which asks only "is this bit set?" -- sees
+# DS_ENTER_REQ, DS_EXIT, D3_ACK and FW_HALT all at once. The driver then
+# "recovers" from a crash that never happened: it NAKs a deep-sleep request,
+# dumps 2.2 MB of dongle RAM, and leaves the dongle trapped.
+#
+# Measured on the phone over the UART, one boot, same addresses:
+#   shared RAM addr 0x00833234, dtoh_mb_data_addr 0x008a0b88
+#   brcmf_pcie_handle_mb_data D2H_MB_DATA: 0xffffffff
+#   AER: TLP Header: 0x00000001 0x0000000f 0x600a0b88   (backplane 0x8a0b88)
+#   CONSOLE: err check: ... addr(0x00000000:008a0b88) / AXI timeout / TRAP 4
+# and after the halt a devmem read of 0x8a0b88 returns 0, so the location is
+# ordinary RAM, not a hole. In this mode the D2H word arrives over the ctl
+# ring (brcmf_pcie_d2h_mb_rx, wired through msgbuf.c:1448 and bus.h), so the
+# TCM poll is simply skipped.
+patch -p1 < "$src"/brcmfmac-ctl-mb.patch
+grep -q "which mailbox mechanism it drives" "$wifi/brcmfmac/pcie.c" ||
+	{ echo "apply.sh: brcmfmac ctl-mailbox patch did not apply" >&2; exit 1; }
+
 # --- framebuffer: keep the panel blit inside the framebuffer --------------
 # This is not a Wi-Fi change; it is what makes the serial console usable, and
 # therefore what makes every later boot debuggable.

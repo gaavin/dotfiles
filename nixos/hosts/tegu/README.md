@@ -833,6 +833,62 @@ from a fault address. The fix can only narrow what is written, so it is safe
 whatever the damage does. With it in, the serial console is an interactive
 channel again; without it, expect a login on it to end the boot.
 
+### The msgbuf failure: a D2H mailbox word this firmware does not drive (2026-10-09)
+
+**The LTR question is answered, and the answer is no.** `PCI_EXP_LNKSTA` on
+`01:00.0` and the RC's ELBI `RDLH_LINKUP` (`0x131202c8`) were read on the
+phone after a failure, over the USB-gadget link:
+
+    ELBI 0x131202c8 = 0x03999811      LTSSM = low 6 bits = 0x11 = L0
+    ELBI 0x13120054 = 0x00000001      LTSSM enable, as left by link training
+    EP  LnkSta: Speed 5GT/s, Width x1; DevSta/CESta clean
+    RC  LnkSta: Speed 5GT/s, Width x1
+
+The link never left L0 and neither end has an error latched, so the dongle is
+failing from the inside and the LTR/L1SS arm is **not** the cause. That is
+exactly what the discriminator was for: it was refuted before a build was
+spent on it.
+
+**What it is instead: a missing `mb_via_ctl` check.** The firmware advertises
+shared flags `0x70050107`, which *clears* `BRCMF_PCIE_SHARED_USE_MAILBOX`
+(bit 25), so brcmfmac sets `shared->mb_via_ctl = true` -- mailbox words go
+over the **control ring**, not the TCM mailbox registers. The H2D *send* side
+honours that (`brcmf_pcie_send_mb_data()`, `pcie.c:994`). The D2H *poll* does
+not: `brcmf_pcie_poll_mb_data()` reads `shared->dtoh_mb_data_addr` over TCM
+unconditionally, and it is called from both the MSI ISR thread and the poll
+worker. On this part that word reads back `0xffffffff`, and
+`brcmf_pcie_handle_mb_data()` only asks "is this bit set?", so a single
+garbage word decodes as `DS_ENTER_REQ | DS_EXIT | D3_ACK | FW_HALT` at once
+and the driver tears down a dongle that never halted.
+
+Measured in one boot, with the addresses taken from the same probe:
+
+    Shared RAM addr: 0x00833234            (fw-published, at rambase+ramsize-4)
+    Console: base 8332b4, buf 884ed0, size 8192
+    dtoh_mb_data_addr = 0x008a0b88         (read back through BAR1 afterwards)
+    ...
+    brcmf_pcie_ring_mb_write_wptr W w_ptr 17 (0), ring 0   <- first dcmd doorbell
+    brcmf_pcie_handle_mb_data D2H_MB_DATA: 0xffffffff
+    D2H_MB_DATA: DEEP SLEEP REQ / DS EXIT / D3 ACK / FW HALT
+    brcmf_fw_crashed
+    brcmf_pcie_get_memdump dump at 0x006E0000: len=2228224
+    AER CmpltAbrt, TLP Header: 0x00000001 0x0000000f 0x600a0b88   (bp 0x8a0b88)
+    CONSOLE: err check: core 0x1810a000, error 2, axi id 0x10001,
+             addr(0x00000000:008a0b88)
+    CONSOLE: AXI timeout / TRAP 4(8f7ed0): pc 72b34a, ...
+
+`0x600a0b88` is the D2H mailbox and nothing else -- not the console buffer
+(`0x884ed0`), not the ring info (`0x8a0848`), not a hole. After the halt a
+`devmem` read of that offset returns 0 (the driver cleared it after reading)
+and every neighbour reads normally, so the location is ordinary RAM.
+
+The fix is to skip the TCM poll when the firmware drives the mailbox over the
+control ring. The D2H word already arrives there through
+`brcmf_pcie_d2h_mb_rx` -- wired as `bus->ops->d2h_mb_rx` and fed from
+`msgbuf.c:1448` -- so the poll is redundant in that mode. The one-line branch
+is in `kernel/brcmfmac-ctl-mb.patch`, applied by `kernel/apply.sh`; it
+mirrors the H2D side rather than inventing a new mechanism.
+
 ### What the vendor and the shared tree both do, and this port does not
 
 Mainline's `pci-exynos.c` implements none of the `use-*` properties above. The
