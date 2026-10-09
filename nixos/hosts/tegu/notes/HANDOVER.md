@@ -68,6 +68,36 @@ with the store's copy. And when a boot dies, read the previous boot's journal
 `panic=0` leaves the phone spinning on the panel, because the watchdog resets
 it and the journal survives.
 
+## Operational notes from 2026-10-09 (they cost time; read them)
+
+- **`reboot bootloader` works.** `/proc/device-tree/reboot-mode/mode-bootloader`
+  is `0x800000fc`, so `sudo perl tegu-work/reboot-bootloader.pl` (a raw
+  `reboot(2)` with `LINUX_REBOOT_CMD_RESTART2` and the string `bootloader`)
+  puts the phone in fastboot without touching the buttons. It is in fastboot
+  within ~5 s. `fastboot` PID is `4ee0`; booted NixOS is `4ee1`
+  (`18d1:4ee0` / `18d1:4ee1`).
+- **A rootfs flash wipes the SSH authorized key**, and sshd has
+  `PasswordAuthentication = true` but every helper here uses `BatchMode=yes`,
+  so the failure looks like `Permission denied (publickey,...)`. The password
+  path exists and works:
+  `SSH_ASKPASS=/home/max/.tegu-askpass.sh SSH_ASKPASS_REQUIRE=force DISPLAY=:0
+  setsid -w ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no
+  max@10.42.0.1 …` (the password is `password`). Reinstall the key first thing
+  after a rootfs flash, or every later step is manual.
+- **`serial-getty@ttyGS0.service` is failed**, so the phone's own USB gadget
+  console (`/dev/ttyACM0`, by-id `usb-NixOS_Pixel_9a_tegu-if02`) has no shell
+  on it; ModemManager on the host holds the port anyway. The only console is
+  `ttySAC0` on the UART board. Worth fixing -- it is the one channel that needs
+  no cable swap.
+- **A panicking boot is diagnosable after the fact.** `panic=0` does *not* mean
+  the phone sits there forever: the watchdog resets it, so boot the phone and
+  read `sudo journalctl -b -1 -k`. That is how the framebuffer panic's fault
+  address was found after the console had gone silent. `pstore`/ramoops is
+  registered (`ramoops@fd3ff000`) but `/sys/fs/pstore/` was empty.
+- **When the phone is dead: is it hung or in fastboot?** `fastboot devices` is
+  the cheapest test; a hung kernel still enumerates, so USB presence alone says
+  nothing.
+
 ## Next focus: the eUSB2 + combo USB-DP PHY
 
 **Do it the way the UFS PHY was done.** That is the requirement, and it is a
