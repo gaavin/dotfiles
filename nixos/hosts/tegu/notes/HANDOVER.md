@@ -4,7 +4,7 @@ Mainline Linux 7.3-rc1 + NixOS on a Google Pixel 9a (Tensor G4, `zumapro`).
 Repo `~/dotfiles`, work in `nixos/hosts/tegu`. Read `README.md` first — it is
 current as of this handover.
 
-## Wi-Fi (BCM4383) — current work, 2026-10-08
+## Wi-Fi (BCM4383) — current work, 2026-10-08, rediagnosed 2026-10-09
 
 The board's Wi-Fi is a Broadcom **BCM4383** (`14e4:4449`, chipcommon `0x4383`),
 a part mainline had never supported. `kernel/apply.sh` now adds the chip ID,
@@ -12,22 +12,48 @@ the CR4 RAM base (`0x6e0000`, from Google's own bcmdhd module) and the firmware
 mapping, and the vendor image's `fw_bcmdhd.bin` (in `../wifi-firmware/`) boots
 the dongle: `RTE (PCIE-MSGBUF) ... on BCM4383 r2`, `wl0`/`wl1` attach.
 
-It stops there. As soon as the host feeds the msgbuf rings the dongle halts on
-its own AXI timeout and no `wlan0` appears, so this is the device->host DMA
-path, not the firmware. The driver's BAR1 windowing and its RAM size have since
-been checked from userspace and are both correct (`setpci -s 01:00.0 0x84.l`
-plus `devmem 0x60000000+off`: with the window at `0x800000` the first MiB reads
-as memory and the rest as `0xffffffff`), so the suspect left standing is that
-nothing in the PCIe node describes device->host DMA at all -- no `dma-ranges`,
-no `iommus`, while the vendor driver configures an `"ia"` register region and a
-PCIe sysmmu that stock Android leaves disabled. `README.md` section "Wi-Fi: the
-part is a BCM4383, and it boots" has the boot log, the dump-derived numbers and
-the fast loop: the phone is reachable at `ssh max@10.42.0.1` over its USB
-gadget, so the whole probe can be re-run in seconds with
+It stops there: as soon as the host feeds the msgbuf rings the dongle halts and
+no `wlan0` appears. **Corrected 2026-10-09, and the focus this section used to
+point at was wrong.** The access that dies is not a device->host DMA; it is a
+*host read of dongle RAM*, which the dongle (as completer) aborts because its
+own AXI read timed out. The UART-attached console prints the endpoint's AER log,
 
-    echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind
+    [15] CmpltAbrt | Completer | Transaction Layer (First)
+    AER: TLP Header: 0x00000001 0x0000000f 0x6006aabc 0x00000000
 
-and `/sys/class/devcoredump/devcdN/data` is the 2.2 MB image of dongle RAM.
+and `0x00000001` is Fmt 000 / type 00000 / length 1 -- a 3DW Memory Read at
+`0x6006aabc`, i.e. backplane `0x86aabc` with the BAR1 window at `0x800000`.
+That address is *backed*: BAR1 reads it, the `tcm_size`/window arithmetic checks
+out, and the driver's own sentinel read at `0x8ffffc` succeeds while the
+firmware is running. The backplane only stops answering once the firmware is up.
+
+The `dma-ranges`/`iommus`/`"ia"` theory is **refuted by the vendor's own DT**:
+the factory dtbo's WLAN fragment (the one carrying `pcie,wlan-gpio`) sets
+`use-ia = "false"` and `use-sysmmu = "false"`, and the base DTB's
+`pcie@13120000` has neither `dma-ranges` nor `iommus` nor an `"ia"` reg-name.
+`README.md`, "Corrected diagnosis" plus "What the vendor and the shared tree
+both do, and this port does not", has the full evidence. The one difference
+still standing is the **LTR/L1SS arm** (`zumapro_pcie_wifi_l1ss_enable()`,
+never called on the `brcmfmac` path). Gen3 link training is *not* a difference:
+that shared-tree work is about the BCM4390, and the BCM4383 endpoint is a
+Gen2-only part (`LnkCap: Speed 5GT/s`, `LnkCap2: 2.5-5GT/s`), so the driver's
+"sub-Gen3" line is expected and `max-link-speed = <2>` is right. Before
+spending a build on the arm, use the cheap discriminator: after a failure, read
+`PCI_EXP_LNKSTA` on `01:00.0` and `PCIE_ELBI_RDLH_LINKUP` in the RC's ELBI --
+if the LTSSM has left L0 it is power management and the arm is the fix, and if
+it is still in L0 the dongle is failing from the inside.
+
+The loop is otherwise unchanged, but the transport now matters. The phone is
+reachable over its USB gadget (`ssh max@10.42.0.1`, re-bind with
+`echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind`) *or* on the UART
+board's console -- the two are mutually exclusive. **Prefer the UART when
+anything might hang**: it survives a wedged interconnect and it prints the
+endpoint's AER decode, which the dongle's console buffer does not. **Do not
+hand-poke dongle RAM:** a `devmem` *read* at `0x850090` is fine, but a `devmem`
+*write* there took the whole phone down, and a `setpci` read of the RC's DBI at
+`0x1a0`/`0xb44` appears to have done the same. On that console, use
+`/run/wrappers/bin/sudo` -- the scripts' PATH export shadows the setuid wrapper
+with the store's copy.
 
 ## Next focus: the eUSB2 + combo USB-DP PHY
 

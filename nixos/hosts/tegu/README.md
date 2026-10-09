@@ -664,7 +664,7 @@ open on this port.
   the driver computes, are both correct -- and every address the dongle traps
   on (`0x8196b0`, `0x819fe8`, `0x81b380`, `0x83581c`) is inside backed RAM, so
   it is not a memory hole either.
-* That leaves the **other** direction. The dongle is not failing to reach its
+* **REFUTED 2026-10-09.** That leaves the **other** direction. The dongle is not failing to reach its
   own memory; it is failing when it goes out to host memory, which is exactly
   what msgbuf needs: the ring and index buffers the host publishes are *64-bit
   coherent allocations* (measured `h2d_w_idx_hostaddr = 0x91e0aa000`, ring at
@@ -690,35 +690,157 @@ without them says the dongle *can* read the ring items out of host memory --
 it is the host-resident index feature that breaks first. A write/read-back
 sweep of the whole range from userspace (34 addresses at 64 KiB steps, windows
 `0x400000` and `0x800000`) also finds no hole, so every address the dongle
-traps on is writable through BAR1. The remaining question is why a
-device-initiated access to a *host* address is what dies -- the vendor's need
-for an `"ia"` region and a BAR2 window (`dhdpcie_setbar2win`) looks like the
-place to look next.
+traps on is writable through BAR1. **REFUTED 2026-10-09** -- see "Corrected
+diagnosis" below. The vendor's own WLAN node has no `dma-ranges`, no `iommus`
+and no `"ia"` register region, and the access that dies is a *host-initiated*
+read of dongle RAM, not a device-initiated access to a host address.
 
 The devcoredump (`/sys/class/devcoredump/devcdN/data`, the raw 2.2 MB of
 dongle RAM at `rambase`) is what made this readable: the real shared-info
 block, the ring info and the published host addresses can all be pulled out of
 it with a little Python.
 
+### Corrected diagnosis, 2026-10-09: it is a host read, and the vendor DT describes no DMA either
+
+Both claims above were wrong, and each one sent a session down a path that
+could not pay off, so they are worth spelling out.
+
+**The vendor's WLAN node has no missing DMA description.** The factory dtbo
+carries the WLAN's own overlay -- fragment@54, the one with `pcie,wlan-gpio` --
+and the base DTB's `pcie@13120000` (this board's Wi-Fi channel) reads:
+
+    ranges = <0x82000000 0x00 0x60000000 0x60000000 0x00 0xff0000>;
+    reg-names = "elbi", "dbi", "config";
+    wlan-reg-on-gpios / host-wake-gpios / device-wake-gpios
+    max-link-speed = <0x02>;
+
+`dma-ranges` is absent, `iommus` is absent, and there is no `"ia"` register
+region among the `reg-names`. The `use-ia` / `use-sysmmu` strings are DT
+*property names*, and the overlay sets both of them to `"false"`:
+
+    fragment@54 { status = "okay"; num-lanes = <0x01>;
+                  use-sicd = "true"; use-ia = "false"; use-l1ss = "true";
+                  use-msi = "true"; use-sysmmu = "false";
+                  max-link-speed = <0x03>; ep-device-type = <0x01>;
+                  pcie,wlan-gpio = <0xffffffff 0x04 0x01>; };
+
+So stock Android does not describe device->host DMA for this board either, the
+`"ia"`+BAR2 lead is dead, and neither is the `samsung,pcie-sysmmu` at
+`131c0000` (which the vendor's driver only enables behind `use_sysmmu`). Read
+from Google's own `pcie-exynos-rc.c`
+(`kernel/google-modules/soc/gs`, `android-gs-tegu-6.1-android16`): `use-ia`
+gates `exynos_pcie_rc_use_ia()`, `use-sysmmu` gates `pcie_sysmmu_enable()`,
+`use-sicd` is only `exynos_update_ip_idle_status()` CPU-idle bookkeeping, and
+every `EP_BCM_WIFI`-specific hook in that driver is gated on
+`s2mpu || use_sysmmu` -- both false here.
+
+**The access that dies is a host *read* of dongle RAM.** With the UART board
+attached, the kernel prints the endpoint's own AER header log instead of
+having to dig it out of the dongle's console buffer:
+
+    brcmfmac 0000:01:00.0: [15] CmpltAbrt | Completer | Transaction Layer (First)
+    brcmfmac 0000:01:00.0: AER: TLP Header: 0x00000001 0x0000000f 0x6006aabc 0x00000000
+
+`0x00000001` is Fmt `000` / type `00000` / length 1 -- a 3DW **Memory Read**
+-- at `0x6006aabc`. With the BAR1 window at `0x800000` that is dongle
+backplane `0x86aabc`, exactly the address the dongle's own console names
+(`addr(0x00000000:0086aabc)`, `AXI timeout`). So the dongle, as *completer*,
+aborts a read the host made of its RAM, because the AXI read behind it timed
+out. Seen so far at `0x8196b0`, `0x819fe8`, `0x81b380`, `0x83581c`, `0x850090`
+and `0x86aabc` -- always past the end of the firmware image (`0x6e0000 +
+0x136c3d = 0x816c3d`), and never the same address twice.
+
+**And the address is backed, so it is not a hole, a window bug or a size bug.**
+With the window at `0x800000`, `devmem 0x60050090` reads `0x00000010` and
+`0x900000` and up read `0xffffffff`, so RAM really does run to `0x900000`;
+BAR1 is 4 MB (Region 2 at `0x60000000`), so `tcm_size = bar1_size = 0x400000`
+and `brcmf_pcie_tcm_addr()`'s `win = mem_offset & ~(tcm_size - 1)` arithmetic
+is right; the window register reads back `0x00800000`, the value the TLP
+address implies; and the driver's own sentinel read at `rambase + ramsize - 4`
+(`0x8ffffc`) *succeeds while the firmware is running*. What changes is not the
+address but the dongle's state: its backplane answers while the firmware is
+halted and stops answering once the firmware is up.
+
+**How not to measure it.** Poking that range from userspace is not safe. A
+`devmem` *read* at `0x850090` is fine, but a `devmem` *write* there took the
+whole phone down -- USB gadget gone, SSH unreachable, console silent -- and a
+later `setpci` read of the RC's DBI at `0x1a0`/`0xb44` appears to have done the
+same. Use the UART for anything in that range, and prefer the driver's own
+paths to hand-rolled MMIO.
+
+### What the vendor and the shared tree both do, and this port does not
+
+Mainline's `pci-exynos.c` implements none of the `use-*` properties above. The
+two differences that are already implemented in the shared port tree, and
+simply never reached on this path, are:
+
+* **The LTR + L1SS arm.** `zumapro_pcie_wifi_l1ss_enable()` in the shared tree
+  is the port of the vendor's `exynos_pcie_rc_set_l1ss()` BCM branch. Its mask
+  (`pci_exynos.wifi_l1ss_mask`) defaults to `0`, so the *substates* stay off,
+  but it still writes the RC's 26 MHz aux-clock frequency (`0xb40 = 0x1a`,
+  which clocks the L1SS timers), `L1SS_CONTROL2` `TPowerOn = 200us`
+  (`0x1a0 = 0xa1`), `L1_SUBSTATES = 0xea` (`0xb44`), and -- unconditionally --
+  **enables the LTR mechanism on both the RC and the endpoint**. Nothing in
+  this port's boot calls it: it exists for the out-of-tree `bcmdhd`, and
+  `brcmfmac` never asks for it. The shared tree's own BCM4390 commits say why
+  that can matter: "the BCM4390 firmware never sees LTR active", and "the
+  BCM4390 firmware engages its deep-sleep protocol once L1SS is armed". A
+  firmware that gates its own power state on LTR, and never sees LTR, is a
+  candidate for a backplane that stops answering.
+
+* **Gen3 link training -- checked, and NOT a difference for this part.** The
+  shared tree converges the BCM Wi-Fi link at **Gen3** until initial training
+  (`57a33514f2`, `6fd93e3edc`) and reports "both RC and EP (BCM4390, dev 4438)
+  negotiate 8.0 GT/s x1", and this port's node sets `max-link-speed = <2>`,
+  which looked like a real divergence. It is not: that work is about the
+  **BCM4390**, and the BCM4383 endpoint only advertises 5 GT/s --
+  `lspci -vv` gives `LnkCap: Speed 5GT/s, Width x1` and `LnkCap2: Supported
+  Link Speeds: 2.5-5GT/s`. The driver's own log agrees and is not a fault
+  report: `Wi-Fi link trained: sub-Gen3 (LNKSTA 0xb012)` / `PCIe Gen.2 x1 link
+  up`. So `max-link-speed = <2>` matches the part and should stay. (Reading the
+  vendor's two DT sources alone is still ambiguous -- the base DTB says
+  `<0x02>` and the WLAN overlay says `<0x03>` -- but the endpoint's own
+  capability register is not.)
+
+**What is *not* a difference, despite this port's dtsi saying so:** the pin
+muxes. The vendor's stock DTB defines `wlan-pcie1-clkreq-pins` on `gph3-1`
+(func 2, pud 3, drv 3, con-pdn 3, pud-pdn 3), `wlan-reg-on-pins` on `gph3-4`,
+`wlan-dev-wake-pins` on `gph3-5` and `pcie1-perst-pins` on `gph3-0` -- byte for
+byte the same as the groups in `dts/zumapro-tegu-nixos.dtsi`. The
+CLKREQ#/PERST/WLAN_EN wiring this port wrote is right, and the shared tree's
+`pcie1_clkreq`/`pcie1_perst` labels are the same pins, not gs101's `gph2-*`.
+
 ## Next steps, in order
 
 The base swap booted, and it closed both items this list used to open with.
 What is left is mostly board description rather than reverse engineering.
 
-1. **Wi-Fi.** The chip is a BCM4383 and the driver plus firmware now boot it
-   (see the Wi-Fi section above); what is left is the host<->dongle msgbuf
-   path. The dongle halts on its own AXI timeout the moment the host feeds the
-   rings; the driver's own BAR1 windowing and RAM size have since been verified
-   good with `setpci`/`devmem` (see that section), so what is left is the
-   missing device->host DMA description for PCIe (`dma-ranges` and `iommus`
-   are both absent from the node, while the vendor driver configures an `"ia"`
-   register region and a PCIe sysmmu, and mainline's `pci-exynos.c` does
-   neither). This needs no flashing to iterate:
-   the phone reaches the network over its USB gadget, so
-   `ssh max@10.42.0.1` and then
-   `echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind` reproduces the
-   whole probe in seconds, and `/sys/class/devcoredump/devcdN/data` is the
-   2.2 MB image of dongle RAM.
+1. **Wi-Fi.** The chip is a BCM4383 and the driver plus firmware boot it (see
+   the Wi-Fi section above). What is left is the host<->dongle msgbuf path, and
+   the section's "Corrected diagnosis" is the current state of it: the dongle
+   aborts a *host read* of its own RAM because its AXI read timed out, the
+   address is backed, and the backplane only stops answering once the firmware
+   is up. The one tree-attested difference left standing is the **LTR/L1SS
+   arm** (`zumapro_pcie_wifi_l1ss_enable()`, which nothing calls on the
+   `brcmfmac` path); Gen3 link training was checked and is *not* a difference,
+   because the BCM4383 endpoint is a Gen2-only part. Before spending a build on
+   that arm, the cheap discriminator is to read the link's own state after a
+   failure: if the LTSSM has left L0, this is power management and the arm is
+   the right fix; if it is still in L0, the dongle is failing from the inside
+   and the arm will not help. Read `PCI_EXP_LNKSTA` on `01:00.0` and
+   `PCIE_ELBI_RDLH_LINKUP` in the RC's ELBI for that. Both are named registers,
+   so they are safe, unlike the hand-rolled MMIO below. For a re-bind without a
+   flash,
+   the phone is reachable over its USB gadget (`ssh max@10.42.0.1`) as long as
+   the UART board is unplugged -- the two are mutually exclusive -- and
+   `echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind` re-runs the whole
+   probe in seconds. With the UART board in, log in at the console instead:
+   it is the only channel that survives a hung interconnect, and it prints the
+   endpoint's AER decode, which the dongle's console buffer does not.
+   `/sys/class/devcoredump/devcdN/data` would be the 2.2 MB image of dongle
+   RAM, but no dump has been produced so far. **Do not hand-poke that range
+   with `devmem` writes or with `setpci` on undocumented RC DBI offsets** --
+   both have hung the phone.
 2. **The display, properly.** The one place the shared tree does not cover this
    board: `DRM_EXYNOS` is not even enabled in their `zumapro_defconfig`, their
    exynos9 DECON/DSIM work is aimed at komodo and caiman, and the panel drivers
