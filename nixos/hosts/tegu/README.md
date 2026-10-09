@@ -846,12 +846,35 @@ simply never reached on this path, are:
   which clocks the L1SS timers), `L1SS_CONTROL2` `TPowerOn = 200us`
   (`0x1a0 = 0xa1`), `L1_SUBSTATES = 0xea` (`0xb44`), and -- unconditionally --
   **enables the LTR mechanism on both the RC and the endpoint**. Nothing in
-  this port's boot calls it: it exists for the out-of-tree `bcmdhd`, and
-  `brcmfmac` never asks for it. The shared tree's own BCM4390 commits say why
-  that can matter: "the BCM4390 firmware never sees LTR active", and "the
-  BCM4390 firmware engages its deep-sleep protocol once L1SS is armed". A
-  firmware that gates its own power state on LTR, and never sees LTR, is a
-  candidate for a backplane that stops answering.
+  this port's boot calls *that* function: it exists for the out-of-tree
+  `bcmdhd`. The shared tree's own BCM4390 commits say why that can matter:
+  "the BCM4390 firmware never sees LTR active", and "the BCM4390 firmware
+  engages its deep-sleep protocol once L1SS is armed". A firmware that gates
+  its own power state on LTR, and never sees LTR, is a candidate for a
+  backplane that stops answering.
+
+  **Corrected 2026-10-09: `brcmfmac` does arm the same thing, by a second
+  route, and it is live-testable without a build.** The pinned tree's
+  `pcie.c` carries `brcmf_pcie_enable_l1ss()`, selected by the module
+  parameter `brcmfmac.l1ss` (0 = off, the default; 1 = LTR + L1.2 threshold
+  only, link stays L0; 2 = full L1SS + ASPM-L1). It writes the same
+  TPowerOn/LTR-latency/L1.2-threshold values to the endpoint *and* its
+  upstream root port through the generic PCI config accessors -- no DBI, no
+  MMIO -- and it **is** called, from `brcmf_pcie_setup()`. So the sequence a
+  build was about to be spent on is already reachable. The string
+  `brcmfmac.l1ss` is present in `Image` of `.#tegu-images`, so the currently
+  flashed kernel has it too. Two consequences the plan did not account for:
+
+  * the call sits **after** `brcmf_pcie_init_ringbuffers()` and
+    `brcmf_attach()`, i.e. *after* the point at which the 4383 traps, so
+    `echo 1 > /sys/module/brcmfmac/parameters/l1ss` plus a re-bind cannot
+    affect the trap at all;
+  * because every write it makes is an ordinary PCI config access, the same
+    sequence can be applied from userspace with `setpci` *before* binding the
+    driver -- which is the only way to have LTR in place while msgbuf
+    initialises. `~/tegu-work/wifi-diag.sh preltr` does that; run the
+    read-only `state` arm first, since the link is what tells us whether LTR
+    is even the question.
 
 * **Gen3 link training -- checked, and NOT a difference for this part.** The
   shared tree converges the BCM Wi-Fi link at **Gen3** until initial training

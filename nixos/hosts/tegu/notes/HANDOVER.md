@@ -34,7 +34,16 @@ the factory dtbo's WLAN fragment (the one carrying `pcie,wlan-gpio`) sets
 `README.md`, "Corrected diagnosis" plus "What the vendor and the shared tree
 both do, and this port does not", has the full evidence. The one difference
 still standing is the **LTR/L1SS arm** (`zumapro_pcie_wifi_l1ss_enable()`,
-never called on the `brcmfmac` path). Gen3 link training is *not* a difference:
+never called on the `brcmfmac` path). **Corrected 2026-10-09:** `brcmfmac` has
+its own arm for the same thing -- `brcmf_pcie_enable_l1ss()` in `pcie.c`,
+behind the `l1ss` module parameter (0/1/2, default 0) -- and it *is* called,
+but from `brcmf_pcie_setup()` at the end of a successful probe, i.e. after
+`brcmf_pcie_init_ringbuffers()` and `brcmf_attach()` and therefore after the
+trap. So `echo 1 > /sys/module/brcmfmac/parameters/l1ss` + re-bind cannot
+change it, and a build is not needed either: every write the function makes is
+an ordinary PCI config access, so the same sequence can be applied with
+`setpci` **before** binding. `~/tegu-work/wifi-diag.sh preltr` does that;
+`state` is the read-only discriminator. Gen3 link training is *not* a difference:
 that shared-tree work is about the BCM4390, and the BCM4383 endpoint is a
 Gen2-only part (`LnkCap: Speed 5GT/s`, `LnkCap2: 2.5-5GT/s`), so the driver's
 "sub-Gen3" line is expected and `max-link-speed = <2>` is right. Before
