@@ -1,0 +1,38 @@
+--- pa/drivers/gpu/drm/sysfb/drm_sysfb_modeset.c	2026-10-09 01:50:25.361182889 -0230
++++ pb/drivers/gpu/drm/sysfb/drm_sysfb_modeset.c	2026-10-09 01:50:25.363182897 -0230
+@@ -359,8 +359,34 @@
+ 		if (!drm_rect_intersect(&dst_clip, &damage))
+ 			continue;
+ 
++		/*
++		 * @dst is offset to @dst_clip's top-left corner below, and the
++		 * blit helpers document that they take @clip only to locate the
++		 * source ("the destination is at the top-left corner"), so the
++		 * clip handed down has to be the same rect the destination was
++		 * offset by.  Passing @damage instead makes the *row count* come
++		 * from a rect that need not be inside the plane's destination --
++		 * a client's damage clips are not clipped to it -- and the blit
++		 * then walks off the end of the framebuffer mapping and faults in
++		 * the guard page past it.  Measured on tegu, where the damage can
++		 * be one row taller than the 1080x2424 mode, with the bootloader
++		 * framebuffer ioremapped at phys 0xfac00000:
++		 *
++		 *   Unable to handle kernel paging request at virtual address
++		 *   ffff8000829fd000   (level 3 translation fault, WnR=1)
++		 *   memcpy_toio <- drm_fb_xrgb8888_to_bgrx8888
++		 *              <- drm_sysfb_plane_helper_atomic_update
++		 *
++		 * which is the guard page one page past that mapping's end.
++		 */
++		if (dst_clip.x1 != damage.x1 || dst_clip.y1 != damage.y1 ||
++		    dst_clip.x2 != damage.x2 || dst_clip.y2 != damage.y2)
++			drm_warn_once(dev,
++				      "damage " DRM_RECT_FMT " is not inside plane dst " DRM_RECT_FMT "; clipped the blit to stay in the framebuffer\n",
++				      DRM_RECT_ARG(&damage), DRM_RECT_ARG(&dst_clip));
++
+ 		iosys_map_incr(&dst, drm_fb_clip_offset(dst_pitch, dst_format, &dst_clip));
+-		blit_to_crtc(&dst, &dst_pitch, shadow_plane_state->data, fb, &damage,
++		blit_to_crtc(&dst, &dst_pitch, shadow_plane_state->data, fb, &dst_clip,
+ 			     &shadow_plane_state->fmtcnv_state);
+ 	}
+ 

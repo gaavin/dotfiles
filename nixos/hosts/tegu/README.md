@@ -786,10 +786,52 @@ draws after userspace is up -- which is exactly what logging in does:
 `kernel/zumapro-bootfb.c` reserves the bootloader's buffer and hands it to
 simpledrm -- so that fault is a *store into the framebuffer*, not into dongle
 RAM, and it is a different bug from the Wi-Fi one. It is also what made the
-UART console go silent minutes into both earlier sessions. Until it is fixed,
-treat the UART as a channel for reading a boot log, do interactive work over
-SSH (where the previous session ran for long stretches), and expect a login on
-the serial console to end the boot.
+UART console go silent minutes into both earlier sessions.
+
+**Root-caused 2026-10-09.** The panic is a *fault address*, and it came out of
+boot -1's persisted journal rather than the console. Note `panic=0` means the
+phone does not reboot itself, but the watchdog does, so the boot after the
+panic has that boot's journal in `/var/log/journal`:
+
+    Unable to handle kernel paging request at virtual address ffff8000829fd000
+      ESR = 0x0000000096000047   EC = 0x25 DABT   WnR = 1
+      FSC = 0x07: level 3 translation fault
+    [ffff8000829fd000] pgd=0 p4d=...403 pud=...403 pmd=...403 pte=0
+
+So it is a **store** into a page with no PTE. `/proc/vmallocinfo` says which
+page -- and the answer is not the dongle:
+
+    ffff800082000000-ffff8000829fe000  10477568  ioremap  phys=0x00000000fac00000
+
+That is the bootloader framebuffer this port maps (`BOOTFB ... 1080x2424
+stride=4320 bpp=4 base=0x00000000fac00000 as=b8g8r8x8`, printed at boot), and
+`ffff8000829fd000` is the last page of the mapping -- the guard page one past
+the end, which is exactly where a blit that runs one row too far lands.
+
+The one-row-too-far comes from `drivers/gpu/drm/sysfb/drm_sysfb_modeset.c`
+being pristine upstream and its plane update mixing two rects:
+
+    struct drm_rect dst_clip = plane_state->dst;
+    if (!drm_rect_intersect(&dst_clip, &damage))
+            continue;
+    iosys_map_incr(&dst, drm_fb_clip_offset(dst_pitch, dst_format, &dst_clip));
+    blit_to_crtc(&dst, &dst_pitch, shadow_plane_state->data, fb, &damage, ...);
+
+`dst` is offset to `dst_clip`'s corner, but the *row count* comes from
+`drm_rect_height(&damage)` inside the blit -- and a client's damage clips are
+not required to be inside the plane's destination, so when they are not, the
+blit walks past the end of the plane. The live state shows the client that can
+do it: `plane[35]` is KWin's `fb=44`, `format=XR24`, `size=1080x2424`,
+`pitch[0]=4352`, against this port's destination pitch of 4320.
+
+`kernel/drm-sysfb-clip-damage.patch` hands the blit `&dst_clip` -- the rect the
+destination was actually offset by, which is what the helper's own
+documentation requires ("the destination is at the top-left corner") -- and
+`drm_warn_once`s the offending rect if the clip ever has to bite, so a boot
+says whether the oversized damage is real instead of leaving it to be inferred
+from a fault address. The fix can only narrow what is written, so it is safe
+whatever the damage does. With it in, the serial console is an interactive
+channel again; without it, expect a login on it to end the boot.
 
 ### What the vendor and the shared tree both do, and this port does not
 

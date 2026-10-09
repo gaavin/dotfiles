@@ -43,25 +43,30 @@ spending a build on the arm, use the cheap discriminator: after a failure, read
 if the LTSSM has left L0 it is power management and the arm is the fix, and if
 it is still in L0 the dongle is failing from the inside.
 
-The loop is otherwise unchanged, but the transport now matters. The phone is
+The loop is otherwise unchanged, but the transport matters. The phone is
 reachable over its USB gadget (`ssh max@10.42.0.1`, re-bind with
 `echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind`) *or* on the UART
-board's console -- the two are mutually exclusive. **Prefer SSH**, because the
-serial console panics the kernel a minute or so into userspace: logging in
-draws, and the draw dies in this port's own framebuffer path,
-
-    drm_sysfb_plane_helper_atomic_update -> drm_fb_xrgb8888_to_bgrx8888
-    -> memcpy_toio -> Kernel panic - not syncing: Oops: Fatal exception
-
-which is a store into the bootloader framebuffer via
-`kernel/zumapro-bootfb.c`'s simpledrm hand-off, not an MMIO fault. That is a
-separate bug from Wi-Fi and it is what made the console go silent minutes into
-two earlier sessions; it needs its own fix before the UART is an interactive
-channel again. **Do not hand-poke dongle RAM either:**
+board's console -- the two are mutually exclusive. Logging in on the serial
+console used to panic the kernel a minute into userspace, which is what made
+the console look like it hung twice during bring-up. **That one is now
+root-caused and fixed**, and it was never Wi-Fi: the fault was
+`ffff8000829fd000`, the guard page one past this port's ioremap of the
+bootloader framebuffer (`phys=0xfac00000`, 1080x2424, stride 4320), because
+upstream's `drm_sysfb_plane_helper_atomic_update()` offsets the destination by
+the clipped damage rect but counts rows from the unclipped one, and a client's
+damage is not required to be inside the plane's destination. KWin's plane
+(`XR24`, `1080x2424`, `pitch 4352`) is the client that can do it.
+`kernel/drm-sysfb-clip-damage.patch` passes the blit `&dst_clip` instead and
+warns once if the clip ever bites, so a boot says whether the oversized damage
+is real. See `README.md`, "Separately: the console panics the phone".
+**Do not hand-poke dongle RAM:**
 a `devmem` *read* at `0x850090` is fine, but a `devmem` *write* there took the
 whole phone down. On that console, use
 `/run/wrappers/bin/sudo` -- the scripts' PATH export shadows the setuid wrapper
-with the store's copy.
+with the store's copy. And when a boot dies, read the previous boot's journal
+(`sudo journalctl -b -1 -k`); a panic's fault address lands there even when
+`panic=0` leaves the phone spinning on the panel, because the watchdog resets
+it and the journal survives.
 
 ## Next focus: the eUSB2 + combo USB-DP PHY
 

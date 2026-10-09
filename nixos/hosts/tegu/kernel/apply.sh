@@ -129,3 +129,37 @@ grep -q "brcmf_pcie_dma_mask_bits" "$wifi/brcmfmac/pcie.c" ||
 	{ echo "apply.sh: dma mask knob patch did not apply" >&2; exit 1; }
 grep -q "brcmf_pcie_force_tcm_idx" "$wifi/brcmfmac/pcie.c" ||
 	{ echo "apply.sh: tcm index knob patch did not apply" >&2; exit 1; }
+
+# --- framebuffer: keep the panel blit inside the framebuffer --------------
+# This is not a Wi-Fi change; it is what makes the serial console usable, and
+# therefore what makes every later boot debuggable.
+#
+# SimplEdrm's plane update offsets the destination by the *clipped* damage rect
+# but hands the blit helper the *unclipped* one, so the number of rows the blit
+# walks comes from a rect that a client's damage clips are not required to keep
+# inside the plane's destination. On tegu the damage can be one row taller than
+# this panel's 1080x2424 mode, which puts the last row past the end of the
+# framebuffer mapping ../kernel/zumapro-bootfb.c creates, and the write lands in
+# the guard page one page beyond it:
+#
+#   Unable to handle kernel paging request at virtual address ffff8000829fd000
+#     ESR = 0x0000000096000047   EC = 0x25 DABT   WnR = 1
+#     FSC = 0x07: level 3 translation fault   pte=0000000000000000
+#   memcpy_toio+0x44/0xc0 (P)
+#   drm_fb_xrgb8888_to_bgrx8888+0x64/0xb0
+#   drm_sysfb_plane_helper_atomic_update+0x160/0x1a0
+#
+# /proc/vmallocinfo puts the bootloader framebuffer's ioremap (phys 0xfac00000)
+# at ffff800082000000-ffff8000829fe000, so ffff8000829fd000 is that mapping's
+# last page -- the first one a one-row overflow reaches. Because the panic
+# fires in the DRM commit worker, it takes the whole kernel down with it
+# (panic_on_oops=1), which is why logging in on the serial console killed the
+# phone twice during bring-up and why the console looked like it "hung".
+#
+# Hand the blit the same rect the destination was offset by, and say so once if
+# the clip actually had to bite -- so a boot tells us whether the oversized
+# damage is real rather than leaving us to infer it from a fault address.
+fbmodeset=drivers/gpu/drm/sysfb/drm_sysfb_modeset.c
+patch -p1 < "$src"/drm-sysfb-clip-damage.patch
+grep -q "is not inside plane dst" "$fbmodeset" ||
+	{ echo "apply.sh: drm_sysfb damage-clip patch did not apply" >&2; exit 1; }
