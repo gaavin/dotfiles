@@ -129,7 +129,8 @@ sources, then tested by booting it.
 | Touch input | **Yes**, now on the shared tree's `syna_tcm` over an s3c64xx that holds a native chip select across the whole message |
 | USB | **Yes**, first boot of the shared tree, 2026-09-09. A UDC exists, the NCM gadget binds, and the host sees `18d1:4ee1`. `ssh max@10.42.0.1` over the USB-C port replaces the reflash-per-question loop |
 | USB serial console | **Yes**, 2026-09-10. An `acm.GS0` function beside the NCM one gives `/dev/ttyGS0` on the phone and `/dev/ttyACM0` on the host, with a getty on it — the first channel that can carry a keystroke *in*, which the UART cannot |
-| WLAN, modem, GPU, audio, camera | No. Drivers for all of them are in the shared tree, aimed at the Pixel 9 boards, and none of it is enabled for tegu yet |
+| WLAN (Broadcom BCM4383) | **Half there.** The part is identified, the driver now knows it, and the vendor firmware boots the dongle — but the host<->dongle msgbuf path over PCIe does not work yet, so no `wlan0`. See "Wi-Fi" below |
+| Modem, GPU, audio, camera | No. Drivers for all of them are in the shared tree, aimed at the Pixel 9 boards, and none of it is enabled for tegu yet |
 
 ## The panel console
 
@@ -601,19 +602,99 @@ The driver here is deliberately not `sec-acpm.c`: it talks to ACPM directly,
 so it needs no interrupt (there is no pinctrl driver to supply one) and it
 cannot write an S2MPG10 offset by accident.
 
+## Wi-Fi: the part is a BCM4383, and it boots
+
+The Wi-Fi side of this board is Broadcom's **BCM4383**, on PCIe channel 1. The
+shared tree's note ("tegu uses a different part") is right: its device table
+carries `0x4438` for the 4390 the other Zumapro boards use, and this board
+enumerates as `14e4:4449` and reports chipcommon ID `0x4383`. Mainline had
+never heard of either number, so `kernel/apply.sh` adds all of it, taken from
+Google's own driver for this part
+(`kernel/google-modules/wlan/bcmdhd/bcm4383`):
+
+| what | value | where the vendor keeps it |
+| --- | --- | --- |
+| chip common ID | `0x4383` | `BCM4383_CHIP_ID`, `include/bcmdevs.h` |
+| PCIe endpoint | `0x4449` | `BCM4383_D11AX_ID`, `include/bcmdevs.h` |
+| CR4 RAM base | `0x6e0000` | `CR4_4383_RAM_BASE`, `include/sbchipc.h` |
+
+plus the firmware mapping for the blob in `./wifi-firmware/`, which is the
+vendor image's `fw_bcmdhd.bin` renamed (see that directory's README). The
+device tree side is a PCIe node of this port's own, with the PERST/reg-on/wake
+GPIOs the vendor node drives; without `reset-gpios` the host driver refuses to
+probe, and the link then trains at Gen 2 x1.
+
+That much works, and the boot log shows it:
+
+    pci 0000:01:00.0: [14e4:4449] type 00 class 0x028000 PCIe Endpoint
+    brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac4383a3-pcie for chip BCM4383/2
+    brcmf_chip_get_raminfo RAM: base=0x6e0000 size=2228224 (0x220000)
+    CONSOLE: RTE (PCIE-MSGBUF) 20.25.929.104.5 (ge373607) on BCM4383 r2
+    CONSOLE: wl0: Broadcom BCM4383 802.11 Wireless Controller 20.25.929.104.5
+    CONSOLE: ThreadX v5.6 initialized
+
+So the firmware is the right one, the RAM base is right, and the dongle boots
+far enough to attach both radios. What it does *not* survive is the next step:
+as soon as the host starts feeding the msgbuf rings, the dongle traps.
+
+### Where it stops, and how it was measured
+
+    brcmf_pcie_init_ringbuffers Using host memory indices
+    brcmf_pcie_ring_mb_write_wptr W w_ptr 8 (0), ring 0
+    CONSOLE: err check: core 0x1810a000, error 2, axi id 0x10001, addr(0x00000000:00819fe8)
+    CONSOLE: AXI timeout
+    CONSOLE: TRAP 4(8f7ed0): pc 72b34a, lr 72b33d, sp 8f7f28
+    brcmf_pcie_handle_mb_data D2H_MB_DATA: FW HALT
+
+The dongle halts on its own AXI bus timeout, at a different address each probe
+(`0x8196b0`, `0x819fe8`, `0x81b380`, `0x83581c`), and the host gets PCIe AER
+completion aborts at the same time. `msgbuf` is a *shared memory* protocol: the
+rings live in host RAM and the dongle DMAs into them, so this is the
+device->host direction failing, not the firmware.
+
+Two things are worth knowing before attacking it:
+
+* `Shared RAM addr: 0x008503b4`, and the driver reaches it. BAR1 is a 4 MiB
+  window (PCI `60000000-603fffff`) and this chip's RAM spans
+  `0x6e0000-0x8fffff`, i.e. across the 4 MiB boundary at `0x800000`, so the
+  shared tree's own BAR1-window-sliding code (`brcmf_pcie_tcm_addr`,
+  `BRCMF_PCIE_BAR1_WINDOW` at config `0x84`) is on the critical path here. It
+  is the first thing to suspect; it is also new code in that tree, not
+  upstream.
+* The host memory indices it feeds the dongle are *64-bit coherent
+  allocations* (measured: `h2d_w_idx_hostaddr = 0x91e0aa000`), and the PCIe
+  node has **no `dma-ranges` and no `iommus`** property — `find
+  /proc/device-tree -name dma-ranges` is empty. So there is nothing describing
+  how a device-initiated access reaches DRAM. The vendor driver configures
+  that itself (its node has an `"ia"` register region, `use-ia`/`use-sysmmu`
+  flags, and a `samsung,pcie-sysmmu` at `131c0000` that stock Android leaves
+  disabled); mainline's `pci-exynos.c` does neither. If the dongle is only
+  reaching host memory because no translation exists at all, that is the gap.
+
+The devcoredump (`/sys/class/devcoredump/devcdN/data`, the raw 2.2 MB of
+dongle RAM at `rambase`) is what made this readable: the real shared-info
+block, the ring info and the published host addresses can all be pulled out of
+it with a little Python.
+
 ## Next steps, in order
 
 The base swap booted, and it closed both items this list used to open with.
 What is left is mostly board description rather than reverse engineering.
 
-1. **Make the USB link a first-class debug channel.** It works, but the host
-   side is still manual: the gadget takes no fixed MAC, so mina cannot key a
-   NetworkManager profile to it and someone has to
-   `ip addr add 10.42.0.2/24 dev <iface>` by hand each time. Set `dev_addr`
-   and `host_addr` on `functions/ncm.usb0` in `usb-gadget-net`, then add a
-   matching profile on the build host. While in there: an ACM function
-   alongside NCM would give a writable serial console, which the UART cannot
-   be.
+1. **Wi-Fi.** The chip is a BCM4383 and the driver plus firmware now boot it
+   (see the Wi-Fi section above); what is left is the host<->dongle msgbuf
+   path. The dongle halts on its own AXI timeout the moment the host feeds the
+   rings, and the two suspects are the shared tree's BAR1-window sliding (this
+   chip's RAM spans the 4 MiB window boundary at `0x800000`, so that code is
+   live on every access) and the missing device->host DMA description for PCIe
+   (`dma-ranges` and `iommus` are both absent from the node; the vendor driver
+   configures an `"ia"` register region and a PCIe sysmmu instead, and
+   mainline's `pci-exynos.c` does neither). This needs no flashing to iterate:
+   the phone reaches the network over its USB gadget, so
+   `ssh max@10.42.0.1` and then
+   `echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind` reproduces the
+   whole probe in seconds, and `/sys/class/devcoredump/devcdN/data` is the
+   2.2 MB image of dongle RAM.
 2. **The display, properly.** The one place the shared tree does not cover this
    board: `DRM_EXYNOS` is not even enabled in their `zumapro_defconfig`, their
    exynos9 DECON/DSIM work is aimed at komodo and caiman, and the panel drivers
@@ -622,21 +703,16 @@ What is left is mostly board description rather than reverse engineering.
    `DRM_EXYNOS9_DECON` and the zuma DSIM, then write the tegu panel against
    their komodo one. This is what stands between the phone and a display that
    can change modes, sleep, or dim.
-3. **Wi-Fi.** `brcmfmac` with their BCM4390 work plus the PCIe host and PHY,
-   all SoC-level and enabled in their defconfig. What is missing is a tegu
-   wireless description: theirs lives in `zumapro-caimito-bcm4390.dtsi`, which
-   only the four caimito boards include, and the firmware has to come from the
-   vendor image.
-4. **Audio.** The AoC path is the deep one: their `GOOGLE_AOC` needs GSA and
+3. **Audio.** The AoC path is the deep one: their `GOOGLE_AOC` needs GSA and
    Trusty to release the core from reset, and their own defconfig does not
    currently build it (`CONFIG_TRUSTY` is absent, so `GOOGLE_AOC=m` silently
    drops out — check `.config` before assuming audio is a config away). The
    speaker amplifier on this board also has to be identified; theirs is a
    CS35L41 pair in `zumapro-caimito-cs35l41.dtsi`.
-5. **Modem.** Their `s5xxx` driver reaches a stable ONLINE with data on the
+4. **Modem.** Their `s5xxx` driver reaches a stable ONLINE with data on the
    caimito boards, over PCIe CH0 with a CP power sequencer and a bit-banged
    SPMI bus. Everything board-specific is in `zumapro-caimito-s5400.dtsi`.
-6. **The long tail, roughly in order of how much a phone needs it:** charger
+5. **The long tail, roughly in order of how much a phone needs it:** charger
    and fuel gauge (`max77779`), the GPU's ACPM DVFS and thermal throttling,
    deep idle (MCT v3 and the c2 states are in their DT already), NFC, the
    camera flash LED, GNSS.

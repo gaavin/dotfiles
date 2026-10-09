@@ -36,14 +36,24 @@ let
   '';
 
   # Wi-Fi firmware for the Broadcom combo chip the Wi-Fi side of the device
-  # tree brings up. linux-firmware has nothing for this part, so the blobs are
-  # checked in beside this file -- see ./wifi-firmware/README.md for where they
-  # came from and why they are named this way.
+  # tree brings up. The part is a BCM4383 and linux-firmware has nothing for
+  # it, so the blobs are checked in beside this file -- see
+  # ./wifi-firmware/README.md for where they came from and why they are named
+  # this way. The name has to be this one: kernel/apply.sh maps the chip to
+  # BRCMF_FW_CLM_DEF(4383A3, "brcmfmac4383a3-pcie"), and brcmfmac appends
+  # ".bin"/".clm_blob"/".txcap_blob" to it.
   wifi-firmware = pkgs.runCommand "tegu-wifi-firmware" { } ''
     mkdir -p $out/lib/firmware/brcm
-    cp ${./wifi-firmware}/brcmfmac4390b1-pcie.bin $out/lib/firmware/brcm/
-    cp ${./wifi-firmware}/brcmfmac4390b1-pcie.clm_blob $out/lib/firmware/brcm/
-    cp ${./wifi-firmware}/brcmfmac4390b1-pcie.txcap_blob $out/lib/firmware/brcm/
+    cp ${./wifi-firmware}/brcmfmac4383a3-pcie.bin $out/lib/firmware/brcm/
+    cp ${./wifi-firmware}/brcmfmac4383a3-pcie.clm_blob $out/lib/firmware/brcm/
+    cp ${./wifi-firmware}/brcmfmac4383a3-pcie.txcap_blob $out/lib/firmware/brcm/
+    # wireless-regdb itself ships these uncompressed; the .zst copies come
+    # from the compressed firmware env, and this kernel's loader cannot read
+    # those -- measured: with the search path pointed straight at the firmware
+    # env the boot log still says
+    #   Direct firmware load for regulatory.db failed with error -2
+    cp ${pkgs.wireless-regdb}/lib/firmware/regulatory.db $out/lib/firmware/
+    cp ${pkgs.wireless-regdb}/lib/firmware/regulatory.db.p7s $out/lib/firmware/
   '';
 
   # Seeded into max's ~/.config (see below). It is a plain file in the store
@@ -143,6 +153,28 @@ in
         "arm/mali/arch11.8/mali_csffw.bin"
         "arm/mali/arch12.8/mali_csffw.bin"
         "arm/mali/arch13.8/mali_csffw.bin"
+
+        # Same argument for Wi-Fi, and it cost a full flash to learn: brcmfmac
+        # is built in too, probes the 4383 at 1.5 s, and asks for its firmware
+        # from a workqueue while the rootfs still is not mounted. Measured with
+        # the blobs only in the system firmware env:
+        #   brcmf_fw_alloc_request: using brcm/brcmfmac4383a3-pcie for chip BCM4383/2
+        #   Direct firmware load for brcm/brcmfmac4383a3-pcie.bin failed with error -2
+        #   brcmf_pcie_setup: Dongle setup failed
+        #   probe with driver brcmfmac failed with error -2
+        # -2 there is not "the file is missing from the system" -- it is "the
+        # store is not mounted yet". Pointing firmware_class.path at the store
+        # from kernelParams cannot fix that either, for the same reason; the
+        # blobs have to be inside the initrd's own /lib, which is a symlink
+        # into the modules closure this list feeds.
+        #
+        # regulatory.db is here as well because faux_driver wants it at 3.7 s,
+        # also before the rootfs is up.
+        "brcm/brcmfmac4383a3-pcie.bin"
+        "brcm/brcmfmac4383a3-pcie.clm_blob"
+        "brcm/brcmfmac4383a3-pcie.txcap_blob"
+        "regulatory.db"
+        "regulatory.db.p7s"
       ];
     };
 
@@ -178,7 +210,7 @@ in
     # cooling device, and the g3d-thermal zone's power_allocator then calls
     # devfreq_cooling_get_requested_power() on the freed devfreq -- a panic at
     # 5 s that panic=0 leaves spinning on the panel and UART.
-    firmware = [ mali-firmware wifi-firmware pkgs.wireless-regdb ];
+    firmware = [ mali-firmware wifi-firmware ];
     enableRedistributableFirmware = false;
     graphics.enable = true;
     bluetooth.enable = false;

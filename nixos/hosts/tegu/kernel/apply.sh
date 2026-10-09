@@ -69,3 +69,47 @@ test -f "$fg"   # fail loudly if the shared tree moves or drops this driver
 patch -p1 < "$src"/max77779-fg-portable-state.patch
 grep -q "FStat.DNR says exactly that" "$fg" ||
 	{ echo "apply.sh: fuel gauge patch did not apply" >&2; exit 1; }
+
+# --- Wi-Fi: tegu's PCIe part is a BCM4383 --------------------------------
+# The board's Wi-Fi is Broadcom's BCM4383, on PCIe channel 1, and mainline has
+# never heard of it. The vendor's own bcmdhd module (Google's
+# kernel/google-modules/wlan/bcmdhd/bcm4383) is where the three missing facts
+# come from, and the shared tree's note -- "tegu uses a different part" -- is
+# the same conclusion reached from the other side: its table carries 0x4438
+# for the 4390 the other Zumapro boards use.
+#
+# Measured on the phone, in this order, each failure naming the next gap:
+#
+#   pci 0000:01:00.0: [14e4:4449] type 00 class 0x028000 PCIe Endpoint
+#   brcmfmac: brcmf_chip_tcm_rambase: unknown chip: BCM4383/2
+#   brcmfmac: brcmf_chip_get_raminfo: RAM base not provided with ARM CR4 core
+#   brcmfmac: brcmf_pcie_probe: failed 14e4:4449      (-22, and no wlan0)
+#
+# so the patch adds, all of it from bcmdhd:
+#
+#   BCM4383_CHIP_ID          0x4383   (include/bcmdevs.h)
+#   BCM4383_D11AX_ID         0x4449   (include/bcmdevs.h) -- the PCIe endpoint
+#   CR4_4383_RAM_BASE        0x6e0000 (include/sbchipc.h)
+#
+# plus the firmware mapping the chip needs to make brcmfmac ask for the blob
+# installed as brcmfmac4383a3-pcie.* (see ../wifi-firmware/README.md). The
+# rev mask is all-revs: the vendor ships one firmware image for this part and
+# the .clm_blob/.txcap_blob it pairs with it are named "..._4383_a3".
+#
+# WCC_SEED is the flow the rest of that family uses in this tree; note that
+# neither the seed footers nor the OTP parse it enables can change anything
+# here, because both are behind conditions this board does not meet (the
+# seed footers are only written when a .txt NVRAM file is found, and
+# brcmf_pcie_read_otp() has no 4383 case, so it returns early).
+wifi=drivers/net/wireless/broadcom/brcm80211
+patch -p1 < "$src"/brcmfmac-tegu-4383.patch
+grep -q "BRCM_CC_4383_CHIP_ID" "$wifi/include/brcm_hw_ids.h" ||
+	{ echo "apply.sh: brcmfmac chip id patch did not apply" >&2; exit 1; }
+grep -q "BRCM_PCIE_4383_DEVICE_ID	0x4449" "$wifi/include/brcm_hw_ids.h" ||
+	{ echo "apply.sh: brcmfmac pci id patch did not apply" >&2; exit 1; }
+grep -q "BRCM_CC_4383_CHIP_ID:" "$wifi/brcmfmac/chip.c" ||
+	{ echo "apply.sh: brcmfmac rambase patch did not apply" >&2; exit 1; }
+grep -q "BRCM_CC_4383_CHIP_ID, 0xFFFFFFFF, 4383A3" "$wifi/brcmfmac/pcie.c" ||
+	{ echo "apply.sh: brcmfmac firmware mapping patch did not apply" >&2; exit 1; }
+grep -q "BRCM_PCIE_4383_DEVICE_ID, WCC_SEED" "$wifi/brcmfmac/pcie.c" ||
+	{ echo "apply.sh: brcmfmac pci table patch did not apply" >&2; exit 1; }

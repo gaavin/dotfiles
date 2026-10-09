@@ -134,6 +134,18 @@
 &pcie_1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&wlan_pcie1_clkreq &wlan_reg_on &wlan_host_wake &wlan_dev_wake>;
+	/*
+	 * PERST is mandatory: without it the driver refuses to probe, measured on
+	 * the device as
+	 *   exynos-pcie 13120000.pcie: error -ENOENT: failed to get PERST GPIO
+	 *   exynos-pcie 13120000.pcie: probe with driver exynos-pcie failed with error -2
+	 * This is gph3-0 -- the pin the vendor's own tegu node drives through its
+	 * "gpios" property. It is also the pin zumapro.dtsi names as ufs_refclk_out
+	 * in this port's UFS pinctrl-0, which is why the first cut left it out; the
+	 * vendor drives it the same way on the same board, so the UFS clearly does
+	 * not depend on that mux, and the phone boots with this in place.
+	 */
+	reset-gpios = <&gph3 0 GPIO_ACTIVE_HIGH>;		/* PERST */
 	wlan-reg-on-gpios = <&gph3 4 GPIO_ACTIVE_HIGH>;		/* WLAN_EN */
 	host-wake-gpios = <&gpa5 3 GPIO_ACTIVE_HIGH>;		/* WL_HOST_WAKE */
 	device-wake-gpios = <&gph3 5 GPIO_ACTIVE_HIGH>;		/* WL_DEV_WAKE */

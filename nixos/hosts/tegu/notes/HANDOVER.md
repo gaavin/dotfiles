@@ -4,6 +4,27 @@ Mainline Linux 7.3-rc1 + NixOS on a Google Pixel 9a (Tensor G4, `zumapro`).
 Repo `~/dotfiles`, work in `nixos/hosts/tegu`. Read `README.md` first — it is
 current as of this handover.
 
+## Wi-Fi (BCM4383) — current work, 2026-10-08
+
+The board's Wi-Fi is a Broadcom **BCM4383** (`14e4:4449`, chipcommon `0x4383`),
+a part mainline had never supported. `kernel/apply.sh` now adds the chip ID,
+the CR4 RAM base (`0x6e0000`, from Google's own bcmdhd module) and the firmware
+mapping, and the vendor image's `fw_bcmdhd.bin` (in `../wifi-firmware/`) boots
+the dongle: `RTE (PCIE-MSGBUF) ... on BCM4383 r2`, `wl0`/`wl1` attach.
+
+It stops there. As soon as the host feeds the msgbuf rings the dongle halts on
+its own AXI timeout and no `wlan0` appears, so this is the device->host DMA
+path, not the firmware. `README.md` section "Wi-Fi: the part is a BCM4383, and
+it boots" has the boot log, the dump-derived numbers, the two suspects (the
+shared tree's BAR1 window sliding, which is live here because the RAM spans the
+4 MiB boundary at `0x800000`; and the node's missing `dma-ranges`/`iommus`)
+and the fast loop: the phone is reachable at `ssh max@10.42.0.1` over its USB
+gadget, so the whole probe can be re-run in seconds with
+
+    echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind
+
+and `/sys/class/devcoredump/devcdN/data` is the 2.2 MB image of dongle RAM.
+
 ## Next focus: the eUSB2 + combo USB-DP PHY
 
 **Do it the way the UFS PHY was done.** That is the requirement, and it is a
