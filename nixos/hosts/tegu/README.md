@@ -4,11 +4,14 @@ Status: **it boots.** Mainline Linux runs NixOS 26.11 on a Tensor G4
 (`zumapro`) from the phone's own UFS storage, with Plasma Mobile on the panel
 and a login prompt on UART.
 
-Since 2026-09-09 the kernel is no longer this port's own tree — see [The kernel
-base changed](#the-kernel-base-changed-2026-09-09) — and **on its first boot
-USB came up**, which had been this port's blocker: `dwc3` probes, the eUSB2 +
-USB-DP combo PHY initialises, and the host enumerates `18d1:4ee1 NixOS
-Pixel 9a` about 40 s after reset. The touchscreen works on their `syna_tcm`.
+Since 2026-09-09 the kernel is no longer this port's own tree, and since
+2026-10-09 it is no longer patched at build time either: both live in a kernel
+repository of their own — see [The kernel moved into its own
+repository](#the-kernel-moved-into-its-own-repository-2026-10-09). **On its
+first boot USB came up**, which had been this port's blocker: `dwc3` probes,
+the eUSB2 + USB-DP combo PHY initialises, and the host enumerates
+`18d1:4ee1 NixOS Pixel 9a` about 40 s after reset. The touchscreen works on
+their `syna_tcm`.
 
 ```
 Power mode changed to : FAST series_B G_4 L_2
@@ -31,13 +34,30 @@ A/B retry, and at zero ABL forces fastboot and marks the slot unbootable;
 Everything below was established on hardware. Where something is inferred
 rather than observed it says so.
 
-## The kernel base changed (2026-09-09)
+## The kernel moved into its own repository (2026-10-09)
 
-Until now this was plain torvalds 7.3-rc1 with this port's own `zumapro.dtsi`
-and a dozen grafted drivers and register patchers. It is now built from the
-shared zumapro port tree — [Trijal08/kernel-mainline][trijal], branch
-`zumapro-google-caimito`: mainline 7.3-rc2 plus ~400 commits of Tensor G4 work
-for the Pixel 9 family, and it already carries a `zumapro-tegu.dts`.
+Until now the kernel was always partly assembled at build time: `kernel.nix`
+fetched a tree and then ran `kernel/apply.sh` from the Nix build, which
+appended a device tree, installed a driver and applied six `.patch` files. The
+kernel on the phone therefore existed nowhere as a source tree — not in this
+repository, and not in the one it was fetched from.
+
+It now lives in one of its own, [gaavin/linux][kfork], branch `pixel9a`:
+
+- current mainline **`master`** as the base (a torvalds/linux commit whose
+  Makefile still reports 7.3.0-rc6), so the repository is standalone and not a
+  GitHub fork of anyone;
+- the shared zumapro Tensor G4 work — [Trijal08/kernel-mainline][trijal],
+  branch `zumapro-google-caimito`, 680 commits — **cherry-picked and rebased
+  onto that master commit** so the ancestry is genuine mainline;
+- this port's own tegu bring-up as a real commit on top: the board device
+  tree, the boot framebuffer driver, the simplefb BGRA/BGRX name, the fuel
+  gauge's gate, the BCM4383 support in brcmfmac, the simpledrm damage clip,
+  and the board's Kconfig options in `zumapro_defconfig`.
+
+`kernel.nix` now just fetches that repository at a pinned commit. There is no
+`apply.sh` and there are no `.patch` files: `kernel/` and `dts/` are gone, and
+the kernel a build produces is exactly the kernel in the repository.
 
 That tree independently reached every hardware conclusion this port paid boots
 for — PHY isolation at `0x3ec0`, calibration-done at TRSV `0x31d`, no CDR wait,
@@ -50,11 +70,11 @@ the eUSB2 + USB-DP combo PHY that USB here is blocked on, PCIe, Wi-Fi, and the
 exynos9 DECON/DSIM display pipeline. The silicon is the same either way, and
 re-deriving any one of those would cost weeks of boots.
 
-What this port still owns: the whole NixOS side (`images.nix`, the initrd, the
-rootfs, the host config), `kernel/zumapro-bootfb.c`, and the board deltas in
-`dts/zumapro-tegu-nixos.dtsi`. The old self-contained kernel — its own
-`zumapro.dtsi`, the HSI0/HSI2 clock drivers, `zumapro-touch.c`, the UFS
-patchers — is at commit `32c547c`.
+The measurements behind each tegu commit are in that commit's message, where
+they belong — with the code they explain, not in a script that rewrites the
+source underneath them. The old self-contained bring-up kernel — this port's
+own `zumapro.dtsi`, the HSI0/HSI2 clock drivers, `zumapro-touch.c`, the UFS
+patchers — is still at commit `32c547c` here.
 
 **Booted 2026-09-09, and it came up.** Evidence, all from the build host with
 no debug cable attached: the gadget enumerated with the product strings this
@@ -75,9 +95,10 @@ phone. What was new and therefore at risk, and how it landed:
   is on the command line. Without it the regulator framework switches off
   every LDO and buck no driver has claimed, at `late_initcall`, on a phone
   whose panel has no driver.
-- **`bootargs` is forced back to empty** by `dts/zumapro-tegu-nixos.dtsi`.
-  The shared tree puts postmarketOS's arguments there; `images.nix` is the
-  only place this port wants the command line to come from.
+- **`bootargs` is forced back to empty** by the kernel's
+  `arch/arm64/boot/dts/exynos/google/zumapro-tegu-nixos.dtsi`. The shared tree
+  puts postmarketOS's arguments there; `images.nix` is the only place this port
+  wants the command line to come from.
 - **Their defconfig builds the AoC, the Touch Bus Negotiator, the modem and
   GNSS as modules.** Nothing on the boot path needs them, and NixOS carries
   the module tree in the closure, so this is only a note for when audio or
@@ -90,17 +111,19 @@ phone. What was new and therefore at risk, and how it landed:
   addresses are right.
 
 [trijal]: https://github.com/Trijal08/kernel-mainline/commits/zumapro-google-caimito/
+[kfork]: https://github.com/gaavin/linux
 
 ## Why this is not a daily driver
 
-Mainline has no Tensor G4 support at all: as of 7.3-rc2 upstream carries device
+Mainline has no Tensor G4 support at all: as of v7.3-rc6 upstream carries device
 trees only for the Tensor G1 (`gs101`, Pixel 6), nothing has been posted for
 `zuma` or `zumapro`, and Mobile NixOS has no Google phones. Google's own
 mainline effort skipped to the Pixel 10 and only reaches a serial shell.
 
 Out of tree, two community trees do carry this SoC —
-[Trijal08/kernel-mainline][trijal] (the base this port now builds from, aimed
-at the Pixel 9 family, with postmarketOS packaging) and
+[Trijal08/kernel-mainline][trijal] (whose zumapro work this port's kernel
+rebases onto mainline v7.3-rc6, aimed at the Pixel 9 family, with postmarketOS
+packaging) and
 [zumapro-mainline/linux](https://github.com/zumapro-mainline/linux) — and
 between them most of the SoC is described. None of it is upstream, none of it
 is a phone you would carry, and the Pixel 9a is the least-tested board in
@@ -138,10 +161,11 @@ This predates the UART and is still the fastest signal when the kernel dies
 before the serial console comes up.
 
 The bootloader leaves the boot logo scanning out on DECON0 when it jumps to the
-kernel. `kernel/zumapro-bootfb.c` reads the DECON window and DPP read-DMA
-registers during early boot, works out where the framebuffer is, reserves it,
-and registers it as a `simple-framebuffer`. simpledrm binds, fbcon attaches,
-and with `console=tty0` the whole boot log lands on the screen.
+kernel. The kernel repository's `drivers/video/zumapro-bootfb.c` reads the
+DECON window and DPP read-DMA registers during early boot, works out where the
+framebuffer is, reserves it, and registers it as a `simple-framebuffer`.
+simpledrm binds, fbcon attaches, and with `console=tty0` the whole boot log
+lands on the screen.
 
 Measured on hardware:
 
@@ -320,22 +344,27 @@ Things that are not documented anywhere and cost real time to discover:
 
 | File | Purpose |
 | --- | --- |
-| `kernel.nix` | The kernel: shared port tree pinned by commit, their `zumapro_defconfig`, and the NixOS/bring-up config on top |
-| `kernel/apply.sh` | Grafts what is left of this port into that tree; fails loudly if an upstream anchor moves |
-| `dts/zumapro-tegu-nixos.dtsi` | Board deltas appended to their `zumapro-tegu.dts`: empty `bootargs`, and their two framebuffer nodes off in favour of `zumapro-bootfb.c` |
-| `kernel/zumapro-bootfb.c` | Boot framebuffer adoption: reads geometry, stride and format out of DECON, reserves the buffer NOMAP, keeps triggering the command-mode panel |
-| `kernel/check.sh` | Cross-compile one driver against the kernel's store build tree, in seconds, without building an image |
+| `kernel.nix` | Points at the port's kernel fork (pinned commit), its `zumapro_defconfig`, and the NixOS/bring-up config on top |
 | `initramfs.nix`, `rescue-init` | Rescue userspace, linked into the kernel image |
 | `cross-kernel.nix` | Cross-compiles the kernel from x86_64 instead of emulating |
 | `default.nix` | NixOS host: root on the phone's `userdata`, Plasma Mobile, the kernel command line |
 | `images.nix` | Flashable images and `flash.sh` |
 | `notes/HARDWARE.md` | Every address, offset and measured value this port established, in one place — including the gs101 values that turned out wrong and what they should be |
-| `notes/UPSTREAM.md` | The two community trees: what each got right, and the traps in taking a gs101 name for a zumapro register |
+| `notes/UPSTREAM.md` | The community trees: what each got right, and the traps in taking a gs101 name for a zumapro register |
 | `notes/HANDOVER.md`, `notes/HANDOVER-PROMPT.md` | Briefing for picking this up cold, and the prompt to hand a new session |
 | `notes/s2mpg14-dump.txt` | The live PMIC dump, and how the vendor map was matched against it |
 | `touch-probe.sh`, `spi-*.sh` | Bring-up probes over `devmem` (never `dd`: arm64 restricts `/dev/mem` `read()` to real memory). All written against this port's own touch driver, which the shared tree's `syna_tcm` replaces — kept for the register maps in them |
 | `tegu-cmd.sh`, `../../tools/tegu-cmd` | Run a shell command passed on the kernel command line. The write half of the debug loop on a phone with a receive-only UART |
 | `uart-capture.py` | Capture the UART to a file, tolerating the characters it drops |
+
+The kernel pieces that used to sit here — `kernel/apply.sh`, the six
+`kernel/*.patch` files, `kernel/zumapro-bootfb.c`, `kernel/check.sh` and
+`dts/zumapro-tegu-nixos.dtsi` — moved into the port's kernel repository
+([gaavin/linux][kfork], branch `pixel9a`) as real commits; see [The kernel
+moved into its own repository](#the-kernel-moved-into-its-own-repository-2026-10-09).
+`check.sh` has no counterpart there: it existed to compile a driver that lived
+outside the kernel against a kernel in the store, and the driver now lives in
+the tree, so the kernel build is the check.
 
 Gone with the base swap, and recoverable from commit `32c547c`: this port's
 `zumapro.dtsi` and board files, `clk-zumapro-hsi0.c`, `clk-zumapro-hsi2.c`,
@@ -608,9 +637,10 @@ The Wi-Fi side of this board is Broadcom's **BCM4383**, on PCIe channel 1. The
 shared tree's note ("tegu uses a different part") is right: its device table
 carries `0x4438` for the 4390 the other Zumapro boards use, and this board
 enumerates as `14e4:4449` and reports chipcommon ID `0x4383`. Mainline had
-never heard of either number, so `kernel/apply.sh` adds all of it, taken from
-Google's own driver for this part
-(`kernel/google-modules/wlan/bcmdhd/bcm4383`):
+never heard of either number, so the tegu commit in [gaavin/linux][kfork] adds
+all of it to brcmfmac
+(`drivers/net/wireless/broadcom/brcm80211/brcmfmac/`), taken from Google's own
+driver for this part (`kernel/google-modules/wlan/bcmdhd/bcm4383`):
 
 | what | value | where the vendor keeps it |
 | --- | --- | --- |
@@ -674,9 +704,11 @@ open on this port.
   `use-ia`/`use-sysmmu` flags, and a `samsung,pcie-sysmmu` at `131c0000` that
   stock Android leaves disabled); mainline's `pci-exynos.c` does neither.
 
-Two of those candidates have since been tested, with `kernel/apply.sh`'s
-`brcmfmac-tegu-dma-knobs.patch` in the kernel. Both knobs are read at probe
-time, so each run is "write the parameter, re-bind the PCI device" over ssh:
+Two of those candidates have since been tested, with the DMA knobs the tegu
+commit adds to brcmfmac
+(`drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c`). Both knobs are
+read at probe time, so each run is "write the parameter, re-bind the PCI
+device" over ssh:
 
 | `dma_mask_bits` | `force_tcm_idx` | result |
 | --- | --- | --- |
@@ -783,8 +815,9 @@ draws after userspace is up -- which is exactly what logging in does:
     Kernel panic - not syncing: Oops: Fatal exception
 
 `drm_sysfb_plane_helper_atomic_update()` is this port's own path --
-`kernel/zumapro-bootfb.c` reserves the bootloader's buffer and hands it to
-simpledrm -- so that fault is a *store into the framebuffer*, not into dongle
+`drivers/video/zumapro-bootfb.c` in the kernel repository reserves the
+bootloader's buffer and hands it to simpledrm -- so that fault is a *store into
+the framebuffer*, not into dongle
 RAM, and it is a different bug from the Wi-Fi one. It is also what made the
 UART console go silent minutes into both earlier sessions.
 
@@ -824,8 +857,9 @@ blit walks past the end of the plane. The live state shows the client that can
 do it: `plane[35]` is KWin's `fb=44`, `format=XR24`, `size=1080x2424`,
 `pitch[0]=4352`, against this port's destination pitch of 4320.
 
-`kernel/drm-sysfb-clip-damage.patch` hands the blit `&dst_clip` -- the rect the
-destination was actually offset by, which is what the helper's own
+The tegu commit's `drm_sysfb` fix
+(`drivers/gpu/drm/sysfb/drm_sysfb_modeset.c`) hands the blit `&dst_clip` -- the
+rect the destination was actually offset by, which is what the helper's own
 documentation requires ("the destination is at the top-left corner") -- and
 `drm_warn_once`s the offending rect if the clip ever has to bite, so a boot
 says whether the oversized damage is real instead of leaving it to be inferred
@@ -886,8 +920,9 @@ The fix is to skip the TCM poll when the firmware drives the mailbox over the
 control ring. The D2H word already arrives there through
 `brcmf_pcie_d2h_mb_rx` -- wired as `bus->ops->d2h_mb_rx` and fed from
 `msgbuf.c:1448` -- so the poll is redundant in that mode. The one-line branch
-is in `kernel/brcmfmac-ctl-mb.patch`, applied by `kernel/apply.sh`; it
-mirrors the H2D side rather than inventing a new mechanism.
+is in the tegu commit's brcmfmac ctl-mailbox change
+(`drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c`); it mirrors the H2D
+side rather than inventing a new mechanism.
 
 ### What the vendor and the shared tree both do, and this port does not
 
@@ -950,7 +985,8 @@ simply never reached on this path, are:
 muxes. The vendor's stock DTB defines `wlan-pcie1-clkreq-pins` on `gph3-1`
 (func 2, pud 3, drv 3, con-pdn 3, pud-pdn 3), `wlan-reg-on-pins` on `gph3-4`,
 `wlan-dev-wake-pins` on `gph3-5` and `pcie1-perst-pins` on `gph3-0` -- byte for
-byte the same as the groups in `dts/zumapro-tegu-nixos.dtsi`. The
+byte the same as the groups in the kernel's
+`arch/arm64/boot/dts/exynos/google/zumapro-tegu-nixos.dtsi`. The
 CLKREQ#/PERST/WLAN_EN wiring this port wrote is right, and the shared tree's
 `pcie1_clkreq`/`pcie1_perst` labels are the same pins, not gs101's `gph2-*`.
 
@@ -1021,7 +1057,7 @@ Downstream references used, all fetched at bring-up time:
 
 Community trees for this SoC:
 
-- [Trijal08/kernel-mainline][trijal], branch `zumapro-google-caimito` — the base this port now builds from
+- [Trijal08/kernel-mainline][trijal], branch `zumapro-google-caimito` — whose zumapro work this port's kernel ([gaavin/linux][kfork], branch `pixel9a`) rebases onto mainline v7.3-rc6
 - [zumapro-mainline/linux](https://github.com/zumapro-mainline/linux) — the other one; `clk-zuma.c` and the pinctrl data came from here first
 
 See `notes/UPSTREAM.md` for what each got right and where a borrowed gs101

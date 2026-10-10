@@ -2,7 +2,7 @@ Paste everything below the line into the new session as its first message.
 
 ---
 
-You are taking over a bring-up in progress: **mainline Linux 7.3-rc1 + NixOS
+You are taking over a bring-up in progress: **mainline Linux v7.3-rc6 + NixOS
 on a Google Pixel 9a** (codename `tegu`, SoC Tensor G4 / `zumapro`). Work in
 `/home/max/dotfiles/nixos/hosts/tegu`. The phone already boots NixOS with
 Plasma Mobile from its own UFS storage. **The current task is the

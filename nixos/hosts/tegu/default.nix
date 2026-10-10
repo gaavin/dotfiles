@@ -39,7 +39,8 @@ let
   # tree brings up. The part is a BCM4383 and linux-firmware has nothing for
   # it, so the blobs are checked in beside this file -- see
   # ./wifi-firmware/README.md for where they came from and why they are named
-  # this way. The name has to be this one: kernel/apply.sh maps the chip to
+  # this way. The name has to be this one: the tegu commit in the kernel
+  # repository (gaavin/linux, pixel9a) maps the chip to
   # BRCMF_FW_CLM_DEF(4383A3, "brcmfmac4383a3-pcie"), and brcmfmac appends
   # ".bin"/".clm_blob"/".txcap_blob" to it.
   #
@@ -93,7 +94,8 @@ in
       # no-op without one.
       "console=ttySAC0,115200n8"
       "earlycon"
-      # Adopt the bootloader's framebuffer (kernel/zumapro-bootfb.c) and make
+      # Adopt the bootloader's framebuffer (drivers/video/zumapro-bootfb.c in
+      # the kernel repository) and make
       # fbcon on it the primary console: the last console= wins /dev/console,
       # so the initrd emergency shell and systemd land on the panel.
       "zumapro_bootfb"

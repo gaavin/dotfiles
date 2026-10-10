@@ -1,12 +1,16 @@
 # The two community zumapro trees — what to take
 
-Nothing for this SoC is upstream. Two out-of-tree forks carry it, and since
-2026-09-09 this port builds from the first of them rather than maintaining its
-own description; see the README's "The kernel base changed".
+Nothing for this SoC is upstream. Two out-of-tree forks carry it, and this port
+builds on the first of them rather than maintaining its own description: its
+zumapro work is cherry-picked and rebased onto a current mainline `master`
+commit in the port's own standalone kernel
+repository ([gaavin/linux](https://github.com/gaavin/linux), branch `pixel9a`),
+with this port's tegu bring-up as one commit on top; see the README's "The
+kernel moved into its own repository".
 
 | | |
 | --- | --- |
-| [Trijal08/kernel-mainline](https://github.com/Trijal08/kernel-mainline), branch `zumapro-google-caimito` | **This port's base.** 7.3-rc2 + ~400 commits, five board DTs including `zumapro-tegu.dts`, postmarketOS packaging |
+| [Trijal08/kernel-mainline](https://github.com/Trijal08/kernel-mainline), branch `zumapro-google-caimito` | **Where this port's zumapro support comes from.** 680 commits rebased onto mainline v7.3-rc6, five board DTs including `zumapro-tegu.dts`, postmarketOS packaging |
 | [zumapro-mainline/linux](https://github.com/zumapro-mainline/linux) | Where `clk-zuma.c` and the pinctrl bank data came from first; last pushed 2026-04 |
 
 ## Trijal08: what it already gets right

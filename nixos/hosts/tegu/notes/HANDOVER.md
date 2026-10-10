@@ -1,16 +1,20 @@
 # tegu handover
 
-Mainline Linux 7.3-rc1 + NixOS on a Google Pixel 9a (Tensor G4, `zumapro`).
-Repo `~/dotfiles`, work in `nixos/hosts/tegu`. Read `README.md` first — it is
-current as of this handover.
+Mainline Linux v7.3-rc6 + NixOS on a Google Pixel 9a (Tensor G4, `zumapro`),
+via the port's own kernel repository [gaavin/linux](https://github.com/gaavin/linux)
+branch `pixel9a`: v7.3-rc6, the shared zumapro work rebased on top, and this
+port's tegu bring-up as one commit. Repo `~/dotfiles`, work in
+`nixos/hosts/tegu`. Read `README.md` first — it is current as of this handover.
 
 ## Wi-Fi (BCM4383) — current work, 2026-10-08, rediagnosed 2026-10-09
 
 The board's Wi-Fi is a Broadcom **BCM4383** (`14e4:4449`, chipcommon `0x4383`),
-a part mainline had never supported. `kernel/apply.sh` now adds the chip ID,
-the CR4 RAM base (`0x6e0000`, from Google's own bcmdhd module) and the firmware
-mapping, and the vendor image's `fw_bcmdhd.bin` (in `../wifi-firmware/`) boots
-the dongle: `RTE (PCIE-MSGBUF) ... on BCM4383 r2`, `wl0`/`wl1` attach.
+a part mainline had never supported. The tegu commit in the kernel repository
+adds the chip ID and the CR4 RAM base (`0x6e0000`, from Google's own bcmdhd
+module) to brcmfmac (`drivers/net/wireless/broadcom/brcm80211/brcmfmac/`), and
+`../wifi-firmware/` carries the firmware mapping, with the vendor image's
+`fw_bcmdhd.bin` booting the dongle: `RTE (PCIE-MSGBUF) ... on BCM4383 r2`,
+`wl0`/`wl1` attach.
 
 It stops there: as soon as the host feeds the msgbuf rings the dongle halts and
 no `wlan0` appears. **Corrected 2026-10-09, and the focus this section used to
@@ -72,8 +76,9 @@ probe:
     AER CmpltAbrt TLP   0x600a0b88     (backplane 0x8a0b88)
     CONSOLE err check   addr(0x...:008a0b88) / AXI timeout / TRAP 4
 
-`kernel/brcmfmac-ctl-mb.patch`, applied by `kernel/apply.sh`, skips the TCM
-poll when `mb_via_ctl` is set. The D2H word already arrives over the ctl ring
+The tegu commit's brcmfmac ctl-mailbox change
+(`drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c`) skips the TCM poll
+when `mb_via_ctl` is set. The D2H word already arrives over the ctl ring
 through `brcmf_pcie_d2h_mb_rx` (`msgbuf.c:1448` -> `brcmf_bus_d2h_mb_rx` ->
 `bus->ops->d2h_mb_rx`), so nothing is lost. `README.md` has the full write-up.
 
@@ -90,9 +95,11 @@ upstream's `drm_sysfb_plane_helper_atomic_update()` offsets the destination by
 the clipped damage rect but counts rows from the unclipped one, and a client's
 damage is not required to be inside the plane's destination. KWin's plane
 (`XR24`, `1080x2424`, `pitch 4352`) is the client that can do it.
-`kernel/drm-sysfb-clip-damage.patch` passes the blit `&dst_clip` instead and
-warns once if the clip ever bites, so a boot says whether the oversized damage
-is real. See `README.md`, "Separately: the console panics the phone".
+The tegu commit's `drm_sysfb` fix
+(`drivers/gpu/drm/sysfb/drm_sysfb_modeset.c`) passes the blit `&dst_clip`
+instead and warns once if the clip ever bites, so a boot says whether the
+oversized damage is real. See `README.md`, "Separately: the console panics the
+phone".
 **Do not hand-poke dongle RAM:**
 a `devmem` *read* at `0x850090` is fine, but a `devmem` *write* there took the
 whole phone down. On that console, use
@@ -200,7 +207,7 @@ From the stock node (`zumapro-stock.dts`, `phy@11100000`):
 	interrupts       = 399, 397, 404
 	clocks           = "phy_ref", "aclk"    phy_ref_clock = <0x124f800>
 
-Mainline 7.3-rc1 has `google,gs101-usb31drd-phy` in
+Mainline v7.3-rc6 has `google,gs101-usb31drd-phy` in
 `drivers/phy/samsung/phy-exynos5-usbdrd.c` with a full `/* Exynos9 - GS101 */`
 PMA/PCS register set. **It is a starting point, not a fit.** gs101's PHY is
 plain USB2+USB3 with three reg ranges named phy/pcs/pma; this one is eUSB2
@@ -499,7 +506,7 @@ authenticated by the GSA, so a GSA driver is needed too (`linux/gsa/gsa_aoc.h`
 — note `google-modules/gsa` has no `android-gs-tegu-6.1-android16` head, so
 finding the right repo is itself a step); plus the firmware image from the
 vendor partition, an IOMMU, the `aoc_s2mpu`, and 48 mailbox channels. Mainline
-has nothing at all — the only `aoc` in 7.3-rc1 is Amlogic's AO clock
+has nothing at all — the only `aoc` in v7.3-rc6 is Amlogic's AO clock
 controller. It is a bring-up on the scale of UFS or larger, and the TBN
 service sits at the very top of it.
 

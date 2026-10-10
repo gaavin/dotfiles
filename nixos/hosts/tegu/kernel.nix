@@ -1,25 +1,35 @@
 # Kernel for the Google Pixel 9a (tegu, Tensor G4 / zumapro).
 #
-# This used to be plain torvalds 7.3-rc1 with this port's own device tree and a
-# handful of grafted drivers. It is now built from the shared zumapro port tree
-# (github.com/Trijal08/kernel-mainline, branch zumapro-google-caimito), which
-# is mainline 7.3-rc2 plus ~400 commits of Tensor G4 work for the Pixel 9
-# family -- and which already carries a zumapro-tegu.dts.
+# The kernel source lives in its own repository,
+# github.com/gaavin/linux branch pixel9a: current mainline (torvalds/linux
+# master, whose Makefile still says 7.3.0-rc6) with the shared zumapro Tensor
+# G4 work (678 commits, github.com/Trijal08/kernel-mainline branch
+# zumapro-google-caimito, cherry-picked and rebased onto that master commit)
+# and this port's own tegu bring-up on top as a real commit. The repository is
+# standalone: it is not a GitHub fork of Trijal08's. Nothing is patched at build
+# time any more: the board deltas, the boot framebuffer driver, the simplefb
+# BGRA/BGRX format name and the six driver fixes this file used to carry as
+# .patch files under ./kernel/ are all committed in that tree.
 #
-# Why the swap. That tree independently reached every hardware conclusion this
-# port paid for -- PHY isolation at 0x3ec0, cal-done at TRSV 0x31d, no CDR
-# wait, PCS 0x202 = 0x22 for the 38.4 MHz M-PHY reference, the four quirks the
-# stock "fixed-prdt-req_list-ocs" property clears, the touch part on
-# spi@111d0000 with native manual chip select and a 2 us CS setup delay -- and
-# then kept going: full pinctrl and clock drivers for every CMU, secure power
-# domains, System MMU v9, ACPM TMU thermal, cpufreq, MCT v3, the eUSB2 +
-# USB-DP combo PHY, PCIe, the exynos9 DECON/DSIM display pipeline. Re-deriving
-# any one of those here would cost weeks of boots; the register data is the
-# same silicon either way.
+# Why the shared base. That tree independently reached every hardware
+# conclusion this port paid a boot each for -- PHY isolation at 0x3ec0,
+# cal-done at TRSV 0x31d, no CDR wait, PCS 0x202 = 0x22 for the 38.4 MHz
+# M-PHY reference, the four quirks the stock "fixed-prdt-req_list-ocs"
+# property clears, the touch part on spi@111d0000 with native manual chip
+# select and a 2 us CS setup delay -- and then kept going: full pinctrl and
+# clock drivers for every CMU, secure power domains, System MMU v9, ACPM TMU
+# thermal, cpufreq, MCT v3, the eUSB2 + USB-DP combo PHY, PCIe, the exynos9
+# DECON/DSIM display pipeline. Re-deriving any one of those here would cost
+# weeks of boots; the register data is the same silicon either way.
 #
-# What this file still owns: the NixOS-shaped config (a built-in rescue
-# initramfs, a console on the panel, /dev/mem left open for bring-up) and the
-# tegu device-tree deltas in ./kernel/apply.sh.
+# What the tegu commit on top owns (see the repository's own history for the
+# measurements behind each): the boot framebuffer and the panel console, the
+# tegu device-tree deltas including the PCIe channel the BCM4383 sits on, the
+# fuel gauge's state-of-charge gate, the BCM4383 support in brcmfmac, and the
+# simpledrm damage-clip fix that keeps the console from panicking.
+#
+# What *this* file still owns: the NixOS-shaped config (a built-in rescue
+# initramfs, a console on the panel, /dev/mem left open for bring-up).
 #
 # The previous, self-contained bring-up kernel -- its own zumapro.dtsi, the
 # HSI0/HSI2 clock drivers, zumapro-touch.c, the UFS patchers -- is at commit
@@ -33,8 +43,10 @@
 }@args:
 
 let
-  # Upstream base of that branch. Their Makefile says 7.3.0-rc2.
-  version = "7.3-rc2";
+  # Mainline base of the fork, a torvalds/linux master commit. Master's
+  # Makefile says 7.3.0-rc6 as of that commit, so the release name is
+  # unchanged.
+  version = "7.3-rc6";
 
   # Built into the image because the bootloader discards boot.img's ramdisk
   # on this device; see ./initramfs.nix.
@@ -51,19 +63,22 @@ let
       # until then a cache miss is cheaper than a broken build.
 
       inherit version;
-      # 7.3.0-rc2 plus their defconfig's CONFIG_LOCALVERSION="-zumapro",
-      # which is what "make kernelrelease" prints and therefore what names
-      # the module directory. Overriding LOCALVERSION to empty from here is
-      # not an option: nixpkgs renders freeform "" as CONFIG_LOCALVERSION="\"\"",
-      # and the kernel then tags the release with two literal quote characters.
-      modDirVersion = "7.3.0-rc2-zumapro";
+      # The fork's defconfig still sets CONFIG_LOCALVERSION="-zumapro", which
+      # is what "make kernelrelease" prints and therefore what names the
+      # module directory. Overriding LOCALVERSION to empty from here is not an
+      # option: nixpkgs renders freeform "" as CONFIG_LOCALVERSION="\"\"",
+      # and the kernel then tags the release with two literal quote chars.
+      modDirVersion = "7.3.0-rc6-zumapro";
       extraMeta.branch = "7.3";
 
       src = fetchFromGitHub {
-        owner = "Trijal08";
-        repo = "kernel-mainline";
-        rev = "b00e05d92c9c9d4eb7188c979754a52930fb890d";
-        hash = "sha256-emNnq0MKK5nBPIFFacIrBz/63h9ntqp9hwrEXQpUcK0=";
+        # The port's own kernel fork; see the header of this file. Pinned to
+        # the commit rather than the branch, so a rebuild is reproducible and
+        # a branch update cannot silently change the kernel under the phone.
+        owner = "gaavin";
+        repo = "linux";
+        rev = "af7c99bfd620092107d8df9f1336e31423ad3421";
+        hash = "sha256-Ln2EFSZfQkkCVSCxpptWSjylgavQ6dHi2J5nwss6cDQ=";
       };
 
       # Their own config for these phones. It is what their boots are tested
@@ -83,6 +98,15 @@ let
       structuredExtraConfig =
         with lib.kernel;
         lib.mapAttrs (_: lib.mkForce) {
+          # Board options that belong with the hardware -- the panel console,
+          # the debug UART, /dev/mem for bring-up, adopting BL2's watchdog,
+          # cpufreq-dt built in, the USI/SPI touchscreen -- are in the fork's
+          # own zumapro_defconfig, so a build straight from that defconfig is
+          # a working tegu kernel. Only the two kinds of option that cannot
+          # live there are forced here: what NixOS itself requires, and what
+          # nixpkgs' common-config.nix sets in a way the defconfig cannot
+          # override (see the repository's defconfig for the list).
+
           # Their tag ("-zumapro") is kept, so keep it reproducible too: with
           # LOCALVERSION_AUTO the release would grow a "+" or a git hash and
           # modDirVersion above would stop matching.
@@ -95,37 +119,14 @@ let
           INITRAMFS_SOURCE = freeform "${initramfs}";
           RD_GZIP = yes;
 
-          # Console on the panel: ./kernel/zumapro-bootfb.c hands the
-          # framebuffer the bootloader left scanning out to simpledrm, and
-          # fbcon puts the kernel log on it. Their tree does the same job with
-          # a simple-framebuffer node plus an mmio-init-helper writing the
-          # DECON autorefresh bit; the driver here is kept because it reads
-          # the geometry and format out of DECON instead of hard-coding them,
-          # and reserves the buffer as NOMAP before memblock is up.
-          DRM = yes;
-          DRM_SIMPLEDRM = yes;
-          DRM_FBDEV_EMULATION = yes;
-          FB_CORE = yes;
-          VT = yes;
-          VT_CONSOLE = yes;
-          FRAMEBUFFER_CONSOLE = yes;
-          FRAMEBUFFER_CONSOLE_ROTATION = yes;
-          FONTS = yes;
-          FONT_8x16 = yes;
-          FONT_TER16x32 = yes;
+          # nixpkgs' common-config.nix turns LOGO off and is layered on after
+          # the defconfig, so this one has to be forced from here.
           LOGO = yes;
           LOGO_LINUX_CLUT224 = yes;
 
-          # Debug UART (samsung_tty, google,gs101-uart binding + earlycon)
-          SERIAL_SAMSUNG = yes;
-          SERIAL_SAMSUNG_CONSOLE = yes;
-          SERIAL_EARLYCON = yes;
-
-          # Bring-up instrument: most of this SoC still has no driver, so
-          # /dev/mem from userspace is how a block gets inspected.
-          # STRICT_DEVMEM would refuse those reads and IO_STRICT_DEVMEM also
-          # refuses any range a driver has claimed.
-          DEVMEM = yes;
+          # nixpkgs' common-config.nix wants both of these on. STRICT_DEVMEM
+          # would refuse the bring-up reads of the fork's own /dev/mem, and
+          # IO_STRICT_DEVMEM also refuses any range a driver has claimed.
           STRICT_DEVMEM = no;
           IO_STRICT_DEVMEM = no;
           DEBUG_FS = yes;
@@ -144,29 +145,9 @@ let
 
           # BL2 arms a 60s cluster watchdog on every boot; nothing petting it
           # is a reset on a timer. Their zumapro.dtsi has both cluster nodes
-          # and pixel-common enables cl0 at 30s.
-          WATCHDOG = yes;
-          S3C2410_WATCHDOG = yes;
-          WATCHDOG_SYSFS = yes;
-          WATCHDOG_HANDLE_BOOT_ENABLED = yes;
-
-          # cpufreq-dt is instantiated by cpufreq-dt-platdev, which publishes
-          # no module alias, so as a module (=m in their defconfig) nothing
-          # ever loads it and the CPUs stay at whatever the bootloader left.
-          CPUFREQ_DT = yes;
-
-          # The touchscreen. Their driver, on the SPI controller their s3c64xx
-          # patches taught to hold a native chip select across a whole
-          # message -- which is the thing this port's own driver worked around
-          # by calling spi_setup() on both sides of every transfer.
-          SPI = yes;
-          SPI_MASTER = yes;
-          SPI_S3C64XX = yes;
-          EXYNOS_USI = yes;
-          INPUT = yes;
-          INPUT_EVDEV = yes;
-          INPUT_TOUCHSCREEN = yes;
-          TOUCHSCREEN_SYNA_TCM = yes;
+          # and pixel-common enables cl0 at 30s. The watchdog and cpufreq-dt
+          # (which cpufreq-dt-platdev instantiates and no module alias ever
+          # loads) are set in the fork's defconfig.
 
           # NixOS's firewall shells out to iptables, which is iptables-nft --
           # it speaks to nf_tables, not to x_tables. Their defconfig enables
@@ -230,8 +211,4 @@ let
     }
   );
 in
-kernel.overrideAttrs (old: {
-  postPatch = (old.postPatch or "") + ''
-    bash ${./kernel/apply.sh} ${./kernel} ${./dts}
-  '';
-})
+kernel
